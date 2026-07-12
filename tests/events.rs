@@ -115,7 +115,7 @@ fn sequence_exhaustion_closes_channel_and_reads_report_closed() {
 }
 
 #[test]
-fn compaction_reclaims_history_without_readers() {
+fn manual_events_remain_readable_after_late_reader_creation() {
     let mut builder = WorldBuilder::new();
     builder
         .add_event::<Damage>(EventOptions::manual())
@@ -126,5 +126,8 @@ fn compaction_reclaims_history_without_readers() {
     let mut reader = world
         .event_reader::<Damage>(EventReaderStart::OldestRetained)
         .expect("reader");
-    assert!(world.read_event(&mut reader).expect("read").is_none());
+    assert_eq!(
+        world.read_event(&mut reader).expect("read").cloned(),
+        Some(Damage { amount: 1 })
+    );
 }

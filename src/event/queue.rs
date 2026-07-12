@@ -238,7 +238,7 @@ impl EventChannel {
     fn compact(&mut self) {
         self.cursors.retain(|weak| weak.strong_count() > 0);
         if self.cursors.is_empty() {
-            if !self.payloads.is_empty() {
+            if matches!(self.retention, EventRetention::Frame(_)) && !self.payloads.is_empty() {
                 self.oldest_retained = self.next_sequence;
                 self.payloads.clear();
                 self.sequences.clear();

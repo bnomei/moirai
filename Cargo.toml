@@ -39,3 +39,8 @@ harness = false
 name = "world_lifecycle"
 path = "benches/world_lifecycle.rs"
 harness = false
+
+[[bench]]
+name = "schedule"
+path = "benches/schedule.rs"
+harness = false

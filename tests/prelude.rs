@@ -1,5 +1,9 @@
+use moirai::prelude::*;
+
 #[test]
-fn prelude_namespace_is_not_published_in_phase_1() {
-    let cases = trybuild::TestCases::new();
-    cases.compile_fail("tests/ui/premature_prelude.rs");
+fn prelude_exports_system_authoring_vocabulary() {
+    let _ = core::mem::size_of::<App>();
+    let _ = core::mem::size_of::<World>();
+    let _ = core::mem::size_of::<System>();
+    let _ = WorldTick::ZERO;
 }

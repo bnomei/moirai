@@ -21,6 +21,31 @@ fn phase_2_root_and_namespace_paths_compile() {
 }
 
 #[test]
+fn phase_4_schedule_and_app_paths_compile() {
+    use moirai::{
+        stage, App, AppBuilder, FlushMode, Schedule, ScheduleBuilder, State, System, SystemSet,
+        WorldTick,
+    };
+    let _ = stage::UPDATE;
+    let _ = FlushMode::Final;
+    let _ = core::mem::size_of::<System>();
+    let _ = core::mem::size_of::<SystemSet>();
+    let _ = core::mem::size_of::<Schedule>();
+    let _ = core::mem::size_of::<ScheduleBuilder>();
+    let _ = core::mem::size_of::<App>();
+    let _ = core::mem::size_of::<AppBuilder>();
+    let _ = core::mem::size_of::<State<u8>>();
+    let _ = WorldTick::ZERO;
+}
+
+#[test]
+fn phase_4_prelude_paths_compile() {
+    use moirai::prelude::*;
+    let _ = core::mem::size_of::<App>();
+    let _ = core::mem::size_of::<System>();
+}
+
+#[test]
 fn phase_3_event_namespace_paths_compile() {
     use moirai::event::{ComponentAdded, EventId, EventOptions, EventReader, EventReaderStart};
     let _ = EventOptions::manual();
@@ -68,16 +93,6 @@ fn implementation_modules_are_not_public() {
 fn deferred_namespaces_remain_unpublished() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/ui/premature_query_namespace.rs");
-    cases.compile_fail("tests/ui/premature_schedule_namespace.rs");
-    cases.compile_fail("tests/ui/premature_diagnostics_namespace.rs");
-}
-
-#[test]
-fn root_and_prelude_vocabulary_is_not_prematurely_public() {
-    let cases = trybuild::TestCases::new();
-    cases.compile_fail("tests/ui/premature_root_app.rs");
-    cases.compile_fail("tests/ui/premature_root_system.rs");
-    cases.compile_fail("tests/ui/premature_prelude.rs");
 }
 
 #[cfg(feature = "std")]

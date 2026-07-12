@@ -58,3 +58,20 @@ fn resource_scope_updates_value() {
 
     assert_eq!(world.resource::<Score>().expect("get"), Some(&Score(5)));
 }
+
+#[test]
+fn resource_scope_rejects_revision_reads_of_the_scoped_resource() {
+    let mut builder = WorldBuilder::new();
+    builder.register_resource::<Score>();
+    let mut world = builder.build().expect("build");
+    world.insert_resource(Score(1)).expect("seed");
+
+    let result = world
+        .resource_scope::<Score, _>(|_, world| world.resource_changed_tick::<Score>())
+        .expect("scope result");
+
+    assert!(matches!(
+        result,
+        Err(moirai::world::WorldError::ResourceScoped { .. })
+    ));
+}

@@ -70,3 +70,32 @@ fn replacement_does_not_emit_second_add() {
     assert!(world.read_event(&mut reader).expect("one").is_some());
     assert!(world.read_event(&mut reader).expect("two").is_none());
 }
+
+#[test]
+fn deferred_remove_of_absent_sparse_component_emits_nothing() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+    let mut remove_reader = world
+        .on_remove_reader::<Health>(EventReaderStart::OldestRetained)
+        .expect("reader");
+
+    let entity = world
+        .commands()
+        .expect("commands")
+        .spawn()
+        .expect("reserve");
+    world
+        .commands()
+        .expect("commands")
+        .remove::<Health>(entity)
+        .expect("queue");
+    world.flush().expect("flush");
+
+    assert!(world
+        .read_event(&mut remove_reader)
+        .expect("read")
+        .is_none());
+}

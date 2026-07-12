@@ -5,6 +5,7 @@ mod error;
 mod events;
 mod flush;
 mod guard;
+mod lease;
 mod owner;
 
 pub(crate) use owner::WorldOwner;
@@ -19,6 +20,7 @@ pub use error::{EventReadError, FlushError, FlushReport, WorldAllocatorError, Wo
 
 use alloc::boxed::Box;
 use alloc::format;
+use alloc::rc::Weak;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::{type_name, TypeId};
@@ -54,6 +56,9 @@ pub struct World {
     run_guard: RunGuard,
     mutation_poisoned: bool,
     lifecycle_events_suppressed: bool,
+    execution_lease: Option<Weak<()>>,
+    lease_locked_resources: Vec<TypeId>,
+    fixed_step: Option<crate::time::FixedStep>,
 }
 
 impl World {
@@ -79,6 +84,9 @@ impl World {
             run_guard: RunGuard::Idle,
             mutation_poisoned: false,
             lifecycle_events_suppressed: false,
+            execution_lease: None,
+            lease_locked_resources: Vec::new(),
+            fixed_step: None,
         }
     }
 
@@ -96,7 +104,6 @@ impl World {
         Ok(Commands::new(self))
     }
 
-    #[allow(dead_code)]
     pub(crate) fn begin_run(
         &mut self,
         operation: crate::operation::StageOperation,
@@ -108,16 +115,12 @@ impl World {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn end_run(&mut self) {
         self.run_guard = RunGuard::Idle;
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn advance_world_tick(&mut self) {
-        if let Some(next) = self.world_tick.raw().checked_add(1) {
-            self.world_tick.set_raw(next);
-        }
+    pub(crate) fn advance_world_tick(&mut self) -> Result<(), crate::time::WorldTickError> {
+        self.world_tick.advance().map(|_| ())
     }
 
     pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Result<EntityId, WorldError> {
@@ -516,8 +519,8 @@ impl World {
         } else if self.registry.is_table_component(&component_id) {
             self.archetypes.remove_table_index(entity, component_index)
         } else if let Some(store) = self.sparse_stores.get_mut(index) {
-            if let Some(erased) = store.as_erased_mut() {
-                erased.remove_entity(entity);
+            if store.contains_entity(entity) {
+                store.remove_entity(entity);
                 true
             } else {
                 false

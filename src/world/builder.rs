@@ -84,6 +84,12 @@ impl WorldBuilder {
         }));
     }
 
+    pub fn register_state<S: Eq + 'static>(&mut self) {
+        self.resource_registrars.push(Box::new(|store| {
+            store.register_state::<S>();
+        }));
+    }
+
     pub fn add_event<E: 'static>(
         &mut self,
         options: EventOptions,

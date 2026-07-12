@@ -1,6 +1,6 @@
 # Phase 4 — Compiled Schedule, App lifecycle, and safe execution
 
-**Status:** ready after Phase 3; may overlap late Phase 5 work
+**Status:** complete
 **Depends on:** [Phase 3](./PHASE_3_WORLD_LIFECYCLE.md)
 **Research:** [packet 003](./.orchid/spec-research/003-world-schedule-contract/),
 [packet 006](./.orchid/spec-research/006-single-crate-api-architecture/)
@@ -370,22 +370,22 @@ preallocates its own trace buffer.
 
 ## Tasks
 
-- [ ] **T401** Implement StageOperation-owned opaque stage/system/set ids and private-field `System`
+- [x] **T401** Implement StageOperation-owned opaque stage/system/set ids and private-field `System`
   builders.
-- [ ] **T402** Implement ExecutionLease, ScheduleBuilder resolution, graph validation, required
+- [x] **T402** Implement ExecutionLease, ScheduleBuilder resolution, graph validation, required
   locks, and deterministic order.
-- [ ] **T403** Implement safe condition and system runners with no raw pointers.
-- [ ] **T404** Implement generic `State<S>` and explicitly installed transition boundaries.
-- [ ] **T405** Implement Update-only FlushMode/final-flush semantics and Render structural rejection.
-- [ ] **T406** Implement FixedConfig/accumulator/substep/debt diagnostics and trace tests.
-- [ ] **T407** Implement `AppBuilder` finalization, `App::from_parts`, ownership, and accessors.
-- [ ] **T408** Implement update/render/observe, pending-command prechecks, and operation-owned frame
+- [x] **T403** Implement safe condition and system runners with no raw pointers.
+- [x] **T404** Implement generic `State<S>` and explicitly installed transition boundaries.
+- [x] **T405** Implement Update-only FlushMode/final-flush semantics and Render structural rejection.
+- [x] **T406** Implement FixedConfig/accumulator/substep/debt diagnostics and trace tests.
+- [x] **T407** Implement `AppBuilder` finalization, `App::from_parts`, ownership, and accessors.
+- [x] **T408** Implement update/render/observe, pending-command prechecks, and operation-owned frame
   event lifetime ordering.
-- [ ] **T409** Implement terminal fault and unwind-poison semantics.
-- [ ] **T410** Replace source runtime-cycle panics with build-error characterization tests.
-- [ ] **T411** Add the one-method diagnostic observer/event surface and absent-observer allocation
+- [x] **T409** Implement terminal fault and unwind-poison semantics.
+- [x] **T410** Replace source runtime-cycle panics with build-error characterization tests.
+- [x] **T411** Add the one-method diagnostic observer/event surface and absent-observer allocation
   proof.
-- [ ] **T412** Port/classify the schedule/state/fixed-step source test inventory.
+- [x] **T412** Port/classify the schedule/state/fixed-step source test inventory.
 
 ## Verification
 
@@ -418,13 +418,13 @@ cross-call accumulation/other-operation isolation, post-flush observation, and r
 
 ## Exit criteria
 
-- [ ] App executes World through an external compiled Schedule using safe Rust only.
-- [ ] Every invalid topology/configuration fails before first update.
-- [ ] Update, render, fixed-step, flush, event-clear, and observer ordering are trace-tested.
-- [ ] Generic `State<S>` works without importing a host enum.
-- [ ] Errors leave World idle and App explicitly faulted.
-- [ ] No platform clock/FFI or host stage graph exists in Moirai.
-- [ ] Phase 5 queries can execute inside systems without changing schedule ownership.
+- [x] App executes World through an external compiled Schedule using safe Rust only.
+- [x] Every invalid topology/configuration fails before first update.
+- [x] Update, render, fixed-step, flush, event-clear, and observer ordering are trace-tested.
+- [x] Generic `State<S>` works without importing a host enum.
+- [x] Errors leave World idle and App explicitly faulted.
+- [x] No platform clock/FFI or host stage graph exists in Moirai.
+- [x] Phase 5 queries can execute inside systems without changing schedule ownership.
 
 ## References
 

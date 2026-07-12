@@ -42,14 +42,14 @@ extern crate std;
 
 mod app;
 mod command;
-mod diagnostics;
+pub mod diagnostics;
 pub mod event;
 mod operation;
-mod prelude;
+pub mod prelude;
 mod query;
 mod resource;
-mod schedule;
-mod state;
+pub mod schedule;
+pub mod state;
 mod storage;
 mod time;
 
@@ -62,6 +62,7 @@ pub mod world;
 #[cfg(feature = "testkit")]
 mod testkit;
 
+pub use app::{App, AppBuilder, AppError, AppFault, BuildError};
 pub use component::{ComponentId, ComponentOptions, StorageKind};
 pub use entity::EntityId;
 pub use event::{
@@ -70,5 +71,10 @@ pub use event::{
 };
 pub use math::Q16;
 pub use operation::StageOperation;
-pub use time::ChangeTick;
+pub use schedule::stage;
+pub use schedule::{
+    Condition, FlushMode, Schedule, ScheduleBuilder, ScheduleError, System, SystemId, SystemSet,
+};
+pub use state::{apply, State};
+pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
 pub use world::{Commands, DynamicBundle, World, WorldBuilder, WorldError};

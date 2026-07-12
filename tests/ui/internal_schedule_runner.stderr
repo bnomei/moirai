@@ -1,16 +1,14 @@
-error[E0603]: module `schedule` is private
- --> tests/ui/internal_schedule_runner.rs:1:13
+error[E0603]: module `runner` is private
+ --> tests/ui/internal_schedule_runner.rs:1:23
   |
 1 | use moirai::schedule::runner;
-  |             ^^^^^^^^  ------ module `runner` is not publicly re-exported
-  |             |
-  |             private module
+  |                       ^^^^^^ private module
   |
-note: the module `schedule` is defined here
- --> src/lib.rs
+note: the module `runner` is defined here
+ --> src/schedule/mod.rs
   |
-  | mod schedule;
-  | ^^^^^^^^^^^^
+  | mod runner;
+  | ^^^^^^^^^^
 
 error[E0601]: `main` function not found in crate `$CRATE`
  --> tests/ui/internal_schedule_runner.rs:1:30

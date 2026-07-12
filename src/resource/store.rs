@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
@@ -10,10 +11,13 @@ use crate::world::WorldError;
 #[allow(dead_code)]
 pub(crate) struct ResourceStore {
     registered: Vec<TypeId>,
+    registered_names: Vec<String>,
     entries: Vec<Option<ResourceEntry>>,
     locked: Vec<TypeId>,
     scoped: Option<TypeId>,
     scoped_added: Option<ChangeTick>,
+    #[allow(clippy::type_complexity)]
+    state_transition_readers: BTreeMap<TypeId, fn(&dyn Any) -> Option<ChangeTick>>,
 }
 
 struct ResourceEntry {
@@ -30,6 +34,8 @@ impl ResourceStore {
             locked: Vec::new(),
             scoped: None,
             scoped_added: None,
+            state_transition_readers: BTreeMap::new(),
+            registered_names: Vec::new(),
         }
     }
 
@@ -40,12 +46,30 @@ impl ResourceStore {
         }
         let index = self.registered.len();
         self.registered.push(type_id);
+        self.registered_names.push(String::from(type_name::<R>()));
         self.entries.push(None);
         index
     }
 
+    pub fn register_state<S: Eq + 'static>(&mut self) {
+        let type_id = TypeId::of::<crate::state::State<S>>();
+        self.register::<crate::state::State<S>>();
+        self.state_transition_readers
+            .insert(type_id, |value: &dyn Any| {
+                value
+                    .downcast_ref::<crate::state::State<S>>()
+                    .and_then(|state| state.transition_tick())
+            });
+    }
+
     pub fn contains<R: 'static>(&self) -> bool {
-        self.index_of::<R>()
+        self.contains_type(TypeId::of::<R>())
+    }
+
+    pub(crate) fn contains_type(&self, type_id: TypeId) -> bool {
+        self.registered
+            .iter()
+            .position(|id| *id == type_id)
             .and_then(|index| self.entries.get(index))
             .map(|entry| entry.is_some())
             .unwrap_or(false)
@@ -174,11 +198,13 @@ impl ResourceStore {
     }
 
     pub fn added_tick<R: 'static>(&self) -> Result<Option<ChangeTick>, WorldError> {
+        self.ensure_accessible::<R>()?;
         let index = self.require_registered::<R>()?;
         Ok(self.entries[index].as_ref().map(|entry| entry.added))
     }
 
     pub fn changed_tick<R: 'static>(&self) -> Result<Option<ChangeTick>, WorldError> {
+        self.ensure_accessible::<R>()?;
         let index = self.require_registered::<R>()?;
         Ok(self.entries[index].as_ref().map(|entry| entry.changed))
     }
@@ -195,6 +221,63 @@ impl ResourceStore {
         if let Some(index) = self.locked.iter().position(|locked| *locked == type_id) {
             self.locked.swap_remove(index);
         }
+    }
+
+    pub fn lock_type(&mut self, type_id: TypeId) {
+        if !self.locked.contains(&type_id) {
+            self.locked.push(type_id);
+        }
+    }
+
+    pub fn unlock_type(&mut self, type_id: TypeId) {
+        if let Some(index) = self.locked.iter().position(|locked| *locked == type_id) {
+            self.locked.swap_remove(index);
+        }
+    }
+
+    pub fn type_name(&self, type_id: TypeId) -> Option<&str> {
+        self.registered
+            .iter()
+            .position(|id| *id == type_id)
+            .and_then(|index| self.registered_names.get(index))
+            .map(String::as_str)
+    }
+
+    pub fn added_tick_for(&self, type_id: TypeId) -> Result<Option<ChangeTick>, WorldError> {
+        let index = self
+            .registered
+            .iter()
+            .position(|id| *id == type_id)
+            .ok_or_else(|| WorldError::UnregisteredResource {
+                name: String::from("<resource>"),
+            })?;
+        Ok(self.entries[index].as_ref().map(|entry| entry.added))
+    }
+
+    pub fn changed_tick_for(&self, type_id: TypeId) -> Result<Option<ChangeTick>, WorldError> {
+        let index = self
+            .registered
+            .iter()
+            .position(|id| *id == type_id)
+            .ok_or_else(|| WorldError::UnregisteredResource {
+                name: String::from("<resource>"),
+            })?;
+        Ok(self.entries[index].as_ref().map(|entry| entry.changed))
+    }
+
+    pub fn transition_tick_for(&self, type_id: TypeId) -> Result<Option<ChangeTick>, WorldError> {
+        let index = self
+            .registered
+            .iter()
+            .position(|id| *id == type_id)
+            .ok_or_else(|| WorldError::UnregisteredResource {
+                name: String::from("<resource>"),
+            })?;
+        let Some(entry) = self.entries[index].as_ref() else {
+            return Ok(None);
+        };
+        let reader = self.state_transition_readers.get(&type_id).copied();
+        Ok(reader.and_then(|read| read(entry.value.as_ref())))
     }
 
     pub fn cancel_scope(&mut self) {
