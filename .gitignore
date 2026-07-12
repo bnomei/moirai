@@ -5,3 +5,6 @@
 specs
 docs
 /target
+
+PHASE_*
+ROADMAP.md
