@@ -34,3 +34,8 @@ harness = false
 name = "q16"
 path = "benches/q16.rs"
 harness = false
+
+[[bench]]
+name = "world_lifecycle"
+path = "benches/world_lifecycle.rs"
+harness = false

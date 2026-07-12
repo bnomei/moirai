@@ -4,6 +4,7 @@ mod bundle;
 mod error;
 mod events;
 mod flush;
+mod guard;
 mod owner;
 
 pub(crate) use owner::WorldOwner;
@@ -12,6 +13,7 @@ mod resources;
 mod spawn;
 
 pub use builder::WorldBuilder;
+pub use bundle::{Bundle, BundleWriter};
 pub use error::{WorldAllocatorError, WorldError};
 
 use alloc::format;
@@ -21,8 +23,10 @@ use core::any::type_name;
 
 use crate::component::{ComponentId, ComponentRegistry, StorageKind};
 use crate::entity::{AllocatorError, EntityAllocator, EntityId};
-use crate::storage::{SparseStore, TypedSparseStorage};
-use crate::time::{ChangeTick, ChangeTickError};
+use crate::storage::{ArchetypeStorage, SparseStore, TypedSparseStorage};
+use crate::time::{ChangeTick, ChangeTickError, WorldTick};
+
+use self::guard::RunGuard;
 
 /// ECS world with checked sparse-component lifecycle.
 pub struct World {
@@ -30,7 +34,10 @@ pub struct World {
     allocator: EntityAllocator,
     registry: ComponentRegistry,
     sparse_stores: Vec<SparseStore>,
+    archetypes: ArchetypeStorage,
     change_tick: ChangeTick,
+    world_tick: WorldTick,
+    run_guard: RunGuard,
     mutation_poisoned: bool,
 }
 
@@ -39,15 +46,39 @@ impl World {
         owner: WorldOwner,
         registry: ComponentRegistry,
         sparse_stores: Vec<SparseStore>,
+        archetypes: ArchetypeStorage,
     ) -> Self {
         Self {
             owner,
             allocator: EntityAllocator::new(),
             registry,
             sparse_stores,
+            archetypes,
             change_tick: ChangeTick::ZERO,
+            world_tick: WorldTick::ZERO,
+            run_guard: RunGuard::Idle,
             mutation_poisoned: false,
         }
+    }
+
+    pub fn world_tick(&self) -> WorldTick {
+        self.world_tick
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn begin_run(&mut self, operation: crate::operation::StageOperation) {
+        self.run_guard = RunGuard::Running(operation);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn end_run(&mut self) {
+        self.run_guard = RunGuard::Idle;
+    }
+
+    pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Result<EntityId, WorldError> {
+        let entity = self.spawn()?;
+        bundle.write(&mut BundleWriter::new(self, entity))?;
+        Ok(entity)
     }
 
     pub fn is_alive(&self, entity: EntityId) -> bool {
@@ -55,30 +86,43 @@ impl World {
     }
 
     pub fn spawn(&mut self) -> Result<EntityId, WorldError> {
+        self.ensure_idle_structural()?;
         self.ensure_mutable()?;
         Ok(self.allocator.alloc())
     }
 
     pub fn despawn(&mut self, entity: EntityId) -> Result<(), WorldError> {
+        self.ensure_idle_structural()?;
         self.ensure_mutable()?;
         self.ensure_alive(entity)?;
         for store in &mut self.sparse_stores {
             store.remove_entity(entity);
         }
+        self.archetypes.remove_entity(entity);
         self.allocator
             .free(entity)
             .map_err(|error| self.map_allocator_error(entity, error))
     }
 
-    pub fn insert<T: 'static>(
+    pub fn insert<T: Clone + 'static>(
         &mut self,
         entity: EntityId,
         value: T,
     ) -> Result<Option<T>, WorldError> {
+        self.ensure_idle_structural()?;
         self.ensure_mutable()?;
         self.ensure_alive(entity)?;
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
+        if self.registry.is_table_component(&component_id) {
+            let tick = self.issue_change_tick()?;
+            return Ok(self.archetypes.insert_table(
+                entity,
+                component_id.index() as u32,
+                value,
+                tick,
+            ));
+        }
         self.ensure_sparse_kind(&component_id)?;
         let index = component_id.index();
         let tick = self.issue_change_tick()?;
@@ -92,18 +136,39 @@ impl World {
         Ok(store.insert_with_tick(entity, value, tick))
     }
 
-    pub fn get<T: 'static>(&self, entity: EntityId) -> Result<Option<&T>, WorldError> {
+    pub fn get<T: Clone + 'static>(&self, entity: EntityId) -> Result<Option<&T>, WorldError> {
         self.ensure_alive(entity)?;
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
+        if self.registry.is_table_component(&component_id) {
+            return Ok(self
+                .archetypes
+                .get_table(entity, component_id.index() as u32));
+        }
         Ok(self.sparse_store::<T>(component_id)?.get(entity))
     }
 
-    pub fn get_mut<T: 'static>(&mut self, entity: EntityId) -> Result<Option<&mut T>, WorldError> {
+    pub fn get_mut<T: Clone + 'static>(
+        &mut self,
+        entity: EntityId,
+    ) -> Result<Option<&mut T>, WorldError> {
         self.ensure_mutable()?;
         self.ensure_alive(entity)?;
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
+        if self.registry.is_table_component(&component_id) {
+            if self
+                .archetypes
+                .get_table::<T>(entity, component_id.index() as u32)
+                .is_none()
+            {
+                return Ok(None);
+            }
+            let tick = self.issue_change_tick()?;
+            return Ok(self
+                .archetypes
+                .get_table_mut(entity, component_id.index() as u32, tick));
+        }
         self.ensure_sparse_kind(&component_id)?;
         let index = component_id.index();
         let has_component = match self
@@ -130,11 +195,20 @@ impl World {
             .get_mut_with_tick(entity, tick))
     }
 
-    pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<Option<T>, WorldError> {
+    pub fn remove<T: Clone + 'static>(
+        &mut self,
+        entity: EntityId,
+    ) -> Result<Option<T>, WorldError> {
+        self.ensure_idle_structural()?;
         self.ensure_mutable()?;
         self.ensure_alive(entity)?;
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
+        if self.registry.is_table_component(&component_id) {
+            return Ok(self
+                .archetypes
+                .remove_table(entity, component_id.index() as u32));
+        }
         Ok(self.sparse_store_mut::<T>(component_id)?.remove(entity))
     }
 
@@ -197,6 +271,14 @@ impl World {
         }
     }
 
+    fn ensure_idle_structural(&self) -> Result<(), WorldError> {
+        if self.run_guard.is_idle() {
+            Ok(())
+        } else {
+            Err(WorldError::StructuralMutationDuringRun)
+        }
+    }
+
     fn ensure_mutable(&self) -> Result<(), WorldError> {
         if self.mutation_poisoned {
             Err(WorldError::ChangeTickExhausted)
@@ -246,7 +328,7 @@ mod tests {
     struct Other;
 
     #[derive(Clone, Copy)]
-    struct TableComp;
+    struct TableComp(i32);
 
     fn test_world() -> World {
         let mut builder = WorldBuilder::new();
@@ -271,22 +353,29 @@ mod tests {
     }
 
     #[test]
-    fn wrong_storage_insert_does_not_issue_change_tick() {
+    fn table_insert_round_trip() {
         let mut world = table_world();
-        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
         let entity = world.spawn().expect("spawn");
-        assert!(matches!(
-            world.insert(entity, TableComp),
-            Err(WorldError::WrongStorageKind { .. })
-        ));
         assert!(world
-            .insert(entity, Marker(1))
-            .expect("sparse insert")
+            .insert(entity, TableComp(7))
+            .expect("insert")
             .is_none());
+        assert_eq!(
+            world.get::<TableComp>(entity).expect("get").map(|c| c.0),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn structural_mutation_rejects_while_running() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn before run");
+        world.begin_run(crate::operation::StageOperation::Update);
         assert!(matches!(
-            world.insert(entity, Marker(2)),
-            Err(WorldError::ChangeTickExhausted)
+            world.insert(entity, Marker(1)),
+            Err(WorldError::StructuralMutationDuringRun)
         ));
+        world.end_run();
     }
 
     #[test]

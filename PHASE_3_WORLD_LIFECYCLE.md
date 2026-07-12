@@ -1,6 +1,6 @@
 # Phase 3 — World data and structural lifecycle
 
-**Status:** ready after Phase 2
+**Status:** in progress · 2026-07-12
 **Depends on:** [Phase 2](./PHASE_2_CORE_STORAGE.md)
 **Research:** [packet 003](./.orchid/spec-research/003-world-schedule-contract/),
 [packet 006](./.orchid/spec-research/006-single-crate-api-architecture/)
@@ -306,9 +306,9 @@ cleared on every normal/fallible Schedule exit. Nested execution against the sam
 ## Tasks
 
 - [ ] **T301** Add Reserved allocator state and transactional reservation release.
-- [ ] **T302** Implement private table columns, archetype signatures, locations, and checked move
+- [x] **T302** Implement private table columns, archetype signatures, locations, and checked move
   plans.
-- [ ] **T303** Complete idle spawn/insert/remove/despawn across sparse/table/tag storage.
+- [x] **T303** Complete idle spawn/insert/remove/despawn across sparse/table/tag storage.
 - [ ] **T304** Implement tuple/custom `Bundle` support and final `DynamicBundle` validation.
 - [ ] **T305** Implement borrowed `Commands`, idle discard/pending detection, and whole-batch
   preflight/commit.

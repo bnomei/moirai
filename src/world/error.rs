@@ -18,6 +18,7 @@ pub enum WorldError {
     Registration(RegistrationError),
     Allocator(WorldAllocatorError),
     ChangeTickExhausted,
+    StructuralMutationDuringRun,
 }
 
 impl From<RegistrationError> for WorldError {
@@ -60,6 +61,9 @@ impl core::fmt::Display for WorldError {
             Self::Registration(error) => write!(f, "component registration failed: {error}"),
             Self::Allocator(error) => write!(f, "entity allocator failed: {error}"),
             Self::ChangeTickExhausted => f.write_str("change tick exhausted"),
+            Self::StructuralMutationDuringRun => {
+                f.write_str("structural mutation is deferred while the world is running")
+            }
         }
     }
 }

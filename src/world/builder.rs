@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use crate::component::{
     ComponentId, ComponentOptions, ComponentRegistry, RegistrationError, StorageKind,
 };
-use crate::storage::SparseStore;
+use crate::storage::{table_column_factory, ArchetypeStorage, SparseStore, TableColumnFactory};
 use crate::world::{World, WorldError, WorldOwner};
 
 /// Checked world schema construction.
@@ -12,6 +12,7 @@ pub struct WorldBuilder {
     owner: WorldOwner,
     registry: ComponentRegistry,
     sparse_factories: Vec<Option<Box<dyn FnOnce() -> SparseStore>>>,
+    table_factories: Vec<Option<TableColumnFactory>>,
 }
 
 impl WorldBuilder {
@@ -20,17 +21,18 @@ impl WorldBuilder {
             owner: WorldOwner::new(),
             registry: ComponentRegistry::new(),
             sparse_factories: Vec::new(),
+            table_factories: Vec::new(),
         }
     }
 
-    pub fn register_component<T: 'static>(
+    pub fn register_component<T: Clone + 'static>(
         &mut self,
         options: ComponentOptions,
     ) -> Result<ComponentId, RegistrationError> {
         self.register_component_named::<T>(None, options)
     }
 
-    pub fn register_component_named<T: 'static>(
+    pub fn register_component_named<T: Clone + 'static>(
         &mut self,
         name: Option<&str>,
         options: ComponentOptions,
@@ -38,7 +40,7 @@ impl WorldBuilder {
         let id = self
             .registry
             .register_typed::<T>(&self.owner, name, options)?;
-        self.ensure_sparse_slot(id.index());
+        self.ensure_factory_slots(id.index());
         if options.storage() == StorageKind::Sparse {
             if options.is_tag() {
                 self.sparse_factories[id.index()] = Some(Box::new(SparseStore::new_tag));
@@ -46,6 +48,8 @@ impl WorldBuilder {
                 self.sparse_factories[id.index()] =
                     Some(Box::new(|| SparseStore::new_typed::<T>()));
             }
+        } else if options.storage() == StorageKind::Table {
+            self.table_factories[id.index()] = Some(table_column_factory::<T>());
         }
         Ok(id)
     }
@@ -54,7 +58,7 @@ impl WorldBuilder {
         let id = self
             .registry
             .register_untyped(&self.owner, name, ComponentOptions::tag())?;
-        self.ensure_sparse_slot(id.index());
+        self.ensure_factory_slots(id.index());
         self.sparse_factories[id.index()] = Some(Box::new(SparseStore::new_tag));
         Ok(id)
     }
@@ -68,12 +72,19 @@ impl WorldBuilder {
                 .unwrap_or_else(SparseStore::new_empty);
             sparse_stores.push(store);
         }
-        Ok(World::from_parts(self.owner, self.registry, sparse_stores))
+        let archetypes = ArchetypeStorage::new(self.table_factories);
+        Ok(World::from_parts(
+            self.owner,
+            self.registry,
+            sparse_stores,
+            archetypes,
+        ))
     }
 
-    fn ensure_sparse_slot(&mut self, index: usize) {
+    fn ensure_factory_slots(&mut self, index: usize) {
         while self.sparse_factories.len() <= index {
             self.sparse_factories.push(None);
+            self.table_factories.push(None);
         }
     }
 }
