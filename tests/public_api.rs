@@ -21,6 +21,15 @@ fn phase_2_root_and_namespace_paths_compile() {
 }
 
 #[test]
+fn phase_3_event_namespace_paths_compile() {
+    use moirai::event::{ComponentAdded, EventId, EventOptions, EventReader, EventReaderStart};
+    let _ = EventOptions::manual();
+    let _ = EventReaderStart::OldestRetained;
+    let _ = core::mem::size_of::<EventId>();
+    let _ = core::mem::size_of::<EventReader<ComponentAdded>>();
+}
+
+#[test]
 fn all_features_build_is_additive() {
     std::process::Command::new("cargo")
         .args(["check", "--all-features"])
@@ -50,6 +59,7 @@ fn implementation_modules_are_not_public() {
     cases.compile_fail("tests/ui/internal_allocator.rs");
     cases.compile_fail("tests/ui/internal_registry.rs");
     cases.compile_fail("tests/ui/internal_command_queue.rs");
+    cases.compile_fail("tests/ui/internal_event_storage.rs");
     cases.compile_fail("tests/ui/internal_schedule_runner.rs");
     cases.compile_fail("tests/ui/internal_world_query_plan.rs");
 }
@@ -57,7 +67,6 @@ fn implementation_modules_are_not_public() {
 #[test]
 fn deferred_namespaces_remain_unpublished() {
     let cases = trybuild::TestCases::new();
-    cases.compile_fail("tests/ui/premature_event_namespace.rs");
     cases.compile_fail("tests/ui/premature_query_namespace.rs");
     cases.compile_fail("tests/ui/premature_schedule_namespace.rs");
     cases.compile_fail("tests/ui/premature_diagnostics_namespace.rs");

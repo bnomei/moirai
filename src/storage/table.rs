@@ -4,6 +4,7 @@ use core::any::{Any, TypeId};
 use crate::time::ChangeTick;
 
 pub(crate) trait ErasedTableColumn: Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn len(&self) -> usize;
     #[allow(dead_code)]
     fn type_id(&self) -> TypeId;
@@ -46,6 +47,10 @@ impl<T: Clone + 'static> TypedTableColumn<T> {
 }
 
 impl<T: Clone + 'static> ErasedTableColumn for TypedTableColumn<T> {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn len(&self) -> usize {
         self.data.len()
     }
@@ -67,7 +72,8 @@ impl<T: Clone + 'static> ErasedTableColumn for TypedTableColumn<T> {
     }
 
     fn append_row_from(&self, src_row: usize, dest: &mut dyn ErasedTableColumn) {
-        let dest = (dest as &mut dyn Any)
+        let dest = dest
+            .as_any_mut()
             .downcast_mut::<TypedTableColumn<T>>()
             .expect("table column type mismatch");
         dest.data.push(self.data[src_row].clone());

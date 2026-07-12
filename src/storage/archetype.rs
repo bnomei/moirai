@@ -164,6 +164,10 @@ impl ArchetypeStorage {
         removed
     }
 
+    pub fn table_component_indices(&self, entity: EntityId) -> Vec<u32> {
+        self.signature_for(entity).components.clone()
+    }
+
     pub fn remove_entity(&mut self, entity: EntityId) {
         let Some(location) = self.location(entity) else {
             self.clear_location(entity);

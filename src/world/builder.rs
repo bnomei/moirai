@@ -4,7 +4,10 @@ use alloc::vec::Vec;
 use crate::component::{
     ComponentId, ComponentOptions, ComponentRegistry, RegistrationError, StorageKind,
 };
-use crate::event::{EventId, EventOptions, EventRegistry, EventRegistrationError, EventStorage};
+use crate::event::{
+    ComponentLifecycleRegistry, EventId, EventOptions, EventRegistrationError, EventRegistry,
+    EventStorage,
+};
 use crate::resource::ResourceStore;
 use crate::storage::{table_column_factory, ArchetypeStorage, SparseStore, TableColumnFactory};
 use crate::world::{World, WorldError, WorldEvents, WorldOwner};
@@ -19,6 +22,7 @@ pub struct WorldBuilder {
     table_factories: Vec<Option<TableColumnFactory>>,
     resource_registrars: Vec<ResourceRegistrar>,
     event_registry: EventRegistry,
+    lifecycle_registry: ComponentLifecycleRegistry,
 }
 
 impl WorldBuilder {
@@ -30,6 +34,7 @@ impl WorldBuilder {
             table_factories: Vec::new(),
             resource_registrars: Vec::new(),
             event_registry: EventRegistry::new(),
+            lifecycle_registry: ComponentLifecycleRegistry::new(),
         }
     }
 
@@ -59,6 +64,7 @@ impl WorldBuilder {
         } else if options.storage() == StorageKind::Table {
             self.table_factories[id.index()] = Some(table_column_factory::<T>());
         }
+        self.register_component_lifecycle(id.index())?;
         Ok(id)
     }
 
@@ -68,14 +74,14 @@ impl WorldBuilder {
             .register_untyped(&self.owner, name, ComponentOptions::tag())?;
         self.ensure_factory_slots(id.index());
         self.sparse_factories[id.index()] = Some(Box::new(SparseStore::new_tag));
+        self.register_component_lifecycle(id.index())?;
         Ok(id)
     }
 
     pub fn register_resource<R: 'static>(&mut self) {
-        self.resource_registrars
-            .push(Box::new(|store| {
-                store.register::<R>();
-            }));
+        self.resource_registrars.push(Box::new(|store| {
+            store.register::<R>();
+        }));
     }
 
     pub fn add_event<E: 'static>(
@@ -103,6 +109,7 @@ impl WorldBuilder {
         let mut events = WorldEvents {
             registry: self.event_registry,
             storage: EventStorage::new(registry_len),
+            lifecycle: self.lifecycle_registry,
         };
         for index in 0..registry_len {
             let event_id = EventId::new(self.owner.clone(), index as u32);
@@ -110,6 +117,11 @@ impl WorldBuilder {
                 events.storage.ensure_channel(index, options.retention());
             }
         }
+        events.lifecycle.ensure_storage_channels(
+            &mut events.storage,
+            &events.registry,
+            &self.owner,
+        );
         Ok(World::from_parts(
             self.owner,
             self.registry,
@@ -118,6 +130,29 @@ impl WorldBuilder {
             resources,
             events,
         ))
+    }
+
+    fn register_component_lifecycle(
+        &mut self,
+        component_index: usize,
+    ) -> Result<(), RegistrationError> {
+        self.lifecycle_registry
+            .register_component(&mut self.event_registry, &self.owner, component_index)
+            .map_err(|error| match error {
+                EventRegistrationError::TypeConflict {
+                    name,
+                    existing,
+                    requested,
+                } => RegistrationError::NameConflict {
+                    name,
+                    existing,
+                    requested,
+                },
+                EventRegistrationError::InvalidCapacity => RegistrationError::UnsupportedStorage {
+                    name: alloc::string::String::from("component lifecycle event"),
+                    detail: alloc::string::String::from("invalid lifecycle event capacity"),
+                },
+            })
     }
 
     fn ensure_factory_slots(&mut self, index: usize) {

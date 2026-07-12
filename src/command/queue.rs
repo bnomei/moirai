@@ -12,8 +12,12 @@ pub(crate) struct CommandQueue {
 }
 
 pub(crate) enum CommandOp {
-    SpawnReserved { entity: EntityId },
-    Despawn { entity: EntityId },
+    SpawnReserved {
+        entity: EntityId,
+    },
+    Despawn {
+        entity: EntityId,
+    },
     Insert {
         entity: EntityId,
         component_index: u32,
@@ -96,6 +100,14 @@ impl CommandQueue {
 
     pub fn take_ops(&mut self) -> Vec<CommandOp> {
         core::mem::take(&mut self.ops)
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.ops.truncate(len);
+    }
+
+    pub fn len(&self) -> usize {
+        self.ops.len()
     }
 }
 
@@ -196,7 +208,11 @@ impl LiveSet {
     }
 
     fn remove(&mut self, entity: EntityId) {
-        if let Some(index) = self.entities.iter().position(|candidate| *candidate == entity) {
+        if let Some(index) = self
+            .entities
+            .iter()
+            .position(|candidate| *candidate == entity)
+        {
             self.entities.swap_remove(index);
         }
     }
@@ -226,15 +242,37 @@ impl<'w> Commands<'w> {
     }
 
     pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Result<EntityId, WorldError> {
+        let queue_len = self.world.command_queue_mut().len();
         let entity = self.spawn()?;
-        bundle.write(&mut BundleWriter::deferred(self.world, entity))?;
-        Ok(entity)
+        match bundle.write(&mut BundleWriter::deferred(self.world, entity)) {
+            Ok(()) => Ok(entity),
+            Err(error) => {
+                self.rollback_deferred_spawn(entity, queue_len)?;
+                Err(error)
+            }
+        }
     }
 
-    pub fn despawn(&mut self, entity: EntityId) {
+    fn rollback_deferred_spawn(
+        &mut self,
+        entity: EntityId,
+        queue_len: usize,
+    ) -> Result<(), WorldError> {
+        self.world.command_queue_mut().truncate(queue_len);
+        self.world
+            .allocator_mut()
+            .release_reserved(entity)
+            .map_err(|allocator_error| map_allocator_error(entity, allocator_error))?;
+        Ok(())
+    }
+
+    pub fn despawn(&mut self, entity: EntityId) -> Result<(), WorldError> {
+        self.world.ensure_mutable()?;
+        self.world.ensure_command_target(entity)?;
         self.world
             .command_queue_mut()
             .push(CommandOp::Despawn { entity });
+        Ok(())
     }
 
     pub fn insert<T: Clone + 'static>(
@@ -254,6 +292,7 @@ impl<'w> Commands<'w> {
     }
 
     pub fn remove<T: Clone + 'static>(&mut self, entity: EntityId) -> Result<(), WorldError> {
+        self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
         let component_index = self.world.component_index::<T>()? as u32;
         self.world.command_queue_mut().push(CommandOp::Remove {

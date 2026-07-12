@@ -1,9 +1,9 @@
-use alloc::boxed::Box;
-use alloc::vec::Vec;
 use crate::command::{CommandOp, ErasedComponentValue};
 use crate::component::ComponentId;
 use crate::entity::EntityId;
 use crate::world::{World, WorldError};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 /// Checked bundle insertion through [`BundleWriter`].
 pub trait Bundle {
@@ -27,11 +27,7 @@ impl DynamicBundle {
         }
     }
 
-    pub fn push<T: Clone + 'static>(
-        &mut self,
-        world: &World,
-        value: T,
-    ) -> Result<(), WorldError> {
+    pub fn push<T: Clone + 'static>(&mut self, world: &World, value: T) -> Result<(), WorldError> {
         let component_id = world.component_id::<T>()?;
         if world.is_tag_component(&component_id) {
             return Err(WorldError::WrongStorageKind {
@@ -59,7 +55,10 @@ impl DynamicBundle {
                 name: alloc::string::String::from("duplicate component in dynamic bundle"),
             });
         }
-        self.entries.push(DynamicEntry { component_id, value });
+        self.entries.push(DynamicEntry {
+            component_id,
+            value,
+        });
         Ok(())
     }
 }

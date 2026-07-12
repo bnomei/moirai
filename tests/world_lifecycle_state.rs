@@ -50,4 +50,3 @@ fn dynamic_bundle_rejects_duplicate_components() {
     bundle.push(&world, TableA(1)).expect("first");
     assert!(bundle.push(&world, TableA(2)).is_err());
 }
-

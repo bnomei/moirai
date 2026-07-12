@@ -8,6 +8,7 @@ impl World {
 
     pub fn insert_resource<R: 'static>(&mut self, value: R) -> Result<Option<R>, WorldError> {
         self.ensure_mutable()?;
+        self.resources.prepare_insert::<R>()?;
         let tick = self.issue_change_tick()?;
         self.resources.insert(value, tick)
     }
@@ -23,6 +24,9 @@ impl World {
 
     pub fn resource_mut<R: 'static>(&mut self) -> Result<Option<&mut R>, WorldError> {
         self.ensure_mutable()?;
+        if !self.resources.prepare_mut::<R>()? {
+            return Ok(None);
+        }
         let tick = self.issue_change_tick()?;
         self.resources.get_mut::<R>(tick)
     }
@@ -40,14 +44,15 @@ impl World {
         f: impl FnOnce(Option<&mut R>, &mut World) -> T,
     ) -> Result<T, WorldError> {
         self.ensure_mutable()?;
-        let mut taken = self.resources.begin_scope::<R>()?;
+        self.resources.prepare_scope::<R>()?;
         let tick = self.issue_change_tick()?;
+        let mut taken = self.resources.take_for_scope::<R>()?;
         let result = match taken.as_mut() {
             Some(resource) => f(Some(resource), self),
             None => f(None, self),
         };
         if let Some(resource) = taken {
-            self.resources.end_scope::<R>(resource, tick)?;
+            self.resources.restore_scope::<R>(resource, tick)?;
         } else {
             self.resources.cancel_scope();
         }

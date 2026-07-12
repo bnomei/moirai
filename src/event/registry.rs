@@ -41,11 +41,14 @@ impl EventOptions {
         }
     }
 
-    pub fn bounded(capacity: usize) -> Self {
-        Self {
+    pub fn bounded(capacity: usize) -> Result<Self, EventRegistrationError> {
+        if capacity == 0 {
+            return Err(EventRegistrationError::InvalidCapacity);
+        }
+        Ok(Self {
             retention: EventRetention::Bounded(capacity),
             external_source: false,
-        }
+        })
     }
 
     pub fn external_source(mut self) -> Self {
@@ -63,6 +66,7 @@ impl EventOptions {
     }
 }
 
+#[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventRegistrationError {
     TypeConflict {
@@ -70,13 +74,15 @@ pub enum EventRegistrationError {
         existing: String,
         requested: String,
     },
+    InvalidCapacity,
 }
 
 struct EventEntry {
     name: String,
-    #[allow(dead_code)]
     type_id: TypeId,
     options: EventOptions,
+    #[allow(dead_code)]
+    lifecycle_component_index: Option<usize>,
 }
 
 pub(crate) struct EventRegistry {
@@ -126,9 +132,17 @@ impl EventRegistry {
         if let Some(index) = self
             .entries
             .iter()
-            .position(|entry| entry.type_id == type_id)
+            .position(|entry| entry.type_id == type_id && entry.lifecycle_component_index.is_none())
         {
-            return Ok(EventId::new(owner.clone(), index as u32));
+            let entry = &self.entries[index];
+            if entry.options == options {
+                return Ok(EventId::new(owner.clone(), index as u32));
+            }
+            return Err(EventRegistrationError::TypeConflict {
+                name: name.clone(),
+                existing: entry.name.clone(),
+                requested: name,
+            });
         }
         if let Some((_index, entry)) = self
             .entries
@@ -147,6 +161,26 @@ impl EventRegistry {
             name,
             type_id,
             options,
+            lifecycle_component_index: None,
+        });
+        Ok(EventId::new(owner.clone(), index))
+    }
+
+    pub(crate) fn register_lifecycle<E: 'static>(
+        &mut self,
+        owner: &WorldOwner,
+        component_index: usize,
+        kind: crate::event::component::LifecycleKind,
+        options: EventOptions,
+    ) -> Result<EventId, EventRegistrationError> {
+        let name = alloc::format!("__lifecycle_{kind:?}_{component_index}");
+        let type_id = TypeId::of::<E>();
+        let index = self.entries.len() as u32;
+        self.entries.push(EventEntry {
+            name,
+            type_id,
+            options,
+            lifecycle_component_index: Some(component_index),
         });
         Ok(EventId::new(owner.clone(), index))
     }
@@ -164,7 +198,7 @@ impl EventRegistry {
         let type_id = TypeId::of::<E>();
         self.entries
             .iter()
-            .position(|entry| entry.type_id == type_id)
+            .position(|entry| entry.type_id == type_id && entry.lifecycle_component_index.is_none())
             .map(|index| EventId::new(owner.clone(), index as u32))
     }
 }
@@ -174,3 +208,23 @@ impl Default for EventRegistry {
         Self::new()
     }
 }
+
+#[cfg(feature = "std")]
+impl core::fmt::Display for EventRegistrationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::TypeConflict {
+                name,
+                existing,
+                requested,
+            } => write!(
+                f,
+                "event registration conflict for {name}: existing={existing}, requested={requested}"
+            ),
+            Self::InvalidCapacity => f.write_str("event retention capacity must be nonzero"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for EventRegistrationError {}

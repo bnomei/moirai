@@ -12,12 +12,10 @@ mod query;
 mod resources;
 mod spawn;
 
+pub use crate::command::Commands;
 pub use builder::WorldBuilder;
 pub use bundle::{Bundle, BundleWriter, DynamicBundle};
-pub use error::{
-    EventReadError, FlushError, FlushReport, WorldAllocatorError, WorldError,
-};
-pub use crate::command::Commands;
+pub use error::{EventReadError, FlushError, FlushReport, WorldAllocatorError, WorldError};
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -28,7 +26,7 @@ use core::any::{type_name, TypeId};
 use crate::command::{CommandQueue, ErasedComponentValue};
 use crate::component::{ComponentId, ComponentRegistry, StorageKind};
 use crate::entity::{AllocatorError, EntityAllocator, EntityId};
-use crate::event::{EventRegistry, EventStorage};
+use crate::event::{ComponentLifecycleRegistry, EventRegistry, EventStorage};
 use crate::resource::ResourceStore;
 use crate::storage::{ArchetypeStorage, SparseStore, TypedSparseStorage};
 use crate::time::{ChangeTick, ChangeTickError, WorldTick};
@@ -38,6 +36,7 @@ use self::guard::RunGuard;
 pub(crate) struct WorldEvents {
     pub registry: EventRegistry,
     pub storage: EventStorage,
+    pub lifecycle: ComponentLifecycleRegistry,
 }
 
 /// ECS world with checked sparse-component lifecycle.
@@ -54,6 +53,7 @@ pub struct World {
     world_tick: WorldTick,
     run_guard: RunGuard,
     mutation_poisoned: bool,
+    lifecycle_events_suppressed: bool,
 }
 
 impl World {
@@ -78,6 +78,7 @@ impl World {
             world_tick: WorldTick::ZERO,
             run_guard: RunGuard::Idle,
             mutation_poisoned: false,
+            lifecycle_events_suppressed: false,
         }
     }
 
@@ -121,8 +122,30 @@ impl World {
 
     pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Result<EntityId, WorldError> {
         let entity = self.spawn()?;
-        bundle.write(&mut BundleWriter::new(self, entity))?;
-        Ok(entity)
+        self.lifecycle_events_suppressed = true;
+        let write_result = bundle.write(&mut BundleWriter::new(self, entity));
+        self.lifecycle_events_suppressed = false;
+
+        match write_result {
+            Ok(()) => {
+                let components = self.component_indices_for(entity);
+                for component_index in components {
+                    self.emit_component_added(entity, component_index, true)?;
+                }
+                Ok(entity)
+            }
+            Err(error) => {
+                self.lifecycle_events_suppressed = true;
+                let rollback_result = self.remove_all_components(entity).and_then(|()| {
+                    self.allocator.free(entity).map_err(|allocator_error| {
+                        self.map_allocator_error(entity, allocator_error)
+                    })
+                });
+                self.lifecycle_events_suppressed = false;
+                rollback_result?;
+                Err(error)
+            }
+        }
     }
 
     pub fn is_alive(&self, entity: EntityId) -> bool {
@@ -156,18 +179,19 @@ impl World {
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
         if self.is_tag_component(&component_id) {
+            let index = component_id.index();
             let tick = self.issue_change_tick()?;
-            let _ = self.insert_tag_typed(entity, component_id, tick);
+            let added = self.insert_tag_typed(entity, component_id, tick);
+            self.emit_component_added(entity, index, added)?;
             return Ok(None);
         }
         if self.registry.is_table_component(&component_id) {
             let tick = self.issue_change_tick()?;
-            return Ok(self.archetypes.insert_table(
-                entity,
-                component_id.index() as u32,
-                value,
-                tick,
-            ));
+            let replaced =
+                self.archetypes
+                    .insert_table(entity, component_id.index() as u32, value, tick);
+            self.emit_component_added(entity, component_id.index(), replaced.is_none())?;
+            return Ok(replaced);
         }
         self.ensure_sparse_kind(&component_id)?;
         let index = component_id.index();
@@ -179,7 +203,9 @@ impl World {
             .ok_or_else(|| WorldError::WrongStorageKind {
                 name: String::from(type_name::<T>()),
             })?;
-        Ok(store.insert_with_tick(entity, value, tick))
+        let replaced = store.insert_with_tick(entity, value, tick);
+        self.emit_component_added(entity, index, replaced.is_none())?;
+        Ok(replaced)
     }
 
     pub fn add_tag(&mut self, entity: EntityId, tag: &ComponentId) -> Result<bool, WorldError> {
@@ -193,7 +219,9 @@ impl World {
             });
         }
         let tick = self.issue_change_tick()?;
-        Ok(self.insert_tag_index(entity, tag.index(), tick))
+        let added = self.insert_tag_index(entity, tag.index(), tick);
+        self.emit_component_added(entity, tag.index(), added)?;
+        Ok(added)
     }
 
     pub fn remove_tag(&mut self, entity: EntityId, tag: &ComponentId) -> Result<bool, WorldError> {
@@ -206,7 +234,11 @@ impl World {
                 name: format!("component {}", tag.index()),
             });
         }
-        Ok(self.remove_tag_index(entity, tag.index()))
+        let removed = self.remove_tag_index(entity, tag.index());
+        if removed {
+            self.emit_component_removed(entity, tag.index())?;
+        }
+        Ok(removed)
     }
 
     pub fn has_tag(&self, entity: EntityId, tag: &ComponentId) -> Result<bool, WorldError> {
@@ -296,16 +328,28 @@ impl World {
         self.ensure_live_access(entity)?;
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
+        let index = component_id.index();
         if self.is_tag_component(&component_id) {
-            let _ = self.remove_tag_index(entity, component_id.index());
+            let removed = self.remove_tag_index(entity, index);
+            if removed {
+                self.emit_component_removed(entity, index)?;
+            }
             return Ok(None);
         }
         if self.registry.is_table_component(&component_id) {
-            return Ok(self
+            let removed = self
                 .archetypes
-                .remove_table(entity, component_id.index() as u32));
+                .remove_table(entity, component_id.index() as u32);
+            if removed.is_some() {
+                self.emit_component_removed(entity, index)?;
+            }
+            return Ok(removed);
         }
-        Ok(self.sparse_store_mut::<T>(component_id)?.remove(entity))
+        let removed = self.sparse_store_mut::<T>(component_id)?.remove(entity);
+        if removed.is_some() {
+            self.emit_component_removed(entity, index)?;
+        }
+        Ok(removed)
     }
 
     pub fn len_sparse<T: 'static>(&self) -> Result<usize, WorldError> {
@@ -426,24 +470,24 @@ impl World {
         tick: ChangeTick,
     ) -> Result<(), WorldError> {
         let component_id = ComponentId::new(self.owner.clone(), component_index);
-        if self.is_tag_component(&component_id) {
-            let _ = self.insert_tag_index(entity, component_index as usize, tick);
-            return Ok(());
-        }
-        if self.registry.is_table_component(&component_id) {
-            let _ = self
-                .archetypes
-                .insert_table(entity, component_index, value, tick);
-            return Ok(());
-        }
-        let store = self
-            .sparse_stores
-            .get_mut(component_index as usize)
-            .and_then(|store| store.typed_mut::<T>())
-            .ok_or_else(|| WorldError::WrongStorageKind {
-                name: format!("component {component_index}"),
-            })?;
-        let _ = store.insert_with_tick(entity, value, tick);
+        let index = component_index as usize;
+        let is_new = if self.is_tag_component(&component_id) {
+            self.insert_tag_index(entity, index, tick)
+        } else if self.registry.is_table_component(&component_id) {
+            self.archetypes
+                .insert_table(entity, component_index, value, tick)
+                .is_none()
+        } else {
+            let store = self
+                .sparse_stores
+                .get_mut(index)
+                .and_then(|store| store.typed_mut::<T>())
+                .ok_or_else(|| WorldError::WrongStorageKind {
+                    name: format!("component {component_index}"),
+                })?;
+            store.insert_with_tick(entity, value, tick).is_none()
+        };
+        self.emit_component_added(entity, index, is_new)?;
         Ok(())
     }
 
@@ -453,7 +497,8 @@ impl World {
         component_index: u32,
         tick: ChangeTick,
     ) -> Result<(), WorldError> {
-        let _ = self.insert_tag_index(entity, component_index as usize, tick);
+        let added = self.insert_tag_index(entity, component_index as usize, tick);
+        self.emit_component_added(entity, component_index as usize, added)?;
         Ok(())
     }
 
@@ -465,20 +510,23 @@ impl World {
     ) -> Result<(), WorldError> {
         let _ = tick;
         let component_id = ComponentId::new(self.owner.clone(), component_index);
-        if self.is_tag_component(&component_id) {
-            let _ = self.remove_tag_index(entity, component_index as usize);
-            return Ok(());
-        }
-        if self.registry.is_table_component(&component_id) {
-            let _ = self
-                .archetypes
-                .remove_table_index(entity, component_index);
-            return Ok(());
-        }
-        if let Some(store) = self.sparse_stores.get_mut(component_index as usize) {
+        let index = component_index as usize;
+        let removed = if self.is_tag_component(&component_id) {
+            self.remove_tag_index(entity, index)
+        } else if self.registry.is_table_component(&component_id) {
+            self.archetypes.remove_table_index(entity, component_index)
+        } else if let Some(store) = self.sparse_stores.get_mut(index) {
             if let Some(erased) = store.as_erased_mut() {
                 erased.remove_entity(entity);
+                true
+            } else {
+                false
             }
+        } else {
+            false
+        };
+        if removed {
+            self.emit_component_removed(entity, index)?;
         }
         Ok(())
     }
@@ -578,11 +626,45 @@ impl World {
     }
 
     fn remove_all_components(&mut self, entity: EntityId) -> Result<(), WorldError> {
+        let sparse_removals = self
+            .sparse_stores
+            .iter()
+            .enumerate()
+            .filter_map(|(index, store)| store.contains_entity(entity).then_some(index))
+            .collect::<Vec<_>>();
+        let table_removals = self
+            .archetypes
+            .table_component_indices(entity)
+            .into_iter()
+            .map(|index| index as usize)
+            .collect::<Vec<_>>();
+        for index in sparse_removals {
+            self.emit_component_removed(entity, index)?;
+        }
+        for index in table_removals {
+            self.emit_component_removed(entity, index)?;
+        }
         for store in &mut self.sparse_stores {
             store.remove_entity(entity);
         }
         self.archetypes.remove_entity(entity);
         Ok(())
+    }
+
+    fn component_indices_for(&self, entity: EntityId) -> Vec<usize> {
+        let mut indices = self
+            .sparse_stores
+            .iter()
+            .enumerate()
+            .filter_map(|(index, store)| store.contains_entity(entity).then_some(index))
+            .collect::<Vec<_>>();
+        indices.extend(
+            self.archetypes
+                .table_component_indices(entity)
+                .into_iter()
+                .map(|index| index as usize),
+        );
+        indices
     }
 
     fn expected_type_id(&self, component_index: u32) -> Result<TypeId, WorldError> {
@@ -661,8 +743,8 @@ impl World {
         }
     }
 
-    #[cfg(test)]
-    fn set_change_tick_for_test(&mut self, tick: ChangeTick) {
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn set_change_tick_for_test(&mut self, tick: ChangeTick) {
         self.change_tick = tick;
     }
 }
@@ -745,6 +827,30 @@ mod tests {
             Err(WorldError::StructuralMutationDuringRun)
         ));
         world.end_run();
+    }
+
+    #[test]
+    fn resource_scope_tick_exhaustion_restores_resource_without_scope_sentinel() {
+        #[derive(Debug, PartialEq)]
+        struct Score(i32);
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<Score>();
+        let mut world = builder.build().expect("build");
+        world.insert_resource(Score(1)).expect("seed");
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+        world.insert_resource(Score(2)).expect("last tick");
+
+        let result = world.resource_scope::<Score, _>(|value, _| {
+            if let Some(score) = value {
+                score.0 = 5;
+            }
+        });
+        assert!(matches!(result, Err(WorldError::ChangeTickExhausted)));
+        assert_eq!(
+            world.resource::<Score>().expect("unchanged"),
+            Some(&Score(2))
+        );
     }
 
     #[test]

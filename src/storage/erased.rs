@@ -8,6 +8,7 @@ use crate::time::ChangeTick;
 #[allow(dead_code)]
 pub(crate) trait ErasedSparseStorage {
     fn remove_entity(&mut self, entity: EntityId);
+    fn contains_entity(&self, entity: EntityId) -> bool;
     fn len(&self) -> usize;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -53,6 +54,10 @@ impl<T: 'static> TypedSparseStorage<T> {
 impl<T: 'static> ErasedSparseStorage for TypedSparseStorage<T> {
     fn remove_entity(&mut self, entity: EntityId) {
         let _ = self.set.remove(entity);
+    }
+
+    fn contains_entity(&self, entity: EntityId) -> bool {
+        self.set.contains_slot(entity)
     }
 
     fn len(&self) -> usize {
@@ -103,6 +108,10 @@ impl ErasedSparseStorage for TagSparseStorage {
         let _ = self.set.remove(entity);
     }
 
+    fn contains_entity(&self, entity: EntityId) -> bool {
+        self.set.contains_slot(entity)
+    }
+
     fn len(&self) -> usize {
         self.set.len()
     }
@@ -134,6 +143,14 @@ impl SparseStore {
 
     pub fn new_empty() -> Self {
         Self::Empty
+    }
+
+    pub fn contains_entity(&self, entity: EntityId) -> bool {
+        match self {
+            Self::Tag(store) => store.contains(entity),
+            Self::Erased(store) => store.contains_entity(entity),
+            Self::Empty => false,
+        }
     }
 
     pub fn remove_entity(&mut self, entity: EntityId) {

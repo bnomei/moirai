@@ -1,0 +1,17 @@
+error[E0603]: struct `EventStorage` is private
+ --> tests/ui/internal_event_storage.rs:1:20
+  |
+1 | use moirai::event::EventStorage;
+  |                    ^^^^^^^^^^^^ private struct
+  |
+note: the struct `EventStorage` is defined here
+ --> src/event/mod.rs
+  |
+  | pub(crate) use queue::EventStorage;
+  |                ^^^^^^^^^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/internal_event_storage.rs:1:33
+  |
+1 | use moirai::event::EventStorage;
+  |                                 ^ consider adding a `main` function to `$DIR/tests/ui/internal_event_storage.rs`

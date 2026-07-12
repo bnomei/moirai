@@ -1,5 +1,5 @@
-use moirai::ChangeTick;
 use moirai::world::WorldBuilder;
+use moirai::ChangeTick;
 
 #[derive(Debug, PartialEq)]
 struct Score(i32);
@@ -21,7 +21,10 @@ fn resource_insert_get_remove_round_trip() {
         Some(ChangeTick::from_raw(2))
     );
 
-    assert_eq!(world.remove_resource::<Score>().expect("remove"), Some(Score(20)));
+    assert_eq!(
+        world.remove_resource::<Score>().expect("remove"),
+        Some(Score(20))
+    );
     assert!(!world.contains_resource::<Score>());
 }
 

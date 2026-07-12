@@ -16,7 +16,6 @@ impl World {
         if !self.run_guard.is_idle() {
             return Err(WorldError::DiscardDuringRun);
         }
-        self.ensure_mutable()?;
         self.command_queue.discard(&mut self.allocator)
     }
 

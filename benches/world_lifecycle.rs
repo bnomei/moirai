@@ -23,7 +23,10 @@ fn table_insert_get() {
     let mut world = setup();
     let entity = world.spawn().expect("spawn");
     world.insert(entity, TablePos(42)).expect("insert");
-    let value = world.get::<TablePos>(entity).expect("get").expect("present");
+    let value = world
+        .get::<TablePos>(entity)
+        .expect("get")
+        .expect("present");
     divan::black_box(value.0);
 }
 
@@ -33,14 +36,21 @@ fn archetype_move_insert_second_table_component() {
     let entity = world.spawn().expect("spawn");
     world.insert(entity, TablePos(1)).expect("insert pos");
     world.insert(entity, Velocity(2)).expect("insert vel");
-    let value = world.get::<Velocity>(entity).expect("get").expect("present");
+    let value = world
+        .get::<Velocity>(entity)
+        .expect("get")
+        .expect("present");
     divan::black_box(value.0);
 }
 
 #[divan::bench]
 fn deferred_command_flush() {
     let mut world = setup();
-    let entity = world.commands().expect("commands").spawn().expect("reserve");
+    let entity = world
+        .commands()
+        .expect("commands")
+        .spawn()
+        .expect("reserve");
     world
         .commands()
         .expect("commands")

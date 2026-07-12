@@ -43,7 +43,7 @@ extern crate std;
 mod app;
 mod command;
 mod diagnostics;
-mod event;
+pub mod event;
 mod operation;
 mod prelude;
 mod query;
@@ -64,8 +64,11 @@ mod testkit;
 
 pub use component::{ComponentId, ComponentOptions, StorageKind};
 pub use entity::EntityId;
+pub use event::{
+    ComponentAdded, ComponentRemoved, EventId, EventOptions, EventReader, EventReaderStart,
+    EventRegistrationError, EventRetention,
+};
 pub use math::Q16;
-pub use event::{EventOptions, EventReaderStart};
 pub use operation::StageOperation;
 pub use time::ChangeTick;
 pub use world::{Commands, DynamicBundle, World, WorldBuilder, WorldError};

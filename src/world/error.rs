@@ -1,7 +1,7 @@
-use alloc::string::String;
 use crate::component::RegistrationError;
 use crate::entity::EntityId;
 use crate::time::ChangeTick;
+use alloc::string::String;
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,10 +20,7 @@ pub struct FlushReport {
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FlushError {
-    CommandValidation {
-        index: usize,
-        detail: String,
-    },
+    CommandValidation { index: usize, detail: String },
     ChangeTickExhausted,
 }
 
@@ -68,6 +65,7 @@ pub enum EventReadError {
     Lagged { dropped: u64 },
     ChannelClosed,
     UnregisteredEvent { name: String },
+    OwnerMismatch { name: String },
 }
 
 #[cfg(feature = "std")]
@@ -111,7 +109,12 @@ impl core::fmt::Display for WorldError {
                 )
             }
             Self::EntityNotLive { entity } => {
-                write!(f, "entity {:?}:{:?} is not live", entity.slot(), entity.generation())
+                write!(
+                    f,
+                    "entity {:?}:{:?} is not live",
+                    entity.slot(),
+                    entity.generation()
+                )
             }
             Self::UnregisteredComponent { name } => {
                 write!(f, "unregistered component {name}")
@@ -160,6 +163,7 @@ impl core::fmt::Display for EventReadError {
             Self::Lagged { dropped } => write!(f, "event reader lagged by {dropped} events"),
             Self::ChannelClosed => f.write_str("event channel is closed"),
             Self::UnregisteredEvent { name } => write!(f, "unregistered event {name}"),
+            Self::OwnerMismatch { name } => write!(f, "event reader owner mismatch for {name}"),
         }
     }
 }
