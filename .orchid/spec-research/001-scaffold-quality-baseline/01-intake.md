@@ -10,4 +10,3 @@ Out of scope: ECS behavior, public placeholder/no-op implementations, crate spli
 numeric selection, Wyrd/Anapao dependencies, and performance claims.
 
 Human acceptance of Phase 0 D1–D16 remains the execution gate.
-

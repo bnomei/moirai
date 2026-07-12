@@ -79,8 +79,16 @@ impl World {
         self.ensure_alive(entity)?;
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
+        self.ensure_sparse_kind(&component_id)?;
+        let index = component_id.index();
         let tick = self.issue_change_tick()?;
-        let store = self.sparse_store_mut::<T>(component_id)?;
+        let store = self
+            .sparse_stores
+            .get_mut(index)
+            .and_then(|store| store.typed_mut::<T>())
+            .ok_or_else(|| WorldError::WrongStorageKind {
+                name: String::from(type_name::<T>()),
+            })?;
         Ok(store.insert_with_tick(entity, value, tick))
     }
 
@@ -237,6 +245,9 @@ mod tests {
     #[derive(Clone, Copy)]
     struct Other;
 
+    #[derive(Clone, Copy)]
+    struct TableComp;
+
     fn test_world() -> World {
         let mut builder = WorldBuilder::new();
         builder
@@ -246,6 +257,36 @@ mod tests {
             .register_component::<Other>(ComponentOptions::sparse())
             .expect("register other");
         builder.build().expect("build")
+    }
+
+    fn table_world() -> World {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("register marker");
+        builder
+            .register_component::<TableComp>(ComponentOptions::table())
+            .expect("register table");
+        builder.build().expect("build")
+    }
+
+    #[test]
+    fn wrong_storage_insert_does_not_issue_change_tick() {
+        let mut world = table_world();
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+        let entity = world.spawn().expect("spawn");
+        assert!(matches!(
+            world.insert(entity, TableComp),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+        assert!(world
+            .insert(entity, Marker(1))
+            .expect("sparse insert")
+            .is_none());
+        assert!(matches!(
+            world.insert(entity, Marker(2)),
+            Err(WorldError::ChangeTickExhausted)
+        ));
     }
 
     #[test]

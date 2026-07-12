@@ -19,4 +19,3 @@
 - License/advisory tool selection.
 
 These are tooling choices, not architecture reopeners.
-

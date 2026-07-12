@@ -6,4 +6,3 @@ event observation, fixed ticks, fallible execution, and no-unsafe ownership expl
 
 Out of scope: complete query internals, host-specific stages/state, platform profiler FFI, and
 downstream adapters.
-

@@ -13,4 +13,3 @@
   that naturally stores multiple numeric component types.
 - `PHASE_2_CORE_STORAGE.md` now records the corrected state models, transaction rules, numeric
   operations, tests, and vertical slice.
-

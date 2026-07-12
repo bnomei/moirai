@@ -12,4 +12,3 @@
   would make Moirai's `--all-features` build incoherent.
 - Coverage tooling may require a newer compiler than the library MSRV; it therefore cannot define
   the Rust 1.75 support contract.
-

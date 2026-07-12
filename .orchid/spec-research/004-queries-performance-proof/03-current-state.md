@@ -9,4 +9,3 @@
 - User-visible lifecycle events may be cleared/retained independently from internal cache
   coherence, so caches cannot consume those public reader streams as their sole truth.
 - `PHASE_5_QUERIES.md` defines functional/cache/model/benchmark matrices.
-

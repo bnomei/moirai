@@ -6,4 +6,3 @@ private, and end with an integrated sparse-world lifecycle proof.
 
 Out of scope: table/archetype completion, full commands/resources/events, schedule execution, and a
 crate-wide numeric mode.
-

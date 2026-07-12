@@ -11,4 +11,3 @@
 - Sea of Grass requires apply-before-portal ordering but that graph is host policy.
 - `PHASE_3_WORLD_LIFECYCLE.md` and `PHASE_4_SCHEDULE.md` now define the corrected split and error
   boundaries.
-

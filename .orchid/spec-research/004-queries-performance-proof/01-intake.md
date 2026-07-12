@@ -6,4 +6,3 @@ or unsafe mutable iterator machinery.
 
 The same handoff owns hot/cold/cache/allocation benchmark proof for queries. Full-crate coverage and
 parity closure remain Phase 6.
-

@@ -7,4 +7,3 @@ implementation-spec decisions with named tests.
 OVERALL: GREEN
 cheap_worker_ready: yes
 required_fixups: none
-
