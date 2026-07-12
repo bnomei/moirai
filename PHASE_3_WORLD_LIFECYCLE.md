@@ -1,6 +1,6 @@
 # Phase 3 — World data and structural lifecycle
 
-**Status:** in progress · 2026-07-12
+**Status:** complete · 2026-07-12
 **Depends on:** [Phase 2](./PHASE_2_CORE_STORAGE.md)
 **Research:** [packet 003](./.orchid/spec-research/003-world-schedule-contract/),
 [packet 006](./.orchid/spec-research/006-single-crate-api-architecture/)
@@ -305,21 +305,21 @@ cleared on every normal/fallible Schedule exit. Nested execution against the sam
 
 ## Tasks
 
-- [ ] **T301** Add Reserved allocator state and transactional reservation release.
+- [x] **T301** Add Reserved allocator state and transactional reservation release.
 - [x] **T302** Implement private table columns, archetype signatures, locations, and checked move
   plans.
 - [x] **T303** Complete idle spawn/insert/remove/despawn across sparse/table/tag storage.
-- [ ] **T304** Implement tuple/custom `Bundle` support and final `DynamicBundle` validation.
-- [ ] **T305** Implement borrowed `Commands`, idle discard/pending detection, and whole-batch
+- [x] **T304** Implement tuple/custom `Bundle` support and final `DynamicBundle` validation.
+- [x] **T305** Implement borrowed `Commands`, idle discard/pending detection, and whole-batch
   preflight/commit.
-- [ ] **T306** Implement typed resources, ChangeTick, locks, and the safe scoped-resource contract.
-- [ ] **T307** Implement typed event registration, operation-owned frame queues, weak-tracked
+- [x] **T306** Implement typed resources, ChangeTick, locks, and the safe scoped-resource contract.
+- [x] **T307** Implement typed event registration, operation-owned frame queues, weak-tracked
   readers, retention, closed-channel exhaustion, and lifecycle channels.
-- [ ] **T308** Add World run guard, crate-private tick advancement, and event-clear boundary.
-- [ ] **T309** Port/classify all non-query world/source tests owned by this phase.
-- [ ] **T310** Add state-machine tests spanning allocator, locations, commands, and lifecycle
+- [x] **T308** Add World run guard, crate-private tick advancement, and event-clear boundary.
+- [x] **T309** Port/classify all non-query world/source tests owned by this phase.
+- [x] **T310** Add state-machine tests spanning allocator, locations, commands, and lifecycle
   events.
-- [ ] **T311** Add steady-state allocation and archetype-move benchmarks with owning code.
+- [x] **T311** Add steady-state allocation and archetype-move benchmarks with owning code.
 
 ## Verification
 
@@ -347,12 +347,12 @@ Invariant tests must compare World state before and after rejected command batch
 
 ## Exit criteria
 
-- [ ] World data lifecycle is complete without Schedule ownership.
-- [ ] Immediate/deferred mutation timing is externally testable and documented.
-- [ ] Sparse/table/tag moves preserve all locations and values under randomized traces.
-- [ ] Resource/event surfaces are typed by default and implementation containers remain private.
-- [ ] Command failures never leave a partially applied structural batch.
-- [ ] The World is ready for a safe external Schedule runner and the full query facade.
+- [x] World data lifecycle is complete without Schedule ownership.
+- [x] Immediate/deferred mutation timing is externally testable and documented.
+- [x] Sparse/table/tag moves preserve all locations and values under randomized traces.
+- [x] Resource/event surfaces are typed by default and implementation containers remain private.
+- [x] Command failures never leave a partially applied structural batch.
+- [x] The World is ready for a safe external Schedule runner and the full query facade.
 
 ## References
 

@@ -166,9 +166,23 @@ impl SparseStore {
         }
     }
 
+    pub fn tag(&self) -> Option<&TagSparseStorage> {
+        match self {
+            Self::Tag(store) => Some(store),
+            _ => None,
+        }
+    }
+
     pub fn tag_mut(&mut self) -> Option<&mut TagSparseStorage> {
         match self {
             Self::Tag(store) => Some(store),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_erased_mut(&mut self) -> Option<&mut dyn ErasedSparseStorage> {
+        match self {
+            Self::Erased(store) => Some(store.as_mut()),
             _ => None,
         }
     }

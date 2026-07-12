@@ -105,6 +105,14 @@ impl EntityAllocator {
         )
     }
 
+    pub fn is_reserved(&self, id: EntityId) -> bool {
+        let slot = id.slot() as usize;
+        matches!(
+            self.slot_state(slot),
+            Some((SlotState::Reserved, generation)) if generation == id.generation()
+        )
+    }
+
     pub fn free(&mut self, id: EntityId) -> Result<(), AllocatorError> {
         let slot = id.slot() as usize;
         self.ensure_state(slot, SlotState::Live, id.generation())?;
@@ -175,6 +183,14 @@ impl EntityAllocator {
     fn slot_state(&self, slot: usize) -> Option<(SlotState, u32)> {
         let generation = *self.generations.get(slot)?;
         Some((self.states[slot], generation))
+    }
+
+    pub(crate) fn slot_capacity(&self) -> usize {
+        self.generations.len()
+    }
+
+    pub(crate) fn generation_for_slot(&self, slot: usize) -> u32 {
+        self.generations.get(slot).copied().unwrap_or(0)
     }
 
     #[cfg(test)]

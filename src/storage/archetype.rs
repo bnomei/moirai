@@ -128,6 +128,20 @@ impl ArchetypeStorage {
             .downcast_mut::<T>()
     }
 
+    pub fn remove_table_index(&mut self, entity: EntityId, component_index: u32) -> bool {
+        if !self.signature_for(entity).contains(component_index) {
+            return false;
+        }
+        let location = self.location(entity).expect("entity located");
+        let archetype = location.archetype as usize;
+        let row = location.row as usize;
+        let column = self.column_position(archetype, component_index);
+        let _ = self.columns[archetype][column].take_value(row);
+        let destination = self.signature_for(entity).with_removed(component_index);
+        self.rehome_entity(entity, &destination);
+        true
+    }
+
     pub fn remove_table<T: Clone + 'static>(
         &mut self,
         entity: EntityId,

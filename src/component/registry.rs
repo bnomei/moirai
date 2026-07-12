@@ -143,6 +143,10 @@ impl ComponentRegistry {
         self.entries.get(id.index()).map(|entry| entry.is_tag)
     }
 
+    pub(crate) fn type_id_for_index(&self, index: usize) -> Option<TypeId> {
+        self.entries.get(index).and_then(|entry| entry.type_id)
+    }
+
     pub(crate) fn id_of<T: 'static>(&self, owner: &WorldOwner) -> Option<ComponentId> {
         let type_id = TypeId::of::<T>();
         self.entries

@@ -65,4 +65,7 @@ mod testkit;
 pub use component::{ComponentId, ComponentOptions, StorageKind};
 pub use entity::EntityId;
 pub use math::Q16;
-pub use world::{World, WorldBuilder, WorldError};
+pub use event::{EventOptions, EventReaderStart};
+pub use operation::StageOperation;
+pub use time::ChangeTick;
+pub use world::{Commands, DynamicBundle, World, WorldBuilder, WorldError};

@@ -19,6 +19,11 @@ impl WorldTick {
     pub fn raw(self) -> u64 {
         self.0
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_raw(&mut self, raw: u64) {
+        self.0 = raw;
+    }
 }
 
 impl fmt::Display for WorldTick {
@@ -30,8 +35,7 @@ impl fmt::Display for WorldTick {
 impl ChangeTick {
     pub const ZERO: Self = Self(0);
 
-    #[allow(dead_code)]
-    pub(crate) const fn from_raw(raw: u64) -> Self {
+    pub const fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
 

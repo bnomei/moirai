@@ -1,9 +1,3 @@
-error[E0432]: unresolved import `moirai::event::EventReader`
- --> tests/ui/premature_event_namespace.rs:1:5
-  |
-1 | use moirai::event::EventReader;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `EventReader` in `event`
-
 error[E0603]: module `event` is private
  --> tests/ui/premature_event_namespace.rs:1:13
   |
