@@ -17,14 +17,15 @@ fn sparse_insert_lookup() {
     let mut world = setup();
     let mut entities = Vec::new();
     for i in 0..128 {
-        let entity = world.spawn();
-        world
-            .insert(entity, BenchComp(i))
-            .expect("insert");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, BenchComp(i)).expect("insert");
         entities.push(entity);
     }
     for (i, entity) in entities.iter().enumerate() {
-        let value = world.get::<BenchComp>(*entity).expect("get").expect("present");
+        let value = world
+            .get::<BenchComp>(*entity)
+            .expect("get")
+            .expect("present");
         divan::black_box(value.0);
         divan::black_box(i);
     }

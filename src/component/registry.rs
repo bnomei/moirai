@@ -287,6 +287,41 @@ impl Default for ComponentRegistry {
     }
 }
 
+#[cfg(feature = "std")]
+impl core::fmt::Display for RegistrationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::TypeConflict {
+                name,
+                existing,
+                requested,
+            } => write!(
+                f,
+                "component type conflict for {name}: existing={existing}, requested={requested}"
+            ),
+            Self::NameConflict {
+                name,
+                existing,
+                requested,
+            } => write!(
+                f,
+                "component name conflict for {name}: existing={existing}, requested={requested}"
+            ),
+            Self::LayoutConflict { name, detail } => {
+                write!(f, "component layout conflict for {name}: {detail}")
+            }
+            Self::InvalidTag { name, detail } => {
+                write!(f, "invalid tag component {name}: {detail}")
+            }
+            Self::UnsupportedStorage { name, detail } => {
+                write!(f, "unsupported storage for {name}: {detail}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for RegistrationError {}
 
 #[cfg(test)]
 mod tests;

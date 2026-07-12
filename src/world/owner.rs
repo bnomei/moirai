@@ -30,7 +30,9 @@ impl Hash for WorldOwner {
 
 impl core::fmt::Debug for WorldOwner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("WorldOwner").field(&Rc::as_ptr(&self.0)).finish()
+        f.debug_tuple("WorldOwner")
+            .field(&Rc::as_ptr(&self.0))
+            .finish()
     }
 }
 

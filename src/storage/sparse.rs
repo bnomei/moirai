@@ -51,12 +51,7 @@ impl<T> SparseSet<T> {
         self.changed.get(index).copied().map(ChangeTick::from_raw)
     }
 
-    pub fn insert_with_tick(
-        &mut self,
-        entity: EntityId,
-        value: T,
-        tick: ChangeTick,
-    ) -> Option<T> {
+    pub fn insert_with_tick(&mut self, entity: EntityId, value: T, tick: ChangeTick) -> Option<T> {
         let slot = entity.slot() as usize;
         self.ensure_sparse(slot);
         let raw = tick.raw();
@@ -118,7 +113,10 @@ impl<T> SparseSet<T> {
     }
 
     pub fn iter(&self) -> SparseIter<'_, T> {
-        SparseIter { index: 0, set: self }
+        SparseIter {
+            index: 0,
+            set: self,
+        }
     }
 
     fn ensure_sparse(&mut self, slot: usize) {
@@ -146,7 +144,6 @@ impl<T> Default for SparseSet<T> {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests;

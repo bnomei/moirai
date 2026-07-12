@@ -93,10 +93,8 @@ impl EntityAllocator {
     pub fn release_reserved(&mut self, id: EntityId) -> Result<(), AllocatorError> {
         let slot = id.slot() as usize;
         self.ensure_state(slot, SlotState::Reserved, id.generation())?;
-        self.states[slot] = SlotState::Free;
         self.reserved_count -= 1;
-        self.free.push(id.slot());
-        Ok(())
+        self.recycle_slot(slot)
     }
 
     pub fn is_alive(&self, id: EntityId) -> bool {
@@ -162,7 +160,9 @@ impl EntityAllocator {
             Some((SlotState::Retired, _)) => Err(AllocatorError::SlotRetired),
             Some((state, gen)) if state == expected && gen == generation => Ok(()),
             Some((_, gen)) if gen != generation => Err(AllocatorError::StaleEntity),
-            Some((SlotState::Live, _)) if expected != SlotState::Live => Err(AllocatorError::NotLive),
+            Some((SlotState::Live, _)) if expected != SlotState::Live => {
+                Err(AllocatorError::NotLive)
+            }
             Some((SlotState::Free | SlotState::Reserved, _)) if expected == SlotState::Live => {
                 Err(AllocatorError::StaleEntity)
             }

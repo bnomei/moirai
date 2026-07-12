@@ -20,7 +20,15 @@ fn bit_round_trip() {
 #[case(1.5, 98_304)]
 #[case(-1.5, -98_304)]
 fn half_away_from_zero_f32(#[case] input: f32, #[case] expected: i32) {
-    assert_eq!(Q16::try_from_f32(input).expect("finite").to_bits(), expected);
+    assert_eq!(
+        Q16::try_from_f32(input).expect("finite").to_bits(),
+        expected
+    );
+}
+
+#[rstest]
+fn out_of_range_f32_is_rejected() {
+    assert_eq!(Q16::try_from_f32(32768.0), Err(Q16Error::OutOfRange));
 }
 
 #[rstest]
@@ -31,10 +39,7 @@ fn divide_by_zero_is_rejected() {
 
 #[rstest]
 fn checked_add_overflow() {
-    assert_eq!(
-        Q16::MAX.checked_add(Q16::ONE),
-        Err(Q16Error::Overflow)
-    );
+    assert_eq!(Q16::MAX.checked_add(Q16::ONE), Err(Q16Error::Overflow));
 }
 
 #[rstest]

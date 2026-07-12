@@ -6,6 +6,7 @@ use core::fmt;
 #[repr(transparent)]
 pub struct Q16(i32);
 
+#[non_exhaustive]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Q16Error {
     Overflow,
@@ -46,11 +47,7 @@ impl Q16 {
             return Err(Q16Error::NotFinite);
         }
         let scaled = value * (Self::ONE.0 as f32);
-        let rounded = round_half_away_f32(scaled);
-        if rounded > i32::MAX as f32 || rounded < i32::MIN as f32 {
-            return Err(Q16Error::OutOfRange);
-        }
-        Ok(Self(rounded as i32))
+        Ok(Self(round_half_away_to_i32(scaled)?))
     }
 
     pub fn saturating_from_f32(value: f32) -> Result<Self, Q16Error> {
@@ -58,11 +55,15 @@ impl Q16 {
             return Err(Q16Error::NotFinite);
         }
         if value.is_infinite() {
-            return Ok(if value.is_sign_positive() { Self::MAX } else { Self::MIN });
+            return Ok(if value.is_sign_positive() {
+                Self::MAX
+            } else {
+                Self::MIN
+            });
         }
         let scaled = value * (Self::ONE.0 as f32);
-        let rounded = round_half_away_f32(scaled);
-        Ok(Self(rounded.clamp(i32::MIN as f32, i32::MAX as f32) as i32))
+        let rounded = round_half_away_to_i64(scaled).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        Ok(Self(rounded))
     }
 
     pub fn to_f32(self) -> f32 {
@@ -119,8 +120,8 @@ impl Q16 {
         }
         let numerator = (self.0 as i64) << Self::FRAC_BITS;
         Ok(Self(
-            round_half_away_i64(numerator, rhs.0 as i64)
-                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            round_half_away_i64(numerator, rhs.0 as i64).clamp(i32::MIN as i64, i32::MAX as i64)
+                as i32,
         ))
     }
 }
@@ -143,11 +144,31 @@ impl fmt::Debug for Q16 {
     }
 }
 
-fn round_half_away_f32(value: f32) -> f32 {
+#[cfg(feature = "std")]
+impl fmt::Display for Q16Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Overflow => f.write_str("Q16 overflow"),
+            Self::Underflow => f.write_str("Q16 underflow"),
+            Self::DivisionByZero => f.write_str("Q16 division by zero"),
+            Self::NotFinite => f.write_str("Q16 input is not finite"),
+            Self::OutOfRange => f.write_str("Q16 input is out of range"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Q16Error {}
+
+fn round_half_away_to_i32(value: f32) -> Result<i32, Q16Error> {
+    i32::try_from(round_half_away_to_i64(value)).map_err(|_| Q16Error::OutOfRange)
+}
+
+fn round_half_away_to_i64(value: f32) -> i64 {
     if value >= 0.0 {
-        (value + 0.5) as i32 as f32
+        (value as f64 + 0.5) as i64
     } else {
-        (value - 0.5) as i32 as f32
+        (value as f64 - 0.5) as i64
     }
 }
 
@@ -166,30 +187,25 @@ fn round_half_away_i64(numerator: i64, denominator: i64) -> i64 {
 fn round_div_fixed(numerator: i64, shift: u32) -> Result<Q16, Q16Error> {
     let divisor = 1i64 << shift;
     let value = round_half_away_i64(numerator, divisor);
-    i32::try_from(value)
-        .map(Q16)
-        .map_err(|_| {
-            if value > i32::MAX as i64 {
-                Q16Error::Overflow
-            } else {
-                Q16Error::Underflow
-            }
-        })
+    i32::try_from(value).map(Q16).map_err(|_| {
+        if value > i32::MAX as i64 {
+            Q16Error::Overflow
+        } else {
+            Q16Error::Underflow
+        }
+    })
 }
 
 fn round_div_i64(numerator: i64, divisor: i64) -> Result<Q16, Q16Error> {
     let value = round_half_away_i64(numerator, divisor);
-    i32::try_from(value)
-        .map(Q16)
-        .map_err(|_| {
-            if value > i32::MAX as i64 {
-                Q16Error::Overflow
-            } else {
-                Q16Error::Underflow
-            }
-        })
+    i32::try_from(value).map(Q16).map_err(|_| {
+        if value > i32::MAX as i64 {
+            Q16Error::Overflow
+        } else {
+            Q16Error::Underflow
+        }
+    })
 }
-
 
 #[cfg(test)]
 mod tests;

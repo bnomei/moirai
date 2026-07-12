@@ -1,7 +1,9 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use crate::component::{ComponentId, ComponentOptions, ComponentRegistry, RegistrationError, StorageKind};
+use crate::component::{
+    ComponentId, ComponentOptions, ComponentRegistry, RegistrationError, StorageKind,
+};
 use crate::storage::SparseStore;
 use crate::world::{World, WorldError, WorldOwner};
 
@@ -49,11 +51,9 @@ impl WorldBuilder {
     }
 
     pub fn register_tag(&mut self, name: &str) -> Result<ComponentId, RegistrationError> {
-        let id = self.registry.register_untyped(
-            &self.owner,
-            name,
-            ComponentOptions::tag(),
-        )?;
+        let id = self
+            .registry
+            .register_untyped(&self.owner, name, ComponentOptions::tag())?;
         self.ensure_sparse_slot(id.index());
         self.sparse_factories[id.index()] = Some(Box::new(SparseStore::new_tag));
         Ok(id)

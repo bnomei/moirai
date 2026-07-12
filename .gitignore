@@ -1,12 +1,9 @@
 .devana
 .frigg
 .DS_Store
-.orchid
-specs
-docs/*
-!docs/coverage.md
-!docs/perf.md
+.orchid/buds
+.orchid/leases
+.orchid/locks
+.orchid/packets
+.orchid/reports
 /target
-
-PHASE_*
-ROADMAP.md

@@ -34,14 +34,7 @@ fn all_features_build_is_additive() {
 #[test]
 fn core_has_no_forbidden_runtime_dependencies() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("Cargo.toml should exist");
-    for forbidden in [
-        "wyrd",
-        "anapao",
-        "bevy",
-        "playdate",
-        "serde",
-        "proc-macro",
-    ] {
+    for forbidden in ["wyrd", "anapao", "bevy", "playdate", "serde", "proc-macro"] {
         assert!(
             !manifest.contains(&format!("{forbidden} =")),
             "core manifest must not depend on {forbidden}"
@@ -76,6 +69,18 @@ fn root_and_prelude_vocabulary_is_not_prematurely_public() {
     cases.compile_fail("tests/ui/premature_root_app.rs");
     cases.compile_fail("tests/ui/premature_root_system.rs");
     cases.compile_fail("tests/ui/premature_prelude.rs");
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn std_error_types_expose_display_and_source() {
+    use std::error::Error;
+
+    let q16: &dyn Error = &moirai::math::Q16Error::OutOfRange;
+    assert_eq!(q16.to_string(), "Q16 input is out of range");
+
+    let world: &dyn Error = &moirai::world::WorldError::ChangeTickExhausted;
+    assert_eq!(world.to_string(), "change tick exhausted");
 }
 
 #[cfg(feature = "std")]

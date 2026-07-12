@@ -79,8 +79,8 @@ Only concept-level namespaces may become public, with each first published by it
 `moirai::testkit` is a final Phase 6 namespace behind the `testkit` feature. Phase 1 deliberately
 does not publish any empty semantic module or test a future path: adding a namespace with its real
 surface is additive, while a placeholder would violate R108. Component/math names begin in Phase 2,
-World/event names in Phase 3, App/schedule/diagnostics names in Phase 4, query names in Phase 5, and
-testkit in Phase 6.
+including a minimal sparse `World` slice; full World lifecycle names land in Phase 3; event names in
+Phase 3; App/schedule/diagnostics names in Phase 4; query names in Phase 5; and testkit in Phase 6.
 
 `app`, `command`, `entity`, `operation`, `resource`, `state`, `storage`, and `time` may be private
 modules whose stable types are deliberately re-exported. `operation` contains only the shared

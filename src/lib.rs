@@ -12,8 +12,9 @@
 //! 1. its owning phase has implemented the real invariant, and
 //! 2. a public-API test proves the import path.
 //!
-//! Phase 2 publishes `component`, `entity`, `math`, and `world` namespaces plus the
-//! matching root re-exports. `moirai::prelude` remains withheld until Phase 4.
+//! Phase 2 publishes `component`, `math`, and `world` namespaces plus curated root
+//! re-exports. `EntityId` is re-exported at the crate root; the physical `entity`
+//! module stays private. `moirai::prelude` remains withheld until Phase 4.
 //!
 //! # Privacy boundary
 //!
@@ -36,6 +37,9 @@
 
 extern crate alloc;
 
+#[cfg(feature = "std")]
+extern crate std;
+
 mod app;
 mod command;
 mod diagnostics;
@@ -49,8 +53,9 @@ mod state;
 mod storage;
 mod time;
 
+mod entity;
+
 pub mod component;
-pub mod entity;
 pub mod math;
 pub mod world;
 

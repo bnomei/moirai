@@ -12,8 +12,8 @@ fn sparse_world_vertical_slice() {
         .expect("register health");
     let mut world = builder.build().expect("build world");
 
-    let a = world.spawn();
-    let b = world.spawn();
+    let a = world.spawn().expect("spawn a");
+    let b = world.spawn().expect("spawn b");
     assert!(world.insert(a, Health(10)).expect("insert a").is_none());
     assert!(world.insert(b, Health(20)).expect("insert b").is_none());
     assert_eq!(
@@ -34,7 +34,7 @@ fn sparse_world_vertical_slice() {
         Err(WorldError::StaleEntity { entity: a })
     );
 
-    let c = world.spawn();
+    let c = world.spawn().expect("spawn c");
     assert!(world.is_alive(c));
     assert!(world.insert(c, Health(99)).expect("insert c").is_none());
     assert_eq!(
@@ -58,7 +58,7 @@ fn mutation_on_stale_insert_does_not_change_storage() {
         .register_component::<Health>(ComponentOptions::sparse())
         .expect("register");
     let mut world = builder.build().expect("build");
-    let entity = world.spawn();
+    let entity = world.spawn().expect("spawn");
     world.insert(entity, Health(1)).expect("seed component");
     world.despawn(entity).expect("despawn");
     let before = world.len_sparse::<Health>().expect("len");

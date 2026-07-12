@@ -1,0 +1,13 @@
+research_id = "006-single-crate-api-architecture"
+status = "frozen"
+intended_spec_slug = "single-crate-api-architecture"
+canonical_handoff = "07-make-specs-handoff.md"
+artifacts = [
+  "01-intake.md",
+  "02-research-questions.md",
+  "03-current-state.md",
+  "04-design-decisions.md",
+  "05-implementation-shape.md",
+  "06-shape-review.md",
+  "07-make-specs-handoff.md",
+]

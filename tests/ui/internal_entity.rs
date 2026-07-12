@@ -1,1 +1,1 @@
-use moirai::entity::EntityAllocator;
+use moirai::entity;

@@ -120,6 +120,18 @@ fn double_free_is_non_destructive() {
 }
 
 #[rstest]
+fn released_reserved_does_not_resurrect() {
+    let mut alloc = EntityAllocator::new();
+    let reserved = alloc.reserve().expect("reserve");
+    alloc.release_reserved(reserved).expect("release");
+    assert!(!alloc.is_alive(reserved));
+    let live = alloc.alloc();
+    assert_eq!(live.slot(), reserved.slot());
+    assert_eq!(live.generation(), reserved.generation() + 1);
+    assert_ne!(live, reserved);
+}
+
+#[rstest]
 fn reserved_is_not_alive() {
     let mut alloc = EntityAllocator::new();
     let id = alloc.reserve().expect("reserve");
@@ -133,7 +145,10 @@ fn generation_overflow_retires_slot() {
     let id = alloc.alloc();
     alloc.set_generation_for_test(id, u32::MAX);
     let exhausted = EntityId::from_parts(id.slot(), u32::MAX);
-    assert_eq!(alloc.free(exhausted), Err(AllocatorError::GenerationOverflow));
+    assert_eq!(
+        alloc.free(exhausted),
+        Err(AllocatorError::GenerationOverflow)
+    );
     assert!(!alloc.is_alive(exhausted));
     let counts = alloc.counts();
     assert_eq!(counts.retired, 1);

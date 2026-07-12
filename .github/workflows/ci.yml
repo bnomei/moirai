@@ -163,3 +163,17 @@ jobs:
           cache-on-failure: true
       - run: cargo install cargo-audit --locked
       - run: cargo audit --deny warnings
+
+  deny:
+    name: Cargo deny policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+      - run: cargo install cargo-deny --locked
+      - run: cargo deny check

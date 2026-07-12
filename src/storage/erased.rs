@@ -25,12 +25,7 @@ impl<T: 'static> TypedSparseStorage<T> {
         }
     }
 
-    pub fn insert_with_tick(
-        &mut self,
-        entity: EntityId,
-        value: T,
-        tick: ChangeTick,
-    ) -> Option<T> {
+    pub fn insert_with_tick(&mut self, entity: EntityId, value: T, tick: ChangeTick) -> Option<T> {
         self.set.insert_with_tick(entity, value, tick)
     }
 
