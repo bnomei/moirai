@@ -1,0 +1,19 @@
+error[E0603]: module `component` is private
+ --> tests/ui/internal_registry.rs:1:13
+  |
+1 | use moirai::component::registry;
+  |             ^^^^^^^^^  -------- module `registry` is not publicly re-exported
+  |             |
+  |             private module
+  |
+note: the module `component` is defined here
+ --> src/lib.rs
+  |
+  | mod component;
+  | ^^^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/internal_registry.rs:1:33
+  |
+1 | use moirai::component::registry;
+  |                                 ^ consider adding a `main` function to `$DIR/tests/ui/internal_registry.rs`

@@ -1,0 +1,1 @@
+//! Private query result cache.

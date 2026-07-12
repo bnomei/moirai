@@ -1,0 +1,17 @@
+error[E0603]: module `storage` is private
+ --> tests/ui/internal_storage.rs:1:13
+  |
+1 | use moirai::storage;
+  |             ^^^^^^^ private module
+  |
+note: the module `storage` is defined here
+ --> src/lib.rs
+  |
+  | mod storage;
+  | ^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/internal_storage.rs:1:21
+  |
+1 | use moirai::storage;
+  |                     ^ consider adding a `main` function to `$DIR/tests/ui/internal_storage.rs`

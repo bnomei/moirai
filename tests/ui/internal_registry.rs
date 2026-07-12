@@ -1,0 +1,1 @@
+use moirai::component::registry;

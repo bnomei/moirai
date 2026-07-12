@@ -1,0 +1,23 @@
+error[E0432]: unresolved import `moirai::prelude::World`
+ --> tests/ui/premature_prelude.rs:1:5
+  |
+1 | use moirai::prelude::World;
+  |     ^^^^^^^^^^^^^^^^^^^^^^ no `World` in `prelude`
+
+error[E0603]: module `prelude` is private
+ --> tests/ui/premature_prelude.rs:1:13
+  |
+1 | use moirai::prelude::World;
+  |             ^^^^^^^ private module
+  |
+note: the module `prelude` is defined here
+ --> src/lib.rs
+  |
+  | mod prelude;
+  | ^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/premature_prelude.rs:1:28
+  |
+1 | use moirai::prelude::World;
+  |                            ^ consider adding a `main` function to `$DIR/tests/ui/premature_prelude.rs`

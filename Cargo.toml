@@ -1,0 +1,26 @@
+[package]
+name = "moirai"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A small deterministic no_std ECS for constrained and headless games"
+readme = "README.md"
+license = "MIT"
+autobenches = false
+
+[features]
+default = []
+std = []
+testkit = []
+
+[dependencies]
+
+[dev-dependencies]
+divan = "0.1.21"
+rstest = "0.26.1"
+trybuild = "=1.0.117"
+
+[[bench]]
+name = "harness"
+path = "benches/harness.rs"
+harness = false

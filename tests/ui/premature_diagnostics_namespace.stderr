@@ -1,0 +1,23 @@
+error[E0432]: unresolved import `moirai::diagnostics::Observer`
+ --> tests/ui/premature_diagnostics_namespace.rs:1:5
+  |
+1 | use moirai::diagnostics::Observer;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `Observer` in `diagnostics`
+
+error[E0603]: module `diagnostics` is private
+ --> tests/ui/premature_diagnostics_namespace.rs:1:13
+  |
+1 | use moirai::diagnostics::Observer;
+  |             ^^^^^^^^^^^ private module
+  |
+note: the module `diagnostics` is defined here
+ --> src/lib.rs
+  |
+  | mod diagnostics;
+  | ^^^^^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/premature_diagnostics_namespace.rs:1:35
+  |
+1 | use moirai::diagnostics::Observer;
+  |                                   ^ consider adding a `main` function to `$DIR/tests/ui/premature_diagnostics_namespace.rs`

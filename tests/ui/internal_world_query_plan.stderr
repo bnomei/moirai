@@ -1,0 +1,19 @@
+error[E0603]: module `world` is private
+ --> tests/ui/internal_world_query_plan.rs:1:13
+  |
+1 | use moirai::world::query::spec;
+  |             ^^^^^         ---- module `spec` is not publicly re-exported
+  |             |
+  |             private module
+  |
+note: the module `world` is defined here
+ --> src/lib.rs
+  |
+  | mod world;
+  | ^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/internal_world_query_plan.rs:1:32
+  |
+1 | use moirai::world::query::spec;
+  |                                ^ consider adding a `main` function to `$DIR/tests/ui/internal_world_query_plan.rs`

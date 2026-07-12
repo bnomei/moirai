@@ -1,0 +1,17 @@
+error[E0432]: unresolved import `moirai::World`
+ --> tests/ui/premature_root_world.rs:1:5
+  |
+1 | use moirai::World;
+  |     ^^^^^^^^^^^^^ no `World` in the root
+  |
+help: a similar name exists in the module (notice the capitalization)
+  |
+1 - use moirai::World;
+1 + use moirai::world;
+  |
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/premature_root_world.rs:1:19
+  |
+1 | use moirai::World;
+  |                   ^ consider adding a `main` function to `$DIR/tests/ui/premature_root_world.rs`

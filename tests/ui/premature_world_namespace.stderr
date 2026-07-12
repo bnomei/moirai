@@ -1,0 +1,23 @@
+error[E0432]: unresolved import `moirai::world::World`
+ --> tests/ui/premature_world_namespace.rs:1:5
+  |
+1 | use moirai::world::World;
+  |     ^^^^^^^^^^^^^^^^^^^^ no `World` in `world`
+
+error[E0603]: module `world` is private
+ --> tests/ui/premature_world_namespace.rs:1:13
+  |
+1 | use moirai::world::World;
+  |             ^^^^^ private module
+  |
+note: the module `world` is defined here
+ --> src/lib.rs
+  |
+  | mod world;
+  | ^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/premature_world_namespace.rs:1:26
+  |
+1 | use moirai::world::World;
+  |                          ^ consider adding a `main` function to `$DIR/tests/ui/premature_world_namespace.rs`

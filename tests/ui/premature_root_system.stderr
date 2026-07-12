@@ -1,0 +1,17 @@
+error[E0432]: unresolved import `moirai::System`
+ --> tests/ui/premature_root_system.rs:1:5
+  |
+1 | use moirai::System;
+  |     ^^^^^^^^^^^^^^ no `System` in the root
+  |
+help: consider importing this struct instead
+  |
+1 - use moirai::System;
+1 + use std::alloc::System;
+  |
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/premature_root_system.rs:1:20
+  |
+1 | use moirai::System;
+  |                    ^ consider adding a `main` function to `$DIR/tests/ui/premature_root_system.rs`

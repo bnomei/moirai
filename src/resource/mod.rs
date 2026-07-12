@@ -1,0 +1,1 @@
+//! Private typed resource store.

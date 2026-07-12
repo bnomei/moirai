@@ -1,0 +1,1 @@
+//! Type-erased storage boundary.

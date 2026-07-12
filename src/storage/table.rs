@@ -1,0 +1,1 @@
+//! Typed table columns.

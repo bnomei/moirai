@@ -1,0 +1,1 @@
+//! Sparse-set component storage.

@@ -2,3 +2,6 @@
 .frigg
 .DS_Store
 .orchid
+specs
+docs
+/target

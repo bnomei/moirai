@@ -1,0 +1,17 @@
+error[E0432]: unresolved import `moirai::App`
+ --> tests/ui/premature_root_app.rs:1:5
+  |
+1 | use moirai::App;
+  |     ^^^^^^^^^^^ no `App` in the root
+  |
+help: a similar name exists in the module
+  |
+1 - use moirai::App;
+1 + use moirai::app;
+  |
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/premature_root_app.rs:1:17
+  |
+1 | use moirai::App;
+  |                 ^ consider adding a `main` function to `$DIR/tests/ui/premature_root_app.rs`
