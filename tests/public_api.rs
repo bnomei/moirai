@@ -1,5 +1,24 @@
+use moirai::{
+    component::{ComponentId, ComponentOptions, StorageKind},
+    math::Q16,
+    world::{World, WorldBuilder},
+    EntityId,
+};
+
 #[test]
-fn crate_links_as_no_std_alloc_library() {}
+fn crate_links_as_no_std_alloc_library() {
+    let _ = core::mem::size_of::<EntityId>();
+    let _ = core::mem::size_of::<ComponentId>();
+    let _ = core::mem::size_of::<Q16>();
+    let _ = core::mem::size_of::<World>();
+    let _ = core::mem::size_of::<WorldBuilder>();
+}
+
+#[test]
+fn phase_2_root_and_namespace_paths_compile() {
+    let _ = ComponentOptions::sparse();
+    let _ = StorageKind::Sparse;
+}
 
 #[test]
 fn all_features_build_is_additive() {
@@ -43,21 +62,17 @@ fn implementation_modules_are_not_public() {
 }
 
 #[test]
-fn semantic_namespaces_are_not_prematurely_public() {
+fn deferred_namespaces_remain_unpublished() {
     let cases = trybuild::TestCases::new();
-    cases.compile_fail("tests/ui/premature_component_namespace.rs");
     cases.compile_fail("tests/ui/premature_event_namespace.rs");
     cases.compile_fail("tests/ui/premature_query_namespace.rs");
     cases.compile_fail("tests/ui/premature_schedule_namespace.rs");
-    cases.compile_fail("tests/ui/premature_world_namespace.rs");
-    cases.compile_fail("tests/ui/premature_math_namespace.rs");
     cases.compile_fail("tests/ui/premature_diagnostics_namespace.rs");
 }
 
 #[test]
 fn root_and_prelude_vocabulary_is_not_prematurely_public() {
     let cases = trybuild::TestCases::new();
-    cases.compile_fail("tests/ui/premature_root_world.rs");
     cases.compile_fail("tests/ui/premature_root_app.rs");
     cases.compile_fail("tests/ui/premature_root_system.rs");
     cases.compile_fail("tests/ui/premature_prelude.rs");

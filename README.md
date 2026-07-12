@@ -5,8 +5,8 @@ in [pd-asteroids](https://github.com/bnomei/pd-asteroids) and designed to work a
 [wyrd](https://github.com/bnomei/wyrd) (signal-graph behavior) and
 [anapao](https://github.com/bnomei/anapao) (deterministic verification).
 
-**Status:** Phase 1 scaffold landed — private module tree, feature contract, boundary tests, and CI.
-See [ROADMAP.md](./ROADMAP.md).
+**Status:** Phase 2 core storage landed — entity identity, component registration, sparse World
+path, and `math::Q16`. See [ROADMAP.md](./ROADMAP.md).
 
 ## Planning docs
 

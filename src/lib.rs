@@ -12,15 +12,15 @@
 //! 1. its owning phase has implemented the real invariant, and
 //! 2. a public-API test proves the import path.
 //!
-//! Phase 1 publishes neither root re-exports nor `moirai::prelude`. Adding a
-//! namespace, root type, or prelude name before then is a contract violation.
+//! Phase 2 publishes `component`, `entity`, `math`, and `world` namespaces plus the
+//! matching root re-exports. `moirai::prelude` remains withheld until Phase 4.
 //!
 //! # Privacy boundary
 //!
 //! Internal modules are not reachable from downstream crates:
 //!
 //! ```compile_fail
-//! use moirai::entity;
+//! use moirai::entity::allocator;
 //! ```
 //!
 //! ```compile_fail
@@ -28,21 +28,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! use moirai::command::queue;
-//! ```
-//!
-//! Future public vocabulary is withheld until its owning phase:
-//!
-//! ```compile_fail
-//! use moirai::World;
-//! ```
-//!
-//! ```compile_fail
-//! use moirai::prelude::World;
-//! ```
-//!
-//! ```compile_fail
-//! use moirai::component::ComponentId;
+//! use moirai::component::registry;
 //! ```
 
 #![no_std]
@@ -52,11 +38,8 @@ extern crate alloc;
 
 mod app;
 mod command;
-mod component;
 mod diagnostics;
-mod entity;
 mod event;
-mod math;
 mod operation;
 mod prelude;
 mod query;
@@ -65,7 +48,16 @@ mod schedule;
 mod state;
 mod storage;
 mod time;
-mod world;
+
+pub mod component;
+pub mod entity;
+pub mod math;
+pub mod world;
 
 #[cfg(feature = "testkit")]
 mod testkit;
+
+pub use component::{ComponentId, ComponentOptions, StorageKind};
+pub use entity::EntityId;
+pub use math::Q16;
+pub use world::{World, WorldBuilder, WorldError};

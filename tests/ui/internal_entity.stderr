@@ -1,17 +1,17 @@
-error[E0603]: module `entity` is private
- --> tests/ui/internal_entity.rs:1:13
+error[E0603]: struct `EntityAllocator` is private
+ --> tests/ui/internal_entity.rs:1:21
   |
-1 | use moirai::entity;
-  |             ^^^^^^ private module
+1 | use moirai::entity::EntityAllocator;
+  |                     ^^^^^^^^^^^^^^^ private struct
   |
-note: the module `entity` is defined here
- --> src/lib.rs
+note: the struct `EntityAllocator` is defined here
+ --> src/entity/mod.rs
   |
-  | mod entity;
-  | ^^^^^^^^^^
+  | pub(crate) use allocator::{AllocatorError, EntityAllocator};
+  |                                            ^^^^^^^^^^^^^^^
 
 error[E0601]: `main` function not found in crate `$CRATE`
- --> tests/ui/internal_entity.rs:1:20
+ --> tests/ui/internal_entity.rs:1:37
   |
-1 | use moirai::entity;
-  |                    ^ consider adding a `main` function to `$DIR/tests/ui/internal_entity.rs`
+1 | use moirai::entity::EntityAllocator;
+  |                                     ^ consider adding a `main` function to `$DIR/tests/ui/internal_entity.rs`

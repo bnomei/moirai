@@ -1,4 +1,4 @@
-mod archetype;
 mod erased;
 mod sparse;
-mod table;
+
+pub(crate) use erased::{SparseStore, TypedSparseStorage};

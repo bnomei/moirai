@@ -24,3 +24,13 @@ trybuild = "=1.0.117"
 name = "harness"
 path = "benches/harness.rs"
 harness = false
+
+[[bench]]
+name = "storage"
+path = "benches/storage.rs"
+harness = false
+
+[[bench]]
+name = "q16"
+path = "benches/q16.rs"
+harness = false
