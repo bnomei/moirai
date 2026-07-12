@@ -9,8 +9,8 @@ error[E0603]: module `query` is private
 note: the module `query` is defined here
  --> src/world/mod.rs
   |
-  | mod query;
-  | ^^^^^^^^^
+  | pub(crate) mod query;
+  | ^^^^^^^^^^^^^^^^^^^^
 
 error[E0601]: `main` function not found in crate `$CRATE`
  --> tests/ui/internal_world_query_plan.rs:1:32

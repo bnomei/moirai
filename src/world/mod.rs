@@ -4,12 +4,12 @@ mod bundle;
 mod error;
 mod events;
 mod flush;
-mod guard;
+pub(crate) mod guard;
 mod lease;
 mod owner;
 
 pub(crate) use owner::WorldOwner;
-mod query;
+pub(crate) mod query;
 mod resources;
 mod spawn;
 
@@ -59,6 +59,9 @@ pub struct World {
     execution_lease: Option<Weak<()>>,
     lease_locked_resources: Vec<TypeId>,
     fixed_step: Option<crate::time::FixedStep>,
+    query_topology_revision: u64,
+    membership_caches: Vec<crate::world::query::cache::MembershipCacheSlot>,
+    result_caches: Vec<crate::world::query::result_cache::ResultCacheSlot>,
 }
 
 impl World {
@@ -87,7 +90,18 @@ impl World {
             execution_lease: None,
             lease_locked_resources: Vec::new(),
             fixed_step: None,
+            query_topology_revision: 1,
+            membership_caches: Vec::new(),
+            result_caches: Vec::new(),
         }
+    }
+
+    pub(crate) fn bump_query_topology(&mut self) {
+        self.query_topology_revision = self.query_topology_revision.saturating_add(1);
+    }
+
+    pub(crate) fn run_guard_state(&self) -> guard::RunGuard {
+        self.run_guard
     }
 
     pub fn world_tick(&self) -> WorldTick {
@@ -158,7 +172,9 @@ impl World {
     pub fn spawn(&mut self) -> Result<EntityId, WorldError> {
         self.ensure_idle_structural()?;
         self.ensure_mutable()?;
-        Ok(self.allocator.alloc())
+        let entity = self.allocator.alloc();
+        self.bump_query_topology();
+        Ok(entity)
     }
 
     pub fn despawn(&mut self, entity: EntityId) -> Result<(), WorldError> {
@@ -168,7 +184,9 @@ impl World {
         self.remove_all_components(entity)?;
         self.allocator
             .free(entity)
-            .map_err(|error| self.map_allocator_error(entity, error))
+            .map_err(|error| self.map_allocator_error(entity, error))?;
+        self.bump_query_topology();
+        Ok(())
     }
 
     pub fn insert<T: Clone + 'static>(
@@ -362,6 +380,105 @@ impl World {
 
     pub(crate) fn owner(&self) -> &WorldOwner {
         &self.owner
+    }
+
+    pub fn change_tick(&self) -> ChangeTick {
+        self.change_tick
+    }
+
+    pub(crate) fn owner_token(&self) -> WorldOwner {
+        self.owner.clone()
+    }
+
+    pub(crate) fn registry_id_of<T: 'static>(&self) -> Option<ComponentId> {
+        self.registry.id_of::<T>(&self.owner)
+    }
+
+    pub(crate) fn registry_id_of_type(&self, type_id: TypeId) -> Option<ComponentId> {
+        self.registry
+            .index_of_type(type_id)
+            .map(|index| ComponentId::new(self.owner.clone(), index as u32))
+    }
+
+    pub(crate) fn registry_is_table(&self, component_id: &ComponentId) -> bool {
+        self.registry.is_table_component(component_id)
+    }
+
+    pub(crate) fn registry_component_name(&self, component_id: &ComponentId) -> String {
+        self.registry.component_name(component_id)
+    }
+
+    pub(crate) fn entity_has_component(&self, entity: EntityId, index: usize) -> bool {
+        let component_id = ComponentId::new(self.owner.clone(), index as u32);
+        if self.is_tag_component(&component_id) {
+            return self.entity_has_tag(entity, index);
+        }
+        if self.registry.is_table_component(&component_id) {
+            return self.archetype_has_component(entity, index as u32);
+        }
+        self.sparse_stores
+            .get(index)
+            .map(|store| store.contains_entity(entity))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn entity_has_tag(&self, entity: EntityId, index: usize) -> bool {
+        self.sparse_stores
+            .get(index)
+            .map(|store| store.contains_entity(entity))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn component_added_tick(
+        &self,
+        entity: EntityId,
+        index: usize,
+    ) -> Option<ChangeTick> {
+        let component_id = ComponentId::new(self.owner.clone(), index as u32);
+        if self.is_tag_component(&component_id) {
+            return self.tag_store(index).added_tick(entity);
+        }
+        if self.registry.is_table_component(&component_id) {
+            return self.archetypes.table_added_tick(entity, index as u32);
+        }
+        self.sparse_stores
+            .get(index)
+            .and_then(|store| store.sparse_added_tick(entity))
+    }
+
+    pub(crate) fn component_changed_tick(
+        &self,
+        entity: EntityId,
+        index: usize,
+    ) -> Option<ChangeTick> {
+        let component_id = ComponentId::new(self.owner.clone(), index as u32);
+        if self.is_tag_component(&component_id) {
+            return self.tag_store(index).changed_tick(entity);
+        }
+        if self.registry.is_table_component(&component_id) {
+            return self.archetypes.table_changed_tick(entity, index as u32);
+        }
+        self.sparse_stores
+            .get(index)
+            .and_then(|store| store.sparse_changed_tick(entity))
+    }
+
+    pub(crate) fn sparse_store_by_index<T: 'static>(
+        &self,
+        index: usize,
+    ) -> Result<&TypedSparseStorage<T>, crate::query::QueryError> {
+        self.sparse_stores
+            .get(index)
+            .and_then(|store| store.typed::<T>())
+            .ok_or_else(|| crate::query::QueryError::WrongStorageKind {
+                name: alloc::format!("component {index}"),
+            })
+    }
+
+    fn archetype_has_component(&self, entity: EntityId, component_index: u32) -> bool {
+        self.archetypes
+            .table_component_indices(entity)
+            .contains(&component_index)
     }
 
     pub(crate) fn command_queue_mut(&mut self) -> &mut CommandQueue {

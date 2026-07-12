@@ -46,6 +46,25 @@ fn phase_4_prelude_paths_compile() {
 }
 
 #[test]
+fn phase_5_query_namespace_paths_compile() {
+    use moirai::query::{
+        ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
+        QueryError, QueryParams, QueryResultCache, QuerySpec,
+    };
+    let _ = core::mem::size_of::<ExactIdPolicy>();
+    let _ = core::mem::size_of::<QuerySpec>();
+    let _ = core::mem::size_of::<QueryParams<'_>>();
+    let _ = core::mem::size_of::<Query1<'_, '_, ()>>();
+    let _ = core::mem::size_of::<Query2<'_, '_, (), ()>>();
+    let _ = core::mem::size_of::<QueryCache>();
+    let _ = core::mem::size_of::<QueryResultCache>();
+    let _ = core::mem::size_of::<QueryCursor>();
+    let _ = core::mem::size_of::<QueryError>();
+    let _ = core::mem::size_of::<QueryEffects<'_>>();
+    let _ = core::mem::size_of::<QueryCommands<'_>>();
+}
+
+#[test]
 fn phase_3_event_namespace_paths_compile() {
     use moirai::event::{ComponentAdded, EventId, EventOptions, EventReader, EventReaderStart};
     let _ = EventOptions::manual();
@@ -87,12 +106,6 @@ fn implementation_modules_are_not_public() {
     cases.compile_fail("tests/ui/internal_event_storage.rs");
     cases.compile_fail("tests/ui/internal_schedule_runner.rs");
     cases.compile_fail("tests/ui/internal_world_query_plan.rs");
-}
-
-#[test]
-fn deferred_namespaces_remain_unpublished() {
-    let cases = trybuild::TestCases::new();
-    cases.compile_fail("tests/ui/premature_query_namespace.rs");
 }
 
 #[cfg(feature = "std")]

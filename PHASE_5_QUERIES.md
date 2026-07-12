@@ -1,6 +1,6 @@
 # Phase 5 — Query facade, safe mutation, and cache semantics
 
-**Status:** ready after World contracts stabilize; implementation may overlap Phase 4
+**Status:** complete
 **Depends on:** [Phase 3](./PHASE_3_WORLD_LIFECYCLE.md)
 **Research:** [packet 004](./.orchid/spec-research/004-queries-performance-proof/),
 [packet 006](./.orchid/spec-research/006-single-crate-api-architecture/)
@@ -303,19 +303,19 @@ workloads compile in the same build; there is no numeric feature matrix.
 
 ## Tasks
 
-- [ ] **T501** Finalize private-field QuerySpec/QueryParams builders and resolution diagnostics.
-- [ ] **T502** Implement private plans for sparse/table/tag/mixed and exact-id traversal.
-- [ ] **T503** Implement Query1/Query2 immutable public iterators.
-- [ ] **T504** Implement closure-scoped one- and two-component mutation with split-at-mut.
-- [ ] **T505** Implement QueryEffects variants over safely split commands/events.
-- [ ] **T506** Add explicit inactive/domain filters; remove magic-name behavior.
-- [ ] **T507** Add ChangeTick-based added/changed filters and owner/spec-scoped QueryCursor.
-- [ ] **T508** Implement owner-scoped QueryCache and QueryResultCache with frozen filter policy.
-- [ ] **T509** Decouple cache coherence from user-visible event queues.
-- [ ] **T510** Port/classify all source query tests, including rejected raw-key/panic expectations.
-- [ ] **T511** Add reference-model randomized tests.
-- [ ] **T512** Add hot/cold/cache/allocation Divan families.
-- [ ] **T513** Add public API and rustdoc examples without exposing iterator internals.
+- [x] **T501** Finalize private-field QuerySpec/QueryParams builders and resolution diagnostics.
+- [x] **T502** Implement private plans for sparse/table/tag/mixed and exact-id traversal.
+- [x] **T503** Implement Query1/Query2 immutable public iterators.
+- [x] **T504** Implement closure-scoped one- and two-component mutation with split-at-mut.
+- [x] **T505** Implement QueryEffects variants over safely split commands/events.
+- [x] **T506** Add explicit inactive/domain filters; remove magic-name behavior.
+- [x] **T507** Add ChangeTick-based added/changed filters and owner/spec-scoped QueryCursor.
+- [x] **T508** Implement owner-scoped QueryCache and QueryResultCache with frozen filter policy.
+- [x] **T509** Decouple cache coherence from user-visible event queues.
+- [x] **T510** Port/classify all source query tests, including rejected raw-key/panic expectations.
+- [x] **T511** Add reference-model randomized tests.
+- [x] **T512** Add hot/cold/cache/allocation Divan families.
+- [x] **T513** Add public API and rustdoc examples without exposing iterator internals.
 
 ## Verification
 
@@ -340,12 +340,12 @@ cargo doc --no-deps --all-features
 
 ## Exit criteria
 
-- [ ] All intended sparse/table/tag/mixed selections and mutations work without unsafe code.
-- [ ] Both source cache semantics are named, owner-scoped, and reference-model verified.
-- [ ] Invalid filters, aliasing, ids, owners, and cache modes return errors rather than panics.
-- [ ] No raw plan/cache entry/iterator implementation is public.
-- [ ] Steady-state hot query paths meet the allocation contract.
-- [ ] Phase 6 has a complete classified query corpus and reproducible baselines.
+- [x] All intended sparse/table/tag/mixed selections and mutations work without unsafe code.
+- [x] Both source cache semantics are named, owner-scoped, and reference-model verified.
+- [x] Invalid filters, aliasing, ids, owners, and cache modes return errors rather than panics.
+- [x] No raw plan/cache entry/iterator implementation is public.
+- [x] Steady-state hot query paths meet the allocation contract.
+- [x] Phase 6 has a complete classified query corpus and reproducible baselines.
 
 ## References
 

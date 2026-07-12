@@ -43,6 +43,10 @@ impl<T> SparseSet<T> {
         self.dense.get(index).copied()
     }
 
+    pub fn dense_index(&self, entity: EntityId) -> Option<usize> {
+        self.sparse.get(entity.slot() as usize).and_then(|v| *v)
+    }
+
     pub fn added_tick(&self, index: usize) -> Option<ChangeTick> {
         self.added.get(index).copied().map(ChangeTick::from_raw)
     }

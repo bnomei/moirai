@@ -110,6 +110,40 @@ impl ArchetypeStorage {
             .downcast_ref::<T>()
     }
 
+    pub(crate) fn get_two_table_mut<TA: Clone + 'static, TB: Clone + 'static>(
+        &mut self,
+        entity: EntityId,
+        index_a: u32,
+        index_b: u32,
+        tick: ChangeTick,
+    ) -> Option<(&mut TA, &mut TB)> {
+        if index_a == index_b {
+            return None;
+        }
+        let location = self.location(entity)?;
+        let archetype = location.archetype as usize;
+        if !self.signatures[archetype].contains(index_a)
+            || !self.signatures[archetype].contains(index_b)
+        {
+            return None;
+        }
+        let row = location.row as usize;
+        let col_a = self.column_position(archetype, index_a);
+        let col_b = self.column_position(archetype, index_b);
+        let columns = &mut self.columns[archetype];
+        if col_a < col_b {
+            let (left, right) = columns.split_at_mut(col_b);
+            let a = left[col_a].get_value_mut(row, tick)?.downcast_mut::<TA>()?;
+            let b = right[0].get_value_mut(row, tick)?.downcast_mut::<TB>()?;
+            Some((a, b))
+        } else {
+            let (left, right) = columns.split_at_mut(col_a);
+            let b = left[col_b].get_value_mut(row, tick)?.downcast_mut::<TB>()?;
+            let a = right[0].get_value_mut(row, tick)?.downcast_mut::<TA>()?;
+            Some((a, b))
+        }
+    }
+
     pub fn get_table_mut<T: Clone + 'static>(
         &mut self,
         entity: EntityId,
@@ -166,6 +200,49 @@ impl ArchetypeStorage {
 
     pub fn table_component_indices(&self, entity: EntityId) -> Vec<u32> {
         self.signature_for(entity).components.clone()
+    }
+
+    pub(crate) fn archetypes_with_component(&self, component_index: u32) -> Vec<usize> {
+        self.signatures
+            .iter()
+            .enumerate()
+            .filter(|(_, signature)| signature.contains(component_index))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    pub(crate) fn entity_slots(&self, archetype: usize) -> &[u32] {
+        &self.entity_slots[archetype]
+    }
+
+    pub(crate) fn table_added_tick(
+        &self,
+        entity: EntityId,
+        component_index: u32,
+    ) -> Option<ChangeTick> {
+        let location = self.location(entity)?;
+        let archetype = location.archetype as usize;
+        if !self.signatures[archetype].contains(component_index) {
+            return None;
+        }
+        let row = location.row as usize;
+        let column = self.column_position(archetype, component_index);
+        self.columns[archetype][column].added_tick(row)
+    }
+
+    pub(crate) fn table_changed_tick(
+        &self,
+        entity: EntityId,
+        component_index: u32,
+    ) -> Option<ChangeTick> {
+        let location = self.location(entity)?;
+        let archetype = location.archetype as usize;
+        if !self.signatures[archetype].contains(component_index) {
+            return None;
+        }
+        let row = location.row as usize;
+        let column = self.column_position(archetype, component_index);
+        self.columns[archetype][column].changed_tick(row)
     }
 
     pub fn remove_entity(&mut self, entity: EntityId) {

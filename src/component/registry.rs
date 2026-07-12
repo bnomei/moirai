@@ -143,8 +143,21 @@ impl ComponentRegistry {
         self.entries.get(id.index()).map(|entry| entry.is_tag)
     }
 
+    pub(crate) fn component_name(&self, id: &ComponentId) -> String {
+        self.entries
+            .get(id.index())
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| String::from("<unknown component>"))
+    }
+
     pub(crate) fn type_id_for_index(&self, index: usize) -> Option<TypeId> {
         self.entries.get(index).and_then(|entry| entry.type_id)
+    }
+
+    pub(crate) fn index_of_type(&self, type_id: TypeId) -> Option<usize> {
+        self.entries
+            .iter()
+            .position(|entry| entry.type_id == Some(type_id))
     }
 
     pub(crate) fn id_of<T: 'static>(&self, owner: &WorldOwner) -> Option<ComponentId> {

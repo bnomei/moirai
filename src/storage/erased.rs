@@ -10,6 +10,9 @@ pub(crate) trait ErasedSparseStorage {
     fn remove_entity(&mut self, entity: EntityId);
     fn contains_entity(&self, entity: EntityId) -> bool;
     fn len(&self) -> usize;
+    fn added_tick(&self, entity: EntityId) -> Option<ChangeTick>;
+    fn changed_tick(&self, entity: EntityId) -> Option<ChangeTick>;
+    fn dense_slots(&self) -> &[u32];
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -49,6 +52,20 @@ impl<T: 'static> TypedSparseStorage<T> {
     pub fn len(&self) -> usize {
         self.set.len()
     }
+
+    pub fn dense_slots(&self) -> &[u32] {
+        self.set.dense_slots()
+    }
+
+    pub fn added_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        let dense_idx = self.set.dense_index(entity)?;
+        self.set.added_tick(dense_idx)
+    }
+
+    pub fn changed_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        let dense_idx = self.set.dense_index(entity)?;
+        self.set.changed_tick(dense_idx)
+    }
 }
 
 impl<T: 'static> ErasedSparseStorage for TypedSparseStorage<T> {
@@ -62,6 +79,18 @@ impl<T: 'static> ErasedSparseStorage for TypedSparseStorage<T> {
 
     fn len(&self) -> usize {
         self.set.len()
+    }
+
+    fn added_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        TypedSparseStorage::added_tick(self, entity)
+    }
+
+    fn changed_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        TypedSparseStorage::changed_tick(self, entity)
+    }
+
+    fn dense_slots(&self) -> &[u32] {
+        self.set.dense_slots()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -101,6 +130,20 @@ impl TagSparseStorage {
     pub fn len(&self) -> usize {
         self.set.len()
     }
+
+    pub fn added_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        let dense_idx = self.set.dense_index(entity)?;
+        self.set.added_tick(dense_idx)
+    }
+
+    pub fn changed_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        let dense_idx = self.set.dense_index(entity)?;
+        self.set.changed_tick(dense_idx)
+    }
+
+    pub fn dense_slots(&self) -> &[u32] {
+        self.set.dense_slots()
+    }
 }
 
 impl ErasedSparseStorage for TagSparseStorage {
@@ -114,6 +157,18 @@ impl ErasedSparseStorage for TagSparseStorage {
 
     fn len(&self) -> usize {
         self.set.len()
+    }
+
+    fn added_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        TagSparseStorage::added_tick(self, entity)
+    }
+
+    fn changed_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        TagSparseStorage::changed_tick(self, entity)
+    }
+
+    fn dense_slots(&self) -> &[u32] {
+        self.set.dense_slots()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -201,6 +256,30 @@ impl SparseStore {
         match self {
             Self::Erased(store) => Some(store.as_mut()),
             _ => None,
+        }
+    }
+
+    pub(crate) fn sparse_added_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        match self {
+            Self::Tag(store) => store.added_tick(entity),
+            Self::Erased(store) => store.added_tick(entity),
+            Self::Empty => None,
+        }
+    }
+
+    pub(crate) fn sparse_changed_tick(&self, entity: EntityId) -> Option<ChangeTick> {
+        match self {
+            Self::Tag(store) => store.changed_tick(entity),
+            Self::Erased(store) => store.changed_tick(entity),
+            Self::Empty => None,
+        }
+    }
+
+    pub(crate) fn dense_slots(&self) -> &[u32] {
+        match self {
+            Self::Tag(store) => store.dense_slots(),
+            Self::Erased(store) => store.dense_slots(),
+            Self::Empty => &[],
         }
     }
 }

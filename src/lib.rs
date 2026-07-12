@@ -46,7 +46,7 @@ pub mod diagnostics;
 pub mod event;
 mod operation;
 pub mod prelude;
-mod query;
+pub mod query;
 mod resource;
 pub mod schedule;
 pub mod state;
@@ -71,6 +71,10 @@ pub use event::{
 };
 pub use math::Q16;
 pub use operation::StageOperation;
+pub use query::{
+    ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
+    QueryError, QueryParams, QueryResultCache, QuerySpec,
+};
 pub use schedule::stage;
 pub use schedule::{
     Condition, FlushMode, Schedule, ScheduleBuilder, ScheduleError, System, SystemId, SystemSet,

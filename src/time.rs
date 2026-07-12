@@ -218,6 +218,11 @@ impl ChangeTick {
     pub(crate) fn issue(&mut self) -> Result<Self, ChangeTickError> {
         self.advance()
     }
+
+    pub(crate) fn can_advance_n(&self, count: usize) -> bool {
+        let count = count as u64;
+        self.0.checked_add(count).is_some()
+    }
 }
 
 impl fmt::Display for ChangeTick {

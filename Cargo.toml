@@ -44,3 +44,8 @@ harness = false
 name = "schedule"
 path = "benches/schedule.rs"
 harness = false
+
+[[bench]]
+name = "queries"
+path = "benches/queries.rs"
+harness = false

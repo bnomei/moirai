@@ -20,6 +20,8 @@ pub(crate) trait ErasedTableColumn: Any {
     fn get_value(&self, row: usize) -> Option<&dyn Any>;
     fn get_value_mut(&mut self, row: usize, tick: ChangeTick) -> Option<&mut dyn Any>;
     fn take_value(&mut self, row: usize) -> Option<Box<dyn Any>>;
+    fn added_tick(&self, row: usize) -> Option<ChangeTick>;
+    fn changed_tick(&self, row: usize) -> Option<ChangeTick>;
 }
 
 pub(crate) struct TypedTableColumn<T: Clone + 'static> {
@@ -122,5 +124,13 @@ impl<T: Clone + 'static> ErasedTableColumn for TypedTableColumn<T> {
         self.data
             .get(row)
             .map(|value| Box::new(value.clone()) as Box<dyn Any>)
+    }
+
+    fn added_tick(&self, row: usize) -> Option<ChangeTick> {
+        self.added.get(row).copied().map(ChangeTick::from_raw)
+    }
+
+    fn changed_tick(&self, row: usize) -> Option<ChangeTick> {
+        self.changed.get(row).copied().map(ChangeTick::from_raw)
     }
 }
