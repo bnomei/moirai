@@ -3,7 +3,9 @@
 .DS_Store
 .orchid
 specs
-docs
+docs/*
+!docs/coverage.md
+!docs/perf.md
 /target
 
 PHASE_*

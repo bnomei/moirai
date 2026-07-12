@@ -2,6 +2,35 @@
 fn crate_links_as_no_std_alloc_library() {}
 
 #[test]
+fn all_features_build_is_additive() {
+    std::process::Command::new("cargo")
+        .args(["check", "--all-features"])
+        .status()
+        .expect("cargo should be on PATH")
+        .success()
+        .then_some(())
+        .expect("all-features build must remain additive and coherent");
+}
+
+#[test]
+fn core_has_no_forbidden_runtime_dependencies() {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("Cargo.toml should exist");
+    for forbidden in [
+        "wyrd",
+        "anapao",
+        "bevy",
+        "playdate",
+        "serde",
+        "proc-macro",
+    ] {
+        assert!(
+            !manifest.contains(&format!("{forbidden} =")),
+            "core manifest must not depend on {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn implementation_modules_are_not_public() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/ui/internal_entity.rs");

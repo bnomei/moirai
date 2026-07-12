@@ -1,1 +1,1 @@
-//! Private typed resource store.
+mod store;

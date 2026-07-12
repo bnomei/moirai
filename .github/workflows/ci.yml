@@ -94,6 +94,20 @@ jobs:
           cache-on-failure: true
       - run: cargo test --all-features
 
+  check-all-features:
+    name: Check (all features)
+    needs: [fmt]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+      - run: cargo check --all-features
+
   docs:
     name: Rustdoc (warnings denied)
     needs: [fmt]
