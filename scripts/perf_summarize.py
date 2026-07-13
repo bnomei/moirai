@@ -64,6 +64,7 @@ def main() -> int:
     parser.add_argument("--min-win-pct", type=float, default=5.0)
     parser.add_argument("--max-regression-pct", type=float, default=3.0)
     parser.add_argument("--required-wins", type=int, default=4)
+    parser.add_argument("--required-pairs", type=int, default=5)
     args = parser.parse_args()
     if args.capture_dir is not None and (args.baseline_dir or args.candidate_dir):
         parser.error("use capture_dir or the paired --baseline-dir/--candidate-dir options")
@@ -105,19 +106,23 @@ def main() -> int:
         paired_runs = sorted(baseline.keys() & candidate.keys())
         if not paired_runs:
             continue
-        baseline_median = statistics.median(baseline.values())
-        candidate_median = statistics.median(candidate.values())
+        baseline_median = statistics.median(baseline[run] for run in paired_runs)
+        candidate_median = statistics.median(candidate[run] for run in paired_runs)
         delta = (candidate_median / baseline_median - 1.0) * 100.0
         pair_deltas = [
             (candidate[run] / baseline[run] - 1.0) * 100.0 for run in paired_runs
         ]
         wins = sum(delta <= -args.min_win_pct for delta in pair_deltas)
         worst_regression = max(pair_deltas)
-        required_wins = min(args.required_wins, len(paired_runs))
-        if required_wins == 0:
+        enough_pairs = len(paired_runs) >= args.required_pairs
+        if args.required_wins == 0:
             gate_passed = delta <= args.max_regression_pct
         else:
-            gate_passed = wins >= required_wins and worst_regression <= args.max_regression_pct
+            gate_passed = (
+                wins >= args.required_wins
+                and worst_regression <= args.max_regression_pct
+            )
+        gate_passed = enough_pairs and gate_passed
         gate = "pass" if gate_passed else "fail"
         print(
             f"{group}\t{case}\t{baseline_median:.3f}\t{candidate_median:.3f}\t{delta:+.2f}\t"
