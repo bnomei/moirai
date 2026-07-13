@@ -193,9 +193,12 @@ fn frame_events_are_cleared_after_update() {
         .add_event::<Damage>(EventOptions::frame(moirai::StageOperation::Update))
         .expect("register");
     builder
-        .add_system(System::new("send", stage::UPDATE, |world, _dt| {
-            world.send(Damage(1)).expect("send");
-        }))
+        .add_system(
+            System::new("send", stage::UPDATE, |world, _dt| {
+                world.send(Damage(1)).expect("send");
+            })
+            .emits::<Damage>(),
+        )
         .expect("system");
     let mut app = builder.build().expect("app");
     app.update(1.0 / 60.0).expect("update");

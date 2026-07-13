@@ -141,7 +141,7 @@ impl World {
     }
 
     pub(crate) fn run_guard_state(&self) -> guard::RunGuard {
-        self.run_guard
+        self.run_guard.clone()
     }
 
     pub fn world_tick(&self) -> WorldTick {
@@ -149,15 +149,13 @@ impl World {
     }
 
     pub fn commands(&mut self) -> Result<Commands<'_>, WorldError> {
-        if matches!(
-            self.run_guard,
-            RunGuard::Running(crate::operation::StageOperation::Render)
-        ) {
+        if self.run_guard.operation() == Some(crate::operation::StageOperation::Render) {
             return Err(WorldError::StructuralCommandsDuringRender);
         }
         Ok(Commands::new(self))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn begin_run(
         &mut self,
         operation: crate::operation::StageOperation,
@@ -165,7 +163,25 @@ impl World {
         if !self.run_guard.is_idle() {
             return Err(WorldError::NestedRun);
         }
-        self.run_guard = RunGuard::Running(operation);
+        self.run_guard = RunGuard::Running {
+            operation,
+            event_access: None,
+        };
+        Ok(())
+    }
+
+    pub(crate) fn begin_system_run(
+        &mut self,
+        operation: crate::operation::StageOperation,
+        event_access: Rc<guard::EventAccess>,
+    ) -> Result<(), WorldError> {
+        if !self.run_guard.is_idle() {
+            return Err(WorldError::NestedRun);
+        }
+        self.run_guard = RunGuard::Running {
+            operation,
+            event_access: Some(event_access),
+        };
         Ok(())
     }
 
@@ -178,7 +194,10 @@ impl World {
         &mut self,
         operation: crate::operation::StageOperation,
     ) {
-        self.run_guard = RunGuard::Running(operation);
+        self.run_guard = RunGuard::Running {
+            operation,
+            event_access: None,
+        };
     }
 
     pub(crate) fn advance_world_tick(&mut self) -> Result<(), crate::time::WorldTickError> {

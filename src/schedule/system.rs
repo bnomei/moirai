@@ -16,6 +16,21 @@ pub enum FlushMode {
 
 pub(crate) type SystemBody = Box<dyn FnMut(&mut crate::world::World, f32) -> Result<(), String>>;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EventRoleKind {
+    Emits,
+    Consumes,
+    ConsumesOnAdd,
+    ConsumesOnRemove,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct EventRole {
+    pub type_id: TypeId,
+    pub type_name: &'static str,
+    pub kind: EventRoleKind,
+}
+
 /// Opaque compiled system handle.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SystemId {
@@ -82,6 +97,7 @@ pub struct System {
     pub(crate) in_set: Option<String>,
     pub(crate) conditions: Vec<Condition>,
     pub(crate) required_resources: Vec<TypeId>,
+    pub(crate) event_roles: Vec<EventRole>,
 }
 
 impl System {
@@ -105,6 +121,7 @@ impl System {
             in_set: None,
             conditions: Vec::new(),
             required_resources: Vec::new(),
+            event_roles: Vec::new(),
         }
     }
 
@@ -125,6 +142,7 @@ impl System {
             in_set: None,
             conditions: Vec::new(),
             required_resources: Vec::new(),
+            event_roles: Vec::new(),
         }
     }
 
@@ -151,6 +169,46 @@ impl System {
     pub fn requires_resource<R: 'static>(mut self) -> Self {
         self.required_resources.push(TypeId::of::<R>());
         self
+    }
+
+    /// Declares that this system may send events of type `E`.
+    pub fn emits<E: Clone + 'static>(mut self) -> Self {
+        self.push_event_role::<E>(EventRoleKind::Emits);
+        self
+    }
+
+    /// Declares that this system may create readers for and read events of type `E`.
+    pub fn consumes<E: Clone + 'static>(mut self) -> Self {
+        self.push_event_role::<E>(EventRoleKind::Consumes);
+        self
+    }
+
+    /// Declares that this system consumes the added lifecycle channel for `T`.
+    pub fn consumes_on_add<T: 'static>(mut self) -> Self {
+        self.push_event_role::<T>(EventRoleKind::ConsumesOnAdd);
+        self
+    }
+
+    /// Declares that this system consumes the removed lifecycle channel for `T`.
+    pub fn consumes_on_remove<T: 'static>(mut self) -> Self {
+        self.push_event_role::<T>(EventRoleKind::ConsumesOnRemove);
+        self
+    }
+
+    fn push_event_role<T: 'static>(&mut self, kind: EventRoleKind) {
+        let type_id = TypeId::of::<T>();
+        if self
+            .event_roles
+            .iter()
+            .any(|role| role.type_id == type_id && role.kind == kind)
+        {
+            return;
+        }
+        self.event_roles.push(EventRole {
+            type_id,
+            type_name: core::any::type_name::<T>(),
+            kind,
+        });
     }
 
     pub fn flush_mode(mut self, mode: FlushMode) -> Self {
@@ -203,6 +261,10 @@ mod tests {
             .in_set(&set)
             .run_if(Condition::always())
             .requires_resource::<WorldBuilder>()
+            .emits::<u32>()
+            .consumes::<u32>()
+            .consumes_on_add::<u32>()
+            .consumes_on_remove::<u32>()
             .flush_mode(FlushMode::Stage)
             .flush_after()
             .disabled()

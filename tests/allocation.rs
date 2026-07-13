@@ -277,9 +277,12 @@ fn event_compact_steady_state_is_allocation_free() {
         .add_event::<Damage>(EventOptions::frame(moirai::StageOperation::Update))
         .expect("register");
     builder
-        .add_system(System::new("send", stage::UPDATE, |world, _dt| {
-            world.send(Damage(1)).expect("send");
-        }))
+        .add_system(
+            System::new("send", stage::UPDATE, |world, _dt| {
+                world.send(Damage(1)).expect("send");
+            })
+            .emits::<Damage>(),
+        )
         .expect("system");
     let mut app = builder.build().expect("app");
     for _ in 0..6 {
@@ -384,9 +387,12 @@ fn event_dispatch_steady_state_is_allocation_free() {
         .add_event::<Damage>(EventOptions::bounded(1).expect("bounded"))
         .expect("register");
     builder
-        .add_system(System::new("send", stage::UPDATE, |world, _dt| {
-            world.send(Damage(1)).expect("send");
-        }))
+        .add_system(
+            System::new("send", stage::UPDATE, |world, _dt| {
+                world.send(Damage(1)).expect("send");
+            })
+            .emits::<Damage>(),
+        )
         .expect("system");
     let mut app = builder.build().expect("app");
     for _ in 0..6 {

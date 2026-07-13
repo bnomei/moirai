@@ -6,7 +6,7 @@ use moirai::query::{QueryError, QueryParams, QuerySpec};
 use moirai::schedule::{stage, ScheduleBuilder, System};
 use moirai::state::{apply, State};
 use moirai::world::{DynamicBundle, WorldBuilder, WorldError};
-use moirai::{AppBuilder, ChangeTick};
+use moirai::{AppBuilder, BuildError, ChangeTick, StageOperation};
 
 #[derive(Clone, Copy)]
 struct Position(#[allow(dead_code)] i32);
@@ -430,9 +430,12 @@ fn schedule_event_roles_control_dispatch() {
         .add_event::<Damage>(EventOptions::manual())
         .expect("event");
     builder
-        .add_system(System::new("send", stage::UPDATE, |world, _dt| {
-            world.send(Damage(1)).expect("send");
-        }))
+        .add_system(
+            System::new("send", stage::UPDATE, |world, _dt| {
+                world.send(Damage(1)).expect("send");
+            })
+            .emits::<Damage>(),
+        )
         .expect("system");
     let mut app = builder.build().expect("app");
     app.update(1.0 / 60.0).expect("update");
@@ -449,42 +452,64 @@ fn schedule_event_roles_control_dispatch() {
 
 #[test]
 fn schedule_validates_ordered_event_roles() {
-    let mut world = WorldBuilder::new().build().expect("world");
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
     let mut builder = ScheduleBuilder::standard();
     builder
-        .add_system(System::new("producer", stage::UPDATE, |_w, _| {}))
+        .add_system(System::new("producer", stage::UPDATE, |_w, _| {}).emits::<Damage>())
         .expect("producer");
     builder
-        .add_system(System::new("consumer", stage::UPDATE, |_w, _| {}).after("producer"))
+        .add_system(
+            System::new("consumer", stage::UPDATE, |_w, _| {})
+                .consumes::<Damage>()
+                .after("producer"),
+        )
         .expect("consumer");
     assert!(builder.build(&mut world).is_ok());
 }
 
 #[test]
 fn schedule_rejects_missing_same_stage_event_order() {
-    // Moirai validates system ordering edges, not runtime event gating.
-    let mut world = WorldBuilder::new().build().expect("world");
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
     let mut builder = ScheduleBuilder::standard();
     builder
-        .add_system(System::new("a", stage::UPDATE, |_w, _| {}))
+        .add_system(System::new("a", stage::UPDATE, |_w, _| {}).emits::<Damage>())
         .expect("a");
     builder
-        .add_system(System::new("b", stage::UPDATE, |_w, _| {}))
+        .add_system(System::new("b", stage::UPDATE, |_w, _| {}).consumes::<Damage>())
         .expect("b");
-    assert!(builder.build(&mut world).is_ok());
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::UnreachableEventProducer { .. })
+    ));
 }
 
 #[test]
 fn schedule_rejects_missing_event_producer() {
-    let _world = WorldBuilder::new().build().expect("world");
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
     let mut builder = ScheduleBuilder::standard();
-    assert!(builder
-        .add_system(System::new("solo", stage::UPDATE, |_w, _| {}))
-        .is_ok());
+    builder
+        .add_system(System::new("solo", stage::UPDATE, |_w, _| {}).consumes::<Damage>())
+        .expect("system");
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::MissingEventProducer { .. })
+    ));
 }
 
 #[test]
-fn schedule_ignores_component_event_missing_producer() {
+fn schedule_accepts_intrinsic_component_event_producer() {
     let mut builder = WorldBuilder::new();
     builder
         .register_component::<Position>(ComponentOptions::sparse())
@@ -492,22 +517,158 @@ fn schedule_ignores_component_event_missing_producer() {
     let mut world = builder.build().expect("build");
     let mut schedule_builder = ScheduleBuilder::standard();
     schedule_builder
-        .add_system(System::new("work", stage::UPDATE, |world, _dt| {
-            let _ = world.spawn();
-        }))
+        .add_system(
+            System::new("work", stage::UPDATE, |_world, _dt| {})
+                .consumes_on_add::<Position>()
+                .consumes_on_remove::<Position>(),
+        )
         .expect("work");
     assert!(schedule_builder.build(&mut world).is_ok());
 }
 
 #[test]
-fn schedule_ignores_cross_stage_event_order() {
-    let mut world = WorldBuilder::new().build().expect("world");
+fn schedule_accepts_ordered_cross_stage_event_roles() {
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
     let mut builder = ScheduleBuilder::standard();
     builder
-        .add_system(System::new("startup", stage::STARTUP, |_w, _| {}))
+        .add_system(System::new("startup", stage::STARTUP, |_w, _| {}).emits::<Damage>())
         .expect("startup");
     builder
-        .add_system(System::new("update", stage::UPDATE, |_w, _| {}))
+        .add_system(System::new("update", stage::UPDATE, |_w, _| {}).consumes::<Damage>())
         .expect("update");
     assert!(builder.build(&mut world).is_ok());
+}
+
+#[test]
+fn schedule_event_role_failures_are_distinct() {
+    let mut unregistered = WorldBuilder::new().build().expect("world");
+    let mut schedule = ScheduleBuilder::standard();
+    schedule
+        .add_system(System::new("missing", stage::UPDATE, |_w, _| {}).emits::<Damage>())
+        .expect("system");
+    assert!(matches!(
+        schedule.build(&mut unregistered),
+        Err(BuildError::UnregisteredEventRole { .. })
+    ));
+
+    #[derive(Clone)]
+    struct RenderOnly;
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<RenderOnly>(EventOptions::frame(StageOperation::Render))
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
+    let mut schedule = ScheduleBuilder::standard();
+    schedule
+        .add_system(System::new("wrong", stage::UPDATE, |_w, _| {}).emits::<RenderOnly>())
+        .expect("system");
+    assert!(matches!(
+        schedule.build(&mut world),
+        Err(BuildError::EventOperationMismatch { .. })
+    ));
+}
+
+#[test]
+fn external_source_consumer_needs_no_system_producer() {
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<Damage>(EventOptions::frame(StageOperation::Update).external_source())
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
+    let mut schedule = ScheduleBuilder::standard();
+    schedule
+        .add_system(System::new("input", stage::UPDATE, |_w, _| {}).consumes::<Damage>())
+        .expect("consumer");
+    assert!(schedule.build(&mut world).is_ok());
+}
+
+#[test]
+fn external_source_still_enforces_operation_owner() {
+    #[derive(Clone)]
+    struct RenderInput;
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<RenderInput>(EventOptions::frame(StageOperation::Render).external_source())
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
+    let mut schedule = ScheduleBuilder::standard();
+    schedule
+        .add_system(System::new("input", stage::UPDATE, |_w, _| {}).consumes::<RenderInput>())
+        .expect("consumer");
+    assert!(matches!(
+        schedule.build(&mut world),
+        Err(BuildError::EventOperationMismatch { .. })
+    ));
+}
+
+#[test]
+fn render_system_cannot_consume_update_lifecycle_channel() {
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("component");
+    let mut world = world_builder.build().expect("world");
+    let mut schedule = ScheduleBuilder::standard();
+    schedule
+        .add_system(System::new("draw", stage::RENDER, |_w, _| {}).consumes_on_add::<Position>())
+        .expect("consumer");
+    assert!(matches!(
+        schedule.build(&mut world),
+        Err(BuildError::EventOperationMismatch { .. })
+    ));
+}
+
+#[test]
+fn transitive_event_order_is_reachable() {
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
+    let mut schedule = ScheduleBuilder::standard();
+    schedule
+        .add_system(System::new("producer", stage::UPDATE, |_w, _| {}).emits::<Damage>())
+        .expect("producer");
+    schedule
+        .add_system(System::new("middle", stage::UPDATE, |_w, _| {}).after("producer"))
+        .expect("middle");
+    schedule
+        .add_system(
+            System::new("consumer", stage::UPDATE, |_w, _| {})
+                .consumes::<Damage>()
+                .after("middle"),
+        )
+        .expect("consumer");
+    assert!(schedule.build(&mut world).is_ok());
+}
+
+#[test]
+fn every_declared_producer_must_reach_consumer() {
+    let mut world_builder = WorldBuilder::new();
+    world_builder
+        .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+        .expect("event");
+    let mut world = world_builder.build().expect("world");
+    let mut schedule = ScheduleBuilder::standard();
+    schedule
+        .add_system(
+            System::new("ordered", stage::UPDATE, |_w, _| {})
+                .emits::<Damage>()
+                .before("consumer"),
+        )
+        .expect("ordered");
+    schedule
+        .add_system(System::new("unordered", stage::UPDATE, |_w, _| {}).emits::<Damage>())
+        .expect("unordered");
+    schedule
+        .add_system(System::new("consumer", stage::UPDATE, |_w, _| {}).consumes::<Damage>())
+        .expect("consumer");
+    assert!(matches!(
+        schedule.build(&mut world),
+        Err(BuildError::UnreachableEventProducer { producer, .. }) if producer == "unordered"
+    ));
 }

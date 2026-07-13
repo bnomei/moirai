@@ -1,6 +1,9 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::time::Duration;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
+use moirai::component::ComponentOptions;
 use moirai::event::{EventOptions, EventReaderStart};
 #[cfg(feature = "testkit")]
 use moirai::schedule::FlushMode;
@@ -13,10 +16,334 @@ use moirai::{AppBuilder, AppError, BuildError};
 
 static UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
 
+#[derive(Clone, Debug, PartialEq)]
+struct RoleEvent(u8);
+
 fn build_app(system: System) -> moirai::App {
     let mut builder = AppBuilder::new();
     builder.add_system(system).expect("add");
     builder.build().expect("build")
+}
+
+#[test]
+fn runtime_rejects_undeclared_system_send_without_mutating_channel() {
+    let rejected = Rc::new(Cell::new(false));
+    let saw_rejection = Rc::clone(&rejected);
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .add_event::<RoleEvent>(EventOptions::manual())
+        .expect("event");
+    builder
+        .add_system(System::new(
+            "undeclared",
+            stage::UPDATE,
+            move |world, _dt| {
+                saw_rejection.set(world.send(RoleEvent(1)).is_err());
+            },
+        ))
+        .expect("system");
+    let mut app = builder.build().expect("app");
+    app.update(0.0).expect("update");
+    assert!(rejected.get());
+    let mut reader = app
+        .world_mut()
+        .event_reader::<RoleEvent>(EventReaderStart::OldestRetained)
+        .expect("reader");
+    assert!(app
+        .world_mut()
+        .read_event(&mut reader)
+        .expect("read")
+        .is_none());
+}
+
+#[test]
+fn runtime_rejects_undeclared_reader_creation() {
+    let rejected = Rc::new(Cell::new(false));
+    let saw_rejection = Rc::clone(&rejected);
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .add_event::<RoleEvent>(EventOptions::manual().external_source())
+        .expect("event");
+    builder
+        .add_system(System::new(
+            "undeclared",
+            stage::UPDATE,
+            move |world, _dt| {
+                saw_rejection.set(
+                    world
+                        .event_reader::<RoleEvent>(EventReaderStart::OldestRetained)
+                        .is_err(),
+                );
+            },
+        ))
+        .expect("system");
+    let mut app = builder.build().expect("app");
+    app.update(0.0).expect("update");
+    assert!(rejected.get());
+    assert!(app
+        .world_mut()
+        .event_reader::<RoleEvent>(EventReaderStart::OldestRetained)
+        .is_ok());
+}
+
+#[test]
+fn runtime_rejects_undeclared_read_without_advancing_reader() {
+    let reader = Rc::new(RefCell::new(None));
+    let system_reader = Rc::clone(&reader);
+    let rejected = Rc::new(Cell::new(false));
+    let saw_rejection = Rc::clone(&rejected);
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .add_event::<RoleEvent>(EventOptions::manual().external_source())
+        .expect("event");
+    builder
+        .add_system(System::new(
+            "undeclared",
+            stage::UPDATE,
+            move |world, _dt| {
+                let mut slot = system_reader.borrow_mut();
+                let event_reader = slot.as_mut().expect("reader installed");
+                saw_rejection.set(world.read_event(event_reader).is_err());
+            },
+        ))
+        .expect("system");
+    let mut app = builder.build().expect("app");
+    app.world_mut().send(RoleEvent(7)).expect("host send");
+    *reader.borrow_mut() = Some(
+        app.world_mut()
+            .event_reader::<RoleEvent>(EventReaderStart::OldestRetained)
+            .expect("reader"),
+    );
+    app.update(0.0).expect("update");
+    assert!(rejected.get());
+    let mut slot = reader.borrow_mut();
+    assert_eq!(
+        app.world_mut()
+            .read_event(slot.as_mut().expect("reader"))
+            .expect("host read")
+            .map(|event| event.0),
+        Some(7)
+    );
+}
+
+#[test]
+fn declared_consumer_preserves_foreign_reader_owner_error_and_cursor() {
+    let reader: Rc<RefCell<Option<moirai::event::EventReader<RoleEvent>>>> =
+        Rc::new(RefCell::new(None));
+    let system_reader = Rc::clone(&reader);
+    let saw_owner_mismatch = Rc::new(Cell::new(false));
+    let system_saw_owner_mismatch = Rc::clone(&saw_owner_mismatch);
+
+    let mut app_builder = AppBuilder::new();
+    app_builder
+        .world_builder()
+        .add_event::<RoleEvent>(EventOptions::manual().external_source())
+        .expect("app event");
+    app_builder
+        .add_system(
+            System::new("consumer", stage::UPDATE, move |world, _dt| {
+                let mut slot = system_reader.borrow_mut();
+                let error = world
+                    .read_event(slot.as_mut().expect("foreign reader"))
+                    .expect_err("owner mismatch");
+                system_saw_owner_mismatch.set(matches!(
+                    error,
+                    moirai::world::EventReadError::OwnerMismatch { .. }
+                ));
+            })
+            .consumes::<RoleEvent>(),
+        )
+        .expect("consumer");
+    let mut app = app_builder.build().expect("app");
+
+    let mut foreign_builder = WorldBuilder::new();
+    foreign_builder
+        .add_event::<RoleEvent>(EventOptions::manual())
+        .expect("foreign event");
+    let mut foreign = foreign_builder.build().expect("foreign world");
+    foreign.send(RoleEvent(13)).expect("foreign send");
+    *reader.borrow_mut() = Some(
+        foreign
+            .event_reader::<RoleEvent>(EventReaderStart::OldestRetained)
+            .expect("foreign reader"),
+    );
+
+    app.update(0.0).expect("update");
+    assert!(saw_owner_mismatch.get());
+    assert_eq!(
+        foreign
+            .read_event(reader.borrow_mut().as_mut().expect("reader"))
+            .expect("foreign read")
+            .map(|event| event.0),
+        Some(13)
+    );
+}
+
+#[test]
+fn event_role_guard_restores_idle_host_access_after_system_error() {
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .add_event::<RoleEvent>(EventOptions::manual())
+        .expect("event");
+    builder
+        .add_system(
+            System::try_new("fail", stage::UPDATE, |_world, _dt| {
+                Err(String::from("stop"))
+            })
+            .emits::<RoleEvent>(),
+        )
+        .expect("system");
+    let mut app = builder.build().expect("app");
+    assert!(app.update(0.0).is_err());
+    assert!(app.world().run_guard_is_idle());
+    app.world_mut().send(RoleEvent(9)).expect("idle host send");
+    let mut reader = app
+        .world_mut()
+        .event_reader::<RoleEvent>(EventReaderStart::OldestRetained)
+        .expect("idle host reader");
+    assert_eq!(
+        app.world_mut()
+            .read_event(&mut reader)
+            .expect("idle host read")
+            .map(|event| event.0),
+        Some(9)
+    );
+}
+
+#[test]
+fn lifecycle_consumer_observes_events_after_structural_flush() {
+    #[derive(Clone)]
+    struct Health;
+
+    let observed = Rc::new(Cell::new(false));
+    let saw_event = Rc::clone(&observed);
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("component");
+    builder
+        .add_system(System::new("seed", stage::STARTUP, |world, _dt| {
+            let entity = world.commands().expect("commands").spawn().expect("spawn");
+            world
+                .commands()
+                .expect("commands")
+                .insert(entity, Health)
+                .expect("insert");
+        }))
+        .expect("seed");
+    builder
+        .add_system(
+            System::new("consume", stage::UPDATE, move |world, _dt| {
+                let mut reader = world
+                    .on_add_reader::<Health>(EventReaderStart::OldestRetained)
+                    .expect("reader");
+                saw_event.set(world.read_event(&mut reader).expect("read").is_some());
+            })
+            .consumes_on_add::<Health>(),
+        )
+        .expect("consumer");
+    let mut app = builder.build().expect("app");
+    app.update(0.0).expect("update");
+    assert!(observed.get());
+}
+
+#[test]
+fn declared_consumer_creates_reader_and_reads_ordered_event() {
+    let observed = Rc::new(Cell::new(None));
+    let saw_event = Rc::clone(&observed);
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .add_event::<RoleEvent>(EventOptions::frame(StageOperation::Update))
+        .expect("event");
+    builder
+        .add_system(
+            System::new("producer", stage::UPDATE, |world, _dt| {
+                world.send(RoleEvent(11)).expect("send");
+            })
+            .emits::<RoleEvent>(),
+        )
+        .expect("producer");
+    builder
+        .add_system(
+            System::new("consumer", stage::UPDATE, move |world, _dt| {
+                let mut reader = world
+                    .event_reader::<RoleEvent>(EventReaderStart::OldestRetained)
+                    .expect("reader");
+                saw_event.set(
+                    world
+                        .read_event(&mut reader)
+                        .expect("read")
+                        .map(|event| event.0),
+                );
+            })
+            .consumes::<RoleEvent>()
+            .after("producer"),
+        )
+        .expect("consumer");
+    let mut app = builder.build().expect("app");
+    app.update(0.0).expect("update");
+    assert_eq!(observed.get(), Some(11));
+}
+
+#[test]
+fn remove_lifecycle_consumer_observes_event_after_system_flush() {
+    #[derive(Clone)]
+    struct Health;
+
+    let entity = Rc::new(Cell::new(None));
+    let seeded_entity = Rc::clone(&entity);
+    let removed_entity = Rc::clone(&entity);
+    let observed = Rc::new(Cell::new(false));
+    let saw_event = Rc::clone(&observed);
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("component");
+    builder
+        .add_system(System::new("seed", stage::STARTUP, move |world, _dt| {
+            let id = world.commands().expect("commands").spawn().expect("spawn");
+            world
+                .commands()
+                .expect("commands")
+                .insert(id, Health)
+                .expect("insert");
+            seeded_entity.set(Some(id));
+        }))
+        .expect("seed");
+    builder
+        .add_system(
+            System::new("remove", stage::UPDATE, move |world, _dt| {
+                world
+                    .commands()
+                    .expect("commands")
+                    .remove::<Health>(removed_entity.get().expect("seeded"))
+                    .expect("remove");
+            })
+            .flush_after(),
+        )
+        .expect("remove");
+    builder
+        .add_system(
+            System::new("consume", stage::UPDATE, move |world, _dt| {
+                let mut reader = world
+                    .on_remove_reader::<Health>(EventReaderStart::OldestRetained)
+                    .expect("reader");
+                saw_event.set(world.read_event(&mut reader).expect("read").is_some());
+            })
+            .consumes_on_remove::<Health>()
+            .after("remove"),
+        )
+        .expect("consumer");
+    let mut app = builder.build().expect("app");
+    app.update(0.0).expect("update");
+    assert!(observed.get());
 }
 
 #[test]
@@ -454,14 +781,20 @@ fn frame_events_clear_per_operation_boundary() {
         .add_event::<RenderFrameEvent>(EventOptions::frame(StageOperation::Render))
         .expect("render event");
     builder
-        .add_system(System::new("emit", stage::UPDATE, |world, _dt| {
-            world.send(UpdateFrameEvent(1)).expect("send");
-        }))
+        .add_system(
+            System::new("emit", stage::UPDATE, |world, _dt| {
+                world.send(UpdateFrameEvent(1)).expect("send");
+            })
+            .emits::<UpdateFrameEvent>(),
+        )
         .expect("emit");
     builder
-        .add_system(System::new("draw", stage::RENDER, |world, _dt| {
-            world.send(RenderFrameEvent(2)).expect("send");
-        }))
+        .add_system(
+            System::new("draw", stage::RENDER, |world, _dt| {
+                world.send(RenderFrameEvent(2)).expect("send");
+            })
+            .emits::<RenderFrameEvent>(),
+        )
         .expect("draw");
     let mut app = builder.build().expect("build");
 
@@ -725,9 +1058,12 @@ fn persistent_events_survive_update_until_read() {
         .add_event::<Persistent>(moirai::event::EventOptions::manual())
         .expect("event");
     builder
-        .add_system(System::new("emit", stage::UPDATE, |world, _dt| {
-            world.send(Persistent(1)).expect("send");
-        }))
+        .add_system(
+            System::new("emit", stage::UPDATE, |world, _dt| {
+                world.send(Persistent(1)).expect("send");
+            })
+            .emits::<Persistent>(),
+        )
         .expect("emit");
     let mut app = builder.build().expect("build");
     app.update(1.0 / 60.0).expect("update");

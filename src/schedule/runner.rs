@@ -95,11 +95,16 @@ fn run_stage_inner(
             },
         );
 
-        world.begin_run(operation).map_err(|error| RunOutcome {
-            fault_stage: Some(stage_label.to_string()),
-            fault_system: Some(schedule.systems[system_index].name.clone()),
-            fault_detail: Some(alloc::format!("{error:?}")),
-        })?;
+        world
+            .begin_system_run(
+                operation,
+                alloc::rc::Rc::clone(&schedule.systems[system_index].event_access),
+            )
+            .map_err(|error| RunOutcome {
+                fault_stage: Some(stage_label.to_string()),
+                fault_system: Some(schedule.systems[system_index].name.clone()),
+                fault_detail: Some(alloc::format!("{error:?}")),
+            })?;
 
         let result = (schedule.systems[system_index].body)(world, dt);
         world.end_run();
@@ -267,6 +272,7 @@ mod tests {
                 in_set_index: None,
                 conditions: Vec::new(),
                 id: SystemId::new(owner, 0, 1),
+                event_access: alloc::rc::Rc::new(crate::world::guard::EventAccess::default()),
             }],
             update_stage_order: vec![0],
             render_stage_order: Vec::new(),

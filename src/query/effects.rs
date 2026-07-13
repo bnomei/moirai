@@ -98,14 +98,14 @@ impl<'w> QueryEffects<'w> {
     }
 
     pub fn commands(&mut self) -> Result<QueryCommands<'_>, QueryError> {
-        match self.run_guard {
-            RunGuard::Running(StageOperation::Update) => {}
-            RunGuard::Running(StageOperation::Render) => {
+        match self.run_guard.operation() {
+            Some(StageOperation::Update) => {}
+            Some(StageOperation::Render) => {
                 return Err(QueryError::BorrowConflict {
                     detail: String::from("structural commands are unavailable during Render"),
                 });
             }
-            RunGuard::Idle => {
+            None => {
                 return Err(QueryError::BorrowConflict {
                     detail: String::from(
                         "structural commands require an active Update operation context",
@@ -127,6 +127,11 @@ impl<'w> QueryEffects<'w> {
             .ok_or_else(|| QueryError::WrongQuery {
                 detail: alloc::format!("unregistered event {}", type_name::<E>()),
             })?;
+        if !self.run_guard.permits_emit(&event_id) {
+            return Err(QueryError::WrongQuery {
+                detail: alloc::format!("undeclared event {}", event_id.index()),
+            });
+        }
         self.events
             .storage
             .send(&event_id, event)

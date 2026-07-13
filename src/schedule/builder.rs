@@ -1,14 +1,16 @@
+use crate::event::EventRetention;
 use crate::operation::StageOperation;
 use crate::schedule::compiled::{CompiledSchedule, CompiledStage, CompiledSystem};
 use crate::schedule::condition::Condition;
 use crate::schedule::error::BuildError;
 use crate::schedule::owner::{ExecutionLease, ScheduleOwner};
 use crate::schedule::stage::{self, StageDescriptor};
-use crate::schedule::system::{FlushMode, System, SystemSet};
+use crate::schedule::system::{EventRoleKind, FlushMode, System, SystemSet};
 use crate::schedule::Schedule;
 use crate::time::{FixedAccumulator, FixedConfig};
 use crate::world::World;
 use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -248,6 +250,14 @@ impl ScheduleBuilder {
             });
         }
 
+        let compiled_event_access = validate_event_roles(
+            &self.systems,
+            &self.stages,
+            &self.stage_index,
+            &name_to_index,
+            world,
+        )?;
+
         let mut set_conditions = Vec::with_capacity(self.sets.len());
         let mut set_index_map = BTreeMap::<String, usize>::new();
         for (index, (label, condition)) in self.sets.into_iter().enumerate() {
@@ -278,6 +288,7 @@ impl ScheduleBuilder {
                     index as u32,
                     generation,
                 ),
+                event_access: Rc::new(compiled_event_access[index].clone()),
             });
         }
 
@@ -320,6 +331,181 @@ impl ScheduleBuilder {
             },
         })
     }
+}
+
+#[derive(Clone)]
+struct ResolvedEventRole {
+    event_id: crate::event::EventId,
+    event_name: String,
+    kind: EventRoleKind,
+    external_source: bool,
+}
+
+fn validate_event_roles(
+    systems: &[System],
+    stages: &[StageDescriptor],
+    stage_indices: &BTreeMap<String, usize>,
+    names: &BTreeMap<String, usize>,
+    world: &World,
+) -> Result<Vec<crate::world::guard::EventAccess>, BuildError> {
+    let mut resolved = Vec::with_capacity(systems.len());
+    for system in systems {
+        let stage_index = *stage_indices
+            .get(&system.stage_label)
+            .expect("system stage validated");
+        let system_operation = stages[stage_index].operation;
+        let mut roles = Vec::with_capacity(system.event_roles.len());
+        for role in &system.event_roles {
+            let event_id = match role.kind {
+                EventRoleKind::Emits | EventRoleKind::Consumes => {
+                    world.event_id_of_type(role.type_id)
+                }
+                EventRoleKind::ConsumesOnAdd => world.lifecycle_event_id(role.type_id, true),
+                EventRoleKind::ConsumesOnRemove => world.lifecycle_event_id(role.type_id, false),
+            }
+            .ok_or_else(|| BuildError::UnregisteredEventRole {
+                system: system.name.clone(),
+                event: String::from(role.type_name),
+            })?;
+            let options = world
+                .event_options(&event_id)
+                .expect("resolved event has registered options");
+            let event_operation = match role.kind {
+                EventRoleKind::ConsumesOnAdd | EventRoleKind::ConsumesOnRemove => {
+                    Some(StageOperation::Update)
+                }
+                EventRoleKind::Emits | EventRoleKind::Consumes => match options.retention() {
+                    EventRetention::Frame(operation) => Some(operation),
+                    EventRetention::Manual | EventRetention::Bounded(_) => None,
+                },
+            };
+            if let Some(event_operation) = event_operation {
+                if event_operation != system_operation {
+                    return Err(BuildError::EventOperationMismatch {
+                        system: system.name.clone(),
+                        event: String::from(role.type_name),
+                        event_operation,
+                        system_operation,
+                    });
+                }
+            }
+            roles.push(ResolvedEventRole {
+                event_id,
+                event_name: String::from(role.type_name),
+                kind: role.kind,
+                external_source: options.is_external_source(),
+            });
+        }
+        resolved.push(roles);
+    }
+
+    for (consumer_index, roles) in resolved.iter().enumerate() {
+        for consumer in roles {
+            if consumer.kind != EventRoleKind::Consumes || consumer.external_source {
+                continue;
+            }
+            let producers: Vec<usize> = resolved
+                .iter()
+                .enumerate()
+                .filter(|(_, roles)| {
+                    roles.iter().any(|role| {
+                        role.kind == EventRoleKind::Emits && role.event_id == consumer.event_id
+                    })
+                })
+                .map(|(index, _)| index)
+                .collect();
+            if producers.is_empty() {
+                return Err(BuildError::MissingEventProducer {
+                    system: systems[consumer_index].name.clone(),
+                    event: consumer.event_name.clone(),
+                });
+            }
+            for producer_index in producers {
+                if system_precedes(
+                    producer_index,
+                    consumer_index,
+                    systems,
+                    stages,
+                    stage_indices,
+                    names,
+                ) {
+                    continue;
+                }
+                return Err(BuildError::UnreachableEventProducer {
+                    producer: systems[producer_index].name.clone(),
+                    consumer: systems[consumer_index].name.clone(),
+                    event: consumer.event_name.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(resolved
+        .into_iter()
+        .map(|roles| {
+            let emitted = roles
+                .iter()
+                .filter(|role| role.kind == EventRoleKind::Emits)
+                .map(|role| role.event_id.clone())
+                .collect();
+            let consumed = roles
+                .iter()
+                .filter(|role| role.kind != EventRoleKind::Emits)
+                .map(|role| role.event_id.clone())
+                .collect();
+            crate::world::guard::EventAccess::new(emitted, consumed)
+        })
+        .collect())
+}
+
+fn system_precedes(
+    producer: usize,
+    consumer: usize,
+    systems: &[System],
+    stages: &[StageDescriptor],
+    stage_indices: &BTreeMap<String, usize>,
+    names: &BTreeMap<String, usize>,
+) -> bool {
+    let producer_stage = stage_indices[&systems[producer].stage_label];
+    let consumer_stage = stage_indices[&systems[consumer].stage_label];
+    if producer_stage != consumer_stage {
+        return stages[producer_stage].operation == stages[consumer_stage].operation
+            && producer_stage < consumer_stage;
+    }
+    has_explicit_path(producer, consumer, systems, names)
+}
+
+fn has_explicit_path(
+    from: usize,
+    to: usize,
+    systems: &[System],
+    names: &BTreeMap<String, usize>,
+) -> bool {
+    let mut visited = vec![false; systems.len()];
+    let mut pending = vec![from];
+    while let Some(current) = pending.pop() {
+        if visited[current] {
+            continue;
+        }
+        visited[current] = true;
+        for (index, system) in systems.iter().enumerate() {
+            let direct = systems[current]
+                .before
+                .iter()
+                .any(|label| names.get(label) == Some(&index))
+                || system
+                    .after
+                    .iter()
+                    .any(|label| names.get(label) == Some(&current));
+            if direct {
+                if index == to {
+                    return true;
+                }
+                pending.push(index);
+            }
+        }
+    }
+    false
 }
 
 impl Default for ScheduleBuilder {

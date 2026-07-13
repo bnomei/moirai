@@ -1,4 +1,4 @@
-use core::any::type_name;
+use core::any::{type_name, TypeId};
 
 use crate::event::{ComponentAdded, ComponentRemoved, EventReader, EventReaderStart};
 use crate::world::{EventReadError, World, WorldError};
@@ -12,6 +12,7 @@ impl World {
             .ok_or_else(|| WorldError::UnregisteredEvent {
                 name: alloc::string::String::from(type_name::<E>()),
             })?;
+        self.ensure_event_emit_allowed(&event_id)?;
         self.events.storage.send(&event_id, event)
     }
 
@@ -26,6 +27,7 @@ impl World {
             .ok_or_else(|| WorldError::UnregisteredEvent {
                 name: alloc::string::String::from(type_name::<E>()),
             })?;
+        self.ensure_event_consume_allowed(&event_id)?;
         self.events
             .storage
             .create_reader(self.owner.clone(), event_id, start)
@@ -35,6 +37,16 @@ impl World {
         &mut self,
         reader: &'a mut EventReader<E>,
     ) -> Result<Option<&'a E>, EventReadError> {
+        if reader.event_id.validate_owner(&self.owner).is_err() {
+            return Err(EventReadError::OwnerMismatch {
+                name: alloc::format!("event {}", reader.event_id.index()),
+            });
+        }
+        if !self.run_guard.permits_consume(&reader.event_id) {
+            return Err(EventReadError::UnregisteredEvent {
+                name: alloc::format!("undeclared event {}", reader.event_id.index()),
+            });
+        }
         self.events.storage.read_next(&self.owner, reader)
     }
 
@@ -50,6 +62,7 @@ impl World {
             .ok_or_else(|| WorldError::UnregisteredComponent {
                 name: alloc::string::String::from(type_name::<T>()),
             })?;
+        self.ensure_event_consume_allowed(&event_id)?;
         self.events
             .storage
             .create_reader(self.owner.clone(), event_id, start)
@@ -67,6 +80,7 @@ impl World {
             .ok_or_else(|| WorldError::UnregisteredComponent {
                 name: alloc::string::String::from(type_name::<T>()),
             })?;
+        self.ensure_event_consume_allowed(&event_id)?;
         self.events
             .storage
             .create_reader(self.owner.clone(), event_id, start)
@@ -76,7 +90,62 @@ impl World {
         &mut self,
         reader: &EventReader<E>,
     ) -> Result<EventReader<E>, WorldError> {
+        self.ensure_event_consume_allowed(&reader.event_id)?;
         self.events.storage.fork_reader(&self.owner, reader)
+    }
+
+    pub(crate) fn event_id_of_type(&self, type_id: TypeId) -> Option<crate::event::EventId> {
+        self.events.registry.id_of_type_id(&self.owner, type_id)
+    }
+
+    pub(crate) fn event_options(
+        &self,
+        event_id: &crate::event::EventId,
+    ) -> Option<crate::event::EventOptions> {
+        self.events.registry.options(event_id)
+    }
+
+    pub(crate) fn lifecycle_event_id(
+        &self,
+        component_type: TypeId,
+        added: bool,
+    ) -> Option<crate::event::EventId> {
+        let component_index = self.registry_id_of_type(component_type)?.index();
+        if added {
+            self.events
+                .lifecycle
+                .added_event_id(&self.owner, component_index)
+        } else {
+            self.events
+                .lifecycle
+                .removed_event_id(&self.owner, component_index)
+        }
+    }
+
+    fn ensure_event_emit_allowed(
+        &self,
+        event_id: &crate::event::EventId,
+    ) -> Result<(), WorldError> {
+        if self.run_guard.permits_emit(event_id) {
+            Ok(())
+        } else {
+            Err(WorldError::UnregisteredEvent {
+                name: alloc::format!("undeclared event {}", event_id.index()),
+            })
+        }
+    }
+
+    fn ensure_event_consume_allowed(
+        &self,
+        event_id: &crate::event::EventId,
+    ) -> Result<(), WorldError> {
+        if self.run_guard.permits_consume(event_id) {
+            Ok(())
+        } else {
+            Err(WorldError::UnregisteredEvent {
+                name: alloc::format!("undeclared event {}", event_id.index()),
+            })
+        }
     }
 
     #[cfg(any(test, feature = "testkit"))]

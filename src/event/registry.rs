@@ -195,7 +195,10 @@ impl EventRegistry {
     }
 
     pub fn id_of<E: Clone + 'static>(&self, owner: &WorldOwner) -> Option<EventId> {
-        let type_id = TypeId::of::<E>();
+        self.id_of_type_id(owner, TypeId::of::<E>())
+    }
+
+    pub(crate) fn id_of_type_id(&self, owner: &WorldOwner, type_id: TypeId) -> Option<EventId> {
         self.entries
             .iter()
             .position(|entry| entry.type_id == type_id && entry.lifecycle_component_index.is_none())

@@ -1,6 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::operation::StageOperation;
 use crate::world::WorldError;
 
 /// Schedule construction failure before first execution.
@@ -12,19 +13,62 @@ pub enum BuildError {
     WorldMutationPoisoned,
     LeaseMismatch,
     LiveLeaseAlreadyAttached,
-    UnknownStage { label: String },
-    UnknownSystem { label: String },
-    UnknownSystemSet { label: String },
-    DuplicateSystemSet { label: String },
-    DuplicateSystemLabel { label: String },
-    CrossOperationEdge { from: String, to: String },
-    CrossStageSystemEdge { from: String, to: String },
-    MissingRequiredResource { name: String },
-    SelfEdge { label: String },
-    Cycle { path: Vec<String> },
+    UnknownStage {
+        label: String,
+    },
+    UnknownSystem {
+        label: String,
+    },
+    UnknownSystemSet {
+        label: String,
+    },
+    DuplicateSystemSet {
+        label: String,
+    },
+    DuplicateSystemLabel {
+        label: String,
+    },
+    CrossOperationEdge {
+        from: String,
+        to: String,
+    },
+    CrossStageSystemEdge {
+        from: String,
+        to: String,
+    },
+    MissingRequiredResource {
+        name: String,
+    },
+    UnregisteredEventRole {
+        system: String,
+        event: String,
+    },
+    EventOperationMismatch {
+        system: String,
+        event: String,
+        event_operation: StageOperation,
+        system_operation: StageOperation,
+    },
+    MissingEventProducer {
+        system: String,
+        event: String,
+    },
+    UnreachableEventProducer {
+        producer: String,
+        consumer: String,
+        event: String,
+    },
+    SelfEdge {
+        label: String,
+    },
+    Cycle {
+        path: Vec<String>,
+    },
     FixedUpdateWithoutConfig,
     FixedConfigWithoutFixedUpdate,
-    StageOperationMismatch { label: String },
+    StageOperationMismatch {
+        label: String,
+    },
     WorldBuild(WorldError),
 }
 
@@ -65,6 +109,29 @@ impl core::fmt::Display for BuildError {
             Self::MissingRequiredResource { name } => {
                 write!(f, "missing required resource '{name}'")
             }
+            Self::UnregisteredEventRole { system, event } => {
+                write!(f, "system '{system}' declares unregistered event role '{event}'")
+            }
+            Self::EventOperationMismatch {
+                system,
+                event,
+                event_operation,
+                system_operation,
+            } => write!(
+                f,
+                "system '{system}' runs in {system_operation:?} but event '{event}' belongs to {event_operation:?}"
+            ),
+            Self::MissingEventProducer { system, event } => {
+                write!(f, "event consumer '{system}' has no producer for '{event}'")
+            }
+            Self::UnreachableEventProducer {
+                producer,
+                consumer,
+                event,
+            } => write!(
+                f,
+                "event producer '{producer}' is not ordered before consumer '{consumer}' for '{event}'"
+            ),
             Self::CrossOperationEdge { from, to } => {
                 write!(f, "ordering edge crosses operations: {from} -> {to}")
             }

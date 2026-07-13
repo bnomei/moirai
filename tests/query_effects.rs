@@ -5,6 +5,8 @@ use moirai::query::{QueryParams, QuerySpec};
 use moirai::schedule::{stage, System};
 use moirai::world::{Bundle, BundleWriter, WorldBuilder, WorldError};
 use moirai::{AppBuilder, QueryError};
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Position(i32);
@@ -92,18 +94,21 @@ fn query_effects_send_during_update() {
         }))
         .expect("seed");
     app_builder
-        .add_system(System::new("emit", stage::UPDATE, |world, _dt| {
-            world
-                .for_each_mut_with_effects::<Position>(
-                    &QuerySpec::new(),
-                    QueryParams::new(),
-                    |_, _, effects| {
-                        effects.send(Damage(7)).expect("send");
-                        Ok(())
-                    },
-                )
-                .expect("mutate");
-        }))
+        .add_system(
+            System::new("emit", stage::UPDATE, |world, _dt| {
+                world
+                    .for_each_mut_with_effects::<Position>(
+                        &QuerySpec::new(),
+                        QueryParams::new(),
+                        |_, _, effects| {
+                            effects.send(Damage(7)).expect("send");
+                            Ok(())
+                        },
+                    )
+                    .expect("mutate");
+            })
+            .emits::<Damage>(),
+        )
         .expect("emit");
     let mut app = app_builder.build().expect("app");
     app.update(1.0 / 60.0).expect("update");
@@ -118,6 +123,61 @@ fn query_effects_send_during_update() {
             .map(|d| d.0),
         Some(7)
     );
+}
+
+#[test]
+fn query_effects_reject_undeclared_send_before_channel_mutation() {
+    let rejected = Rc::new(Cell::new(false));
+    let saw_rejection = Rc::clone(&rejected);
+    let mut app_builder = AppBuilder::new();
+    app_builder
+        .world_builder()
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("component");
+    app_builder
+        .world_builder()
+        .add_event::<Damage>(EventOptions::manual())
+        .expect("event");
+    app_builder
+        .add_system(System::new("seed", stage::STARTUP, |world, _dt| {
+            let entity = world.commands().expect("commands").spawn().expect("spawn");
+            world
+                .commands()
+                .expect("commands")
+                .insert(entity, Position(1))
+                .expect("insert");
+        }))
+        .expect("seed");
+    app_builder
+        .add_system(System::new(
+            "undeclared",
+            stage::UPDATE,
+            move |world, _dt| {
+                world
+                    .for_each_mut_with_effects::<Position>(
+                        &QuerySpec::new(),
+                        QueryParams::new(),
+                        |_, _, effects| {
+                            saw_rejection.set(effects.send(Damage(3)).is_err());
+                            Ok(())
+                        },
+                    )
+                    .expect("query");
+            },
+        ))
+        .expect("system");
+    let mut app = app_builder.build().expect("app");
+    app.update(0.0).expect("update");
+    assert!(rejected.get());
+    let mut reader = app
+        .world_mut()
+        .event_reader::<Damage>(EventReaderStart::OldestRetained)
+        .expect("reader");
+    assert!(app
+        .world_mut()
+        .read_event(&mut reader)
+        .expect("read")
+        .is_none());
 }
 
 #[test]

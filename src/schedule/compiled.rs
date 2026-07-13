@@ -1,3 +1,4 @@
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -23,6 +24,7 @@ pub(crate) struct CompiledSystem {
     pub conditions: Vec<Condition>,
     pub in_set_index: Option<usize>,
     pub id: SystemId,
+    pub event_access: Rc<crate::world::guard::EventAccess>,
 }
 
 pub(crate) struct CompiledSchedule {
@@ -124,6 +126,7 @@ mod tests {
             in_set_index: None,
             conditions: Vec::new(),
             id: SystemId::new(schedule.owner.clone(), 0, schedule.generation),
+            event_access: Rc::new(crate::world::guard::EventAccess::default()),
         });
         schedule.system_enabled.push(true);
         assert_eq!(schedule.system_name(0), "work");
