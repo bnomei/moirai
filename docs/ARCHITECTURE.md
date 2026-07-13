@@ -163,7 +163,8 @@ pub use component::{ComponentId, ComponentOptions, StorageKind};
 pub use entity::EntityId;
 pub use event::{EventId, EventOptions, EventReader, EventRetention};
 pub use query::{
-    Query1, Query2, QueryCache, QueryCursor, QueryError, QueryParams, QueryResultCache, QuerySpec,
+    EntityRef, ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
+    QueryEntities, QueryError, QueryIds, QueryParams, QueryResultCache, QuerySpec,
 };
 pub use operation::StageOperation;
 pub use schedule::{
@@ -171,7 +172,7 @@ pub use schedule::{
 };
 pub use state::State;
 pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
-pub use world::{Bundle, DynamicBundle, World, WorldBuilder};
+pub use world::{Bundle, DynamicBundle, EntityScratch, EntityScratchError, World, WorldBuilder};
 ```
 
 Low-level registries, raw command variants, storage containers, adapter types, and diagnostics do
@@ -183,14 +184,16 @@ not belong at the root.
 
 ```text
 App, AppBuilder, World, WorldTick,
-EntityId, Commands, DynamicBundle,
+EntityId, EntityRef, EntityScratch, EntityScratchError, Commands, Bundle, DynamicBundle,
 ComponentOptions, StorageKind,
 System, SystemSet, FlushMode,
-QueryParams, QuerySpec, State
+ExactIdPolicy, QueryCache, QueryCursor, QueryEntities, QueryError, QueryIds, QueryParams,
+QueryResultCache, QuerySpec, StageOperation, State, StateError
 ```
 
-Do not export adapter names, error enums, cache implementations, `Q16`, or every event type from the
-prelude. Explicit imports keep collisions and optional-feature drift visible.
+Do not export adapter names, `Q16`, schedule handles, event readers, or every root name from the
+prelude. The selected query/state errors are system-authoring results; explicit imports keep the
+remaining collisions and optional-feature drift visible.
 
 ### Stable namespaces
 
@@ -270,8 +273,9 @@ names are authoring-time values; `ScheduleBuilder::build` resolves them to dense
 topological order. Cycles are a build error, not a runtime panic.
 
 `StageId`, `SystemId`, and mutable schedule-control handles retain a private
-`Rc<ScheduleOwner>` and slot/generation, rejecting cross-Schedule use. Hot order arrays contain only
-private dense indices.
+`Rc<ScheduleOwner>` and slot/generation, rejecting cross-Schedule use. A stage handle is obtained
+only with `Schedule::stage_id(label)` and resolved with checked `Schedule::stage_label(&id)`; its raw
+dense index is not public. Hot order arrays contain only private dense indices.
 
 Every stage has an immutable `StageOperation::{Update, Render}` assigned when the stage is created.
 The two-variant enum is physically defined in dependency-neutral `operation.rs`, then re-exported
@@ -360,8 +364,9 @@ constructs the generic transition system; AppBuilder never chooses its stage imp
   structural flushes stamp committed additions/removals. `World::resource_scope` safely marks one
   resource type as scoped while a callback receives that value and the rest of World; same-type
   access is rejected rather than aliased.
-- Typed events are the default: `add_event::<E>`, `send::<E>`, `read::<E>`, `System::emits::<E>`,
-  and `System::consumes::<E>`. Named events remain for authored/dynamic channels.
+- Typed events are the default: `add_event::<E>`, `send::<E>`, `event_reader::<E>`,
+  `System::emits::<E>`, and `System::consumes::<E>`, all under one explicit
+  `E: Clone + 'static` broadcast contract. No named/dynamic public event API is published.
 - `EventOptions::frame(StageOperation)` assigns every frame-retained channel to exactly one App
   operation. Its orthogonal `external_source()` builder flag declares input that may have no
   producer system. Otherwise a consumed event requires a compiled producer/order relation. During
@@ -369,10 +374,11 @@ constructs the generic transition system; AppBuilder never chooses its stage imp
   code outside execution may use registered channels directly. Persistent/manual/bounded channels
   may cross operations and retain their normal reader-defined lifetime.
 - Event sends are never silently dropped because a runtime gate was disabled. Explicit
-  `EventReader<E>` values own independent Rc cursor cells while queues retain Weak cells for
-  compaction; there is no anonymous/shared default reader. Readers can start at oldest retained or
-  “from now,” report lag after retention loss, and may be explicitly forked at their current
-  cursor. Checked absolute sequence numbers never wrap or reset on compaction.
+  `EventReader<E>` values own independent cursor state and cloned payloads; frame queues retain all
+  broadcasts until their owning operation clears them, even before a reader exists. There is no
+  anonymous/shared default reader. Readers can start at oldest retained or “from now,” report lag
+  after retention loss, and may be explicitly forked at their current cursor. Checked absolute
+  sequence numbers never wrap or reset on compaction.
 - Component lifecycle events use component ids and typed helpers internally; public callers should
   not construct magic `OnAdd:<name>` strings.
 
@@ -383,6 +389,10 @@ typed values through `BundleWriter`, whose only public operation is checked type
 Moirai supplies tuple implementations through arity 16 and `DynamicBundle` for conditional or
 authored cases. Custom host bundles therefore need neither a derive crate nor access to storage
 internals.
+
+`Bundle` is curated at the crate root and in the prelude. `BundleWriter` intentionally remains at
+`moirai::world::BundleWriter`, keeping the advanced authoring mechanism out of the happy-path
+facade.
 
 `CommandOp` is private. Public borrowed `Commands` exposes only valid operations over World-owned
 reusable buffers.
@@ -603,6 +613,12 @@ seed/capture policy, and failure retains a partial report. The App helper captur
 `update_with` using host snapshot/metric closures. Testkit owns no RNG, serializer, reflection, or
 sibling assertion type.
 
+`WorldTestExt` and `ScheduleTestExt` contain test-only exhaustion and inspection hooks. They are
+implemented in an internal module under crate tests or the `testkit` feature, and are publicly
+reachable only as `moirai::testkit::{WorldTestExt, ScheduleTestExt}` with that feature. Core
+`World` and `Schedule` expose no inherent test controls; event exhaustion resolves a typed
+registered channel and never accepts a raw channel index.
+
 The Anapao-owned Moirai adapter is a bridge, not a second simulator. It maps selected scalar
 metrics and diagnostic events from `moirai::testkit` into Anapao's public report/assertion/artifact types. It calls
 `evaluate_run_expectations` or related public functions; it does not call `Simulator::compile`.
@@ -638,20 +654,23 @@ A canonical ecosystem test should:
 - a shared Moirai/Wyrd/Anapao base trait;
 - a fake Anapao `ScenarioSpec` that merely wraps an ECS app.
 
-## Phase ownership
+## Phase ownership and current state
 
-- Phase 1 freezes the crate facade, features, private module shells, and API compile tests.
-- Phase 2 implements entity/component/storage, the true `Q16` newtype, and a minimal sparse
+- Phases 1–6 are implemented in this repository; the current integration-readiness work reconciles
+  their facade and evidence before downstream harnesses begin.
+- Phase 1 froze the crate facade, features, private module shells, and API compile tests.
+- Phase 2 implemented entity/component/storage, the true `Q16` newtype, and a minimal sparse
   `WorldBuilder`/`World` slice needed to prove storage invariants.
-- Phase 3 completes World data ownership—typed resources/events, commands, lifecycle guards, and
+- Phase 3 completed World data ownership—typed resources/events, commands, lifecycle guards, and
   safe resource scopes—atop the Phase 2 sparse-world foundation.
-- Phase 4 implements ScheduleBuilder, compiled Schedule, App, generic State, and observers without
+- Phase 4 implemented ScheduleBuilder, compiled Schedule, App, generic State, and observers without
   unsafe code.
-- Phase 5 implements private query machinery behind the stable query facade.
-- Phase 6 implements the neutral testkit, reconciles the Phase 0 classified characterization
-  corpus—preserved, adapted, or intentionally rejected—and proves feature combinations, public API
-  docs, allocation contracts, and scalar benchmarks in one build.
-- Phase 7 consumes the already-green testkit, coordinates downstream Wyrd/Anapao adapters, and
+- Phase 5 implemented private query machinery behind the stable query facade.
+- Phase 6 implemented the neutral testkit and reconciled the Phase 0 classified characterization
+  corpus—preserved, adapted, or intentionally rejected—and carries reproducible feature, public API,
+  allocation-regression, and benchmark-build gates. This integration-readiness pass does not claim
+  a new performance result.
+- Phase 7 remains downstream work: it consumes the core testkit, coordinates Wyrd/Anapao adapters, and
   performs host migrations after Wyrd persistence is available.
 
 ## External validation

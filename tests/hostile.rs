@@ -2,6 +2,8 @@ use moirai::component::{ComponentOptions, RegistrationError};
 use moirai::event::{EventOptions, EventReaderStart};
 use moirai::query::{QueryError, QueryParams, QuerySpec};
 use moirai::schedule::{stage, BuildError, ScheduleBuilder, System};
+#[cfg(feature = "testkit")]
+use moirai::testkit::WorldTestExt;
 use moirai::world::WorldBuilder;
 use moirai::world::WorldError;
 use moirai::{AppBuilder, AppError, EntityScratch, EntityScratchError};

@@ -148,8 +148,8 @@ impl World {
         }
     }
 
-    #[cfg(any(test, feature = "testkit"))]
-    pub fn set_event_sequence_for_test(
+    #[cfg(test)]
+    pub(crate) fn set_event_sequence_for_test(
         &mut self,
         event_index: usize,
         next_sequence: u64,
@@ -220,6 +220,26 @@ impl World {
             Err(error) => Err(error),
         }
     }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn set_event_sequence_for_test<E: Clone + 'static>(
+    world: &mut World,
+    next_sequence: u64,
+    closed: bool,
+) -> Result<(), WorldError> {
+    let event_id = world
+        .events
+        .registry
+        .id_of::<E>(&world.owner)
+        .ok_or_else(|| WorldError::UnregisteredEvent {
+            name: alloc::string::String::from(type_name::<E>()),
+        })?;
+    world
+        .events
+        .storage
+        .set_channel_state_for_test(event_id.index(), next_sequence, closed);
+    Ok(())
 }
 
 #[cfg(test)]

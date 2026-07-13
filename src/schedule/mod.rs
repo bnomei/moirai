@@ -227,6 +227,26 @@ impl Schedule {
             .map(|system| system.id.clone())
     }
 
+    /// Resolve a compiled stage label to an opaque handle owned by this schedule.
+    pub fn stage_id(&self, label: &str) -> Option<StageId> {
+        self.compiled
+            .stages
+            .iter()
+            .position(|stage| stage.descriptor.label == label)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(|index| StageId::new(self.compiled.owner.clone(), index))
+    }
+
+    /// Resolve an opaque stage handle back to its label after owner and bounds checks.
+    pub fn stage_label(&self, id: &StageId) -> Result<&str, ScheduleError> {
+        id.validate_owner(&self.compiled.owner)?;
+        self.compiled
+            .stages
+            .get(id.index())
+            .map(|stage| stage.descriptor.label.as_str())
+            .ok_or(ScheduleError::StaleHandle)
+    }
+
     pub fn set_system_enabled(
         &mut self,
         id: &SystemId,
@@ -264,7 +284,8 @@ impl Schedule {
         runner::run_operation(&mut self.compiled, world, operation, context, dt, observer)
     }
 
-    #[cfg(any(test, feature = "testkit"))]
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn stage_index(&self, label: &str) -> Option<usize> {
         self.compiled
             .stages
@@ -304,15 +325,23 @@ impl Schedule {
         self.compiled.set_conditions.len()
     }
 
-    pub(crate) fn stage_label(&self, stage_index: usize) -> &str {
+    pub(crate) fn stage_label_at(&self, stage_index: usize) -> &str {
         self.compiled.stage_label(stage_index)
     }
 
-    #[cfg(any(test, feature = "testkit"))]
-    pub fn stage_flush_mode_for_test(&self, label: &str) -> Option<FlushMode> {
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn stage_flush_mode_for_test(&self, label: &str) -> Option<FlushMode> {
         self.stage_index(label)
             .map(|index| self.compiled.stage_flush_mode(index))
     }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn stage_flush_mode_for_test(schedule: &Schedule, label: &str) -> Option<FlushMode> {
+    schedule
+        .stage_id(label)
+        .map(|id| schedule.compiled.stage_flush_mode(id.index()))
 }
 
 #[cfg(test)]

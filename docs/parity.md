@@ -1,6 +1,6 @@
 # pd-asteroids ECS characterization ledger
 
-This is the initial Phase 0 ledger for every Rust test function under
+This is the classified source inventory for every Rust test function under
 `game-core/src/ecs/` in the pd-asteroids source tree. The inventory was verified against the live
 source on 2026-07-12. It contains 151 functions: 12 annotated with `#[test]` and 139 annotated with
 `#[rstest]`.
@@ -29,7 +29,11 @@ the rejected behavior. Phase assignments follow [the architecture contract](./AR
 | Fixed-time default | Both `TimeFixed` construction tests are `adapt`. | Fixed is disabled by default; positive Duration is required when FixedUpdate has systems. |
 | Tick overflow | `advance_tick_wraps_and_increments` is `adapt`. | First WorldTick is 1; World/Fixed/Change tick exhaustion is terminal and never wraps. |
 
-Human Phase 0 approval accepts or amends these locks together with D1–D16.
+The checked Moirai evidence mapping is generated from this inventory plus the canonical proof table
+in `scripts/generate_parity_ledger.py`. Run
+`uv run python scripts/generate_parity_ledger.py --check` to validate every cited path and test
+symbol and to detect drift without modifying the working tree. Evidence establishes the neutral
+core contract only; it does not establish either downstream game cutover.
 
 ## Summary
 
@@ -45,8 +49,8 @@ Human Phase 0 approval accepts or amends these locks together with D1–D16.
 | `state.rs` | 0 | 2 | 3 | 5 |
 | `storage.rs` | 4 | 0 | 0 | 4 |
 | `time.rs` | 0 | 2 | 0 | 2 |
-| `world.rs` | 19 | 40 | 6 | 65 |
-| **Total** | **59** | **67** | **25** | **151** |
+| `world.rs` | 18 | 39 | 8 | 65 |
+| **Total** | **58** | **66** | **27** | **151** |
 
 | Owner | Cases | Primary closure |
 | --- | ---: | --- |
@@ -54,7 +58,7 @@ Human Phase 0 approval accepts or amends these locks together with D1–D16.
 | Phase 3 | 50 | World data lifecycle, commands, resources, events |
 | Phase 4 | 35 | App lifecycle, schedule, state, fixed time |
 | Phase 5 | 27 | query behavior and owner-scoped caches |
-| Phase 6 | 17 | allocation, diagnostics, and performance proof |
+| Phase 6 | 17 | allocation and diagnostics regression evidence |
 | Downstream host | 4 | State-stack and interval policy remain host-owned; Playdate clock/log FFI is also downstream but has no direct source test. |
 
 ## `game-core/src/ecs/entity.rs`
@@ -241,8 +245,8 @@ Human Phase 0 approval accepts or amends these locks together with D1–D16.
 | 6001 | `query_ids_excludes_inactive_when_enabled` | adapt | Phase 5 | Express host inactivity as an ordinary explicit filter, never a reserved `Inactive` tag. |
 | 6040 | `query_ids_cached_last_tick_updates_on_exhaust` | preserve | Phase 5 | A fully exhausted change query advances its observation boundary. |
 | 6070 | `query_ids_cached_last_tick_skips_on_partial_iteration` | preserve | Phase 5 | Dropping a partially consumed change query must not hide unseen matches on the next run. |
-| 6098 | `query_spec_from_names_reports_missing_components` | preserve | Phase 5 | Authored name resolution returns a contextual missing-component error. |
-| 6107 | `query_spec_from_names_builds_expected_spec` | adapt | Phase 5 | Resolve the same filters through private-field builders/accessors rather than public vectors. |
+| 6098 | `query_spec_from_names_reports_missing_components` | reject | Phase 5 | Query specs accept only owner-checked `ComponentId` values; name lookup and its missing-name error are intentionally absent. |
+| 6107 | `query_spec_from_names_builds_expected_spec` | reject | Phase 5 | Name-based query identity is intentionally absent; hosts retain authored-name policy outside Moirai core. |
 | 6125 | `query1_params_panics_on_unknown_component` | adapt | Phase 5 | Unknown or foreign component handles return `QueryError`, never panic. |
 | 6139 | `query_ids_panics_on_unknown_component` | adapt | Phase 5 | Dynamic specs validate owner/schema and return `QueryError`. |
 | 6149 | `resource_changed_ticks_update` | adapt | Phase 3 | Keep added WorldTick plus monotonic revision without public manual tick injection. |

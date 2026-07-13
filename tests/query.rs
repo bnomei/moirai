@@ -182,6 +182,34 @@ fn dynamic_component_ids_are_checked_with_or_windows() {
 }
 
 #[test]
+fn dynamic_component_ids_apply_explicit_without_filters() {
+    let mut builder = WorldBuilder::new();
+    let position = builder
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("position");
+    let inactive = builder
+        .register_component::<Player>(ComponentOptions::tag())
+        .expect("explicit exclusion tag");
+    let mut world = builder.build().expect("build");
+    let active = world.spawn().expect("active");
+    let excluded = world.spawn().expect("excluded");
+    world.insert(active, Position(1)).expect("active position");
+    world
+        .insert(excluded, Position(2))
+        .expect("excluded position");
+    world.insert(excluded, Player).expect("exclusion tag");
+
+    let spec = QuerySpec::new().with_id(position).without_id(inactive);
+    assert_eq!(
+        world
+            .query_ids(&spec, QueryParams::new())
+            .expect("valid dynamic exclusion")
+            .collect::<Vec<_>>(),
+        vec![active]
+    );
+}
+
+#[test]
 fn repeated_typed_temporal_filters_are_or_groups() {
     let mut world = sparse_world();
     let position = world.spawn().expect("position");

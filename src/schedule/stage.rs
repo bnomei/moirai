@@ -25,7 +25,7 @@ impl StageId {
         Self { owner, index }
     }
 
-    pub fn index(&self) -> usize {
+    pub(crate) fn index(&self) -> usize {
         self.index as usize
     }
 

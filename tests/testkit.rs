@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use moirai::schedule::{stage, System};
 use moirai::testkit::{
     replay_app, reports_match, run_replay, CapturePolicy, MetricSample, ReplayConfig,
-    ReplayConfigError, ReplayDriver, ReplayRunError, StepIndex, StepRecord,
+    ReplayConfigError, ReplayDriver, ReplayRunError, StepIndex, StepRecord, WorldTestExt,
 };
 use moirai::AppBuilder;
 
@@ -23,6 +23,18 @@ fn counter_app() -> moirai::App {
         }))
         .expect("system");
     builder.build().expect("app")
+}
+
+#[test]
+fn typed_event_exhaustion_hook_rejects_unregistered_channels() {
+    #[derive(Clone)]
+    struct MissingEvent;
+
+    let mut world = moirai::WorldBuilder::new().build().expect("world");
+    assert!(matches!(
+        world.set_event_sequence_for_test::<MissingEvent>(0, false),
+        Err(moirai::WorldError::UnregisteredEvent { .. })
+    ));
 }
 
 #[test]

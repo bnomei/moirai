@@ -1,6 +1,6 @@
 # moirai — Roadmap
 
-**Status:** Phase 0 accepted; Phase 1 ready for dispatch · 2026-07-12
+**Status:** Phases 0–6 implemented; core integration-readiness quality gate in progress · 2026-07-13
 **Architecture contract:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 **Behavioral source:** [`pd-asteroids/game-core/src/ecs/`](../pd-asteroids/game-core/src/ecs/)
 **Partners:** [wyrd](../wyrd/) and [anapao](../anpao/)
@@ -144,9 +144,8 @@ rejected—not 151 immutable API requirements.
 | [6](./PHASE_6_QUALITY.md) | Proof closure | Neutral testkit, parity, safety, API, coverage, performance |
 | [7](./PHASE_7_INTEGRATIONS.md) | Ecosystem migration | Downstream adapters, persistence, host cutovers |
 
-Phase 2 should prove a small executable sparse-world slice instead of waiting for a horizontal
-layer cake. Phase 3 completes structural storage. Phases 4 and 5 may overlap after World contracts
-stabilize. Quality tests and benches land with their owning code; Phase 6 closes the full gate.
+Phases 0–6 are implemented in this repository. Phase 7 remains downstream integration work and
+does not become complete merely because Moirai's core contract compiles.
 
 ## Wyrd contract
 
@@ -201,12 +200,12 @@ reports, expectation evaluators, and artifacts. Exact ECS equality remains typed
 
 ## Success signals
 
-- [ ] A newcomer builds and runs a headless App from the root/prelude docs.
-- [ ] No safe caller can reach overlapping mutable schedule/world state.
+- [x] A newcomer builds and runs a headless App from the root/prelude docs.
+- [x] No safe caller can reach overlapping mutable schedule/world state.
 - [ ] pd-asteroids passes its classified migration corpus with local ECS removed.
 - [ ] SoG preserves exact wiring save continuation and removes Bevy ECS/wiring evaluation.
-- [ ] Wyrd adapter step and Anapao report bridge remain outside Moirai core dependencies.
-- [ ] Public API, no_std/MSRV, coverage, allocation, and benchmark gates are reproducible.
+- [x] Wyrd adapter step and Anapao report bridge remain outside Moirai core dependencies.
+- [ ] Public API and no_std/MSRV final gates are reproducible for the integration-readiness change.
 
 ## Related evidence
 

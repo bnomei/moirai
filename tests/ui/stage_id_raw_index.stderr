@@ -1,0 +1,10 @@
+error[E0624]: method `index` is private
+ --> tests/ui/stage_id_raw_index.rs:4:19
+  |
+4 |     let _raw = id.index();
+  |                   ^^^^^ private method
+  |
+ ::: src/schedule/stage.rs
+  |
+  |     pub(crate) fn index(&self) -> usize {
+  |     ----------------------------------- private method defined here

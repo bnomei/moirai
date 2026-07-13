@@ -166,7 +166,7 @@ impl App {
         let update_stage_count = self.schedule.update_stage_indices().len();
         for stage_order_index in 0..update_stage_count {
             let stage_index = self.schedule.update_stage_indices()[stage_order_index];
-            let stage_label = self.schedule.stage_label(stage_index);
+            let stage_label = self.schedule.stage_label_at(stage_index);
             if stage_label == stage::FIXED_UPDATE {
                 if let Some(config) = fixed_config {
                     for _ in 0..substeps {

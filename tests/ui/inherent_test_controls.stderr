@@ -1,0 +1,5 @@
+error[E0599]: no method named `set_world_tick_for_test` found for struct `World` in the current scope
+ --> tests/ui/inherent_test_controls.rs:3:11
+  |
+3 |     world.set_world_tick_for_test(7);
+  |           ^^^^^^^^^^^^^^^^^^^^^^^ method not found in `World`

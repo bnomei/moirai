@@ -1,5 +1,7 @@
 use moirai::component::ComponentOptions;
 use moirai::event::EventOptions;
+#[cfg(feature = "testkit")]
+use moirai::testkit::WorldTestExt;
 use moirai::world::{Bundle, BundleWriter, WorldBuilder, WorldError};
 #[cfg(feature = "testkit")]
 use moirai::ChangeTick;

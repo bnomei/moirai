@@ -9,14 +9,21 @@ First explicit public baseline captured at Phase 6 quality closure.
 ### Added
 
 - Neutral `moirai::testkit` replay driver, snapshot capture, and partial failure reports (`feature = "testkit"`).
+- `WorldTestExt` and `ScheduleTestExt` test controls, available only through `moirai::testkit`.
+- Checked `Schedule::stage_id`/`stage_label` lookup around opaque `StageId` handles.
+- Entity-only and runtime-component-id queries plus owner-bound `EntityScratch`.
 - Query result cache, membership cache, and plan cache hot paths with steady-state allocation contracts.
 - Typed event readers with payload pooling and frame/manual/bounded retention policies.
 - Phase 6 verification script: `scripts/verify_phase6.sh`.
 
 ### Changed
 
-- **Events:** `read_event` and `send` no longer require `Clone` on event types; payloads move between channel and reader without per-read cloning.
-- **Events:** Unread channel payloads are recycled when no active readers remain (manual and bounded channels), keeping dispatch-only steady state allocation-free.
+- **Events:** registered payloads use one explicit `Clone + 'static` broadcast contract; every
+  independent reader owns its cloned payload and frame events remain until their operation clears.
+- **Schedule:** systems declare typed event emission/consumption roles, which are validated at build
+  time and enforced during execution.
+- **Facade:** `Bundle` is available at the crate root and in the prelude; `BundleWriter` remains in
+  the advanced `moirai::world` namespace.
 - **Queries:** `query`, `query2`, and `for_each_mut*` accept `&QuerySpec` to avoid per-call spec clones.
 - **Schedule:** Set condition evaluation reuses per-set gate slots across updates.
 
@@ -29,3 +36,6 @@ First explicit public baseline captured at Phase 6 quality closure.
 ### Semver baseline
 
 `cargo semver-checks` should be run against this release candidate tag before publishing `0.1.0`. Document intentional breaking changes here before each stable bump.
+
+This release candidate does not claim a Sea of Grass or pd-asteroids cutover, nor does this quality
+reconciliation establish a new performance result.

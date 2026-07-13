@@ -1,4 +1,6 @@
 use moirai::event::{EventOptions, EventReaderStart};
+#[cfg(feature = "testkit")]
+use moirai::testkit::WorldTestExt;
 use moirai::world::{EventReadError, WorldBuilder};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -105,7 +107,9 @@ fn sequence_exhaustion_closes_channel_and_reads_report_closed() {
         .event_reader::<Damage>(EventReaderStart::FromNow)
         .expect("reader");
 
-    world.set_event_sequence_for_test(0, u64::MAX, false);
+    world
+        .set_event_sequence_for_test::<Damage>(u64::MAX, false)
+        .expect("registered event");
     assert!(matches!(
         world.send(Damage { amount: 1 }),
         Err(moirai::world::WorldError::EventChannelClosed)

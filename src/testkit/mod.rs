@@ -43,6 +43,7 @@ mod replay;
 mod report;
 mod step;
 
+pub use crate::testkit_ext::{ScheduleTestExt, WorldTestExt};
 pub use app::replay_app;
 pub use config::{CapturePolicy, ReplayConfig, ReplayConfigError};
 pub use driver::ReplayDriver;

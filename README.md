@@ -5,8 +5,39 @@ in [pd-asteroids](https://github.com/bnomei/pd-asteroids) and designed to work a
 [wyrd](https://github.com/bnomei/wyrd) (signal-graph behavior) and
 [anapao](https://github.com/bnomei/anapao) (deterministic verification).
 
-**Status:** Phase 2 core storage landed — entity identity, component registration, sparse World
-path, and `math::Q16`. See [ROADMAP.md](./ROADMAP.md).
+**Status:** the core integration-readiness contract is implemented and under final quality review.
+Downstream Wyrd adapters and game cutovers remain separate work; no downstream migration or
+performance result is claimed here. See [ROADMAP.md](./ROADMAP.md).
+
+## Quickstart
+
+```rust
+use moirai::prelude::*;
+use moirai::stage;
+
+#[derive(Debug, PartialEq)]
+struct Counter(u32);
+
+let mut builder = AppBuilder::new();
+builder.insert_resource(Counter(0));
+builder
+    .add_system(System::new("increment", stage::UPDATE, |world, _dt| {
+        world
+            .resource_mut::<Counter>()
+            .expect("registered resource")
+            .expect("seeded resource")
+            .0 += 1;
+    }))
+    .expect("valid system");
+
+let mut app = builder.build().expect("valid app");
+app.update(1.0 / 60.0).expect("update");
+assert_eq!(app.world().resource::<Counter>().unwrap(), Some(&Counter(1)));
+```
+
+Events use an explicit typed broadcast contract (`E: Clone + 'static`), schedules validate typed
+producer/consumer roles, and runtime stage handles are obtained through `Schedule::stage_id` and
+resolved through checked `Schedule::stage_label`.
 
 ## Planning docs
 

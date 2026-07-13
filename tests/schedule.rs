@@ -8,6 +8,8 @@ use moirai::event::{EventOptions, EventReaderStart};
 use moirai::schedule::FlushMode;
 use moirai::schedule::{stage, Condition, ScheduleBuilder, System, SystemSet};
 use moirai::state::{apply, State};
+#[cfg(feature = "testkit")]
+use moirai::testkit::{ScheduleTestExt, WorldTestExt};
 use moirai::world::WorldBuilder;
 use moirai::FixedConfig;
 use moirai::StageOperation;

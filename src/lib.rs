@@ -1,20 +1,15 @@
 //! Moirai is a single-threaded, `no_std + alloc` entity-component-system library.
 //!
-//! This crate publishes concept-level namespaces and curated root re-exports as each
-//! owning phase lands real behavior. Implementation modules such as allocators,
-//! registries, storage engines, command queues, and schedule runners stay private
-//! from their first commit.
+//! The public surface is a set of concept-level namespaces, curated root re-exports,
+//! and a smaller system-authoring prelude. Implementation modules such as allocators,
+//! registries, storage engines, command queues, and schedule runners stay private.
 //!
 //! # Crate root and prelude admission
 //!
-//! A name may appear on the crate root or in `moirai::prelude` only when:
-//!
-//! 1. its owning phase has implemented the real invariant, and
-//! 2. a public-API test proves the import path.
-//!
-//! Phase 2 publishes `component`, `math`, and `world` namespaces plus curated root
-//! re-exports. `EntityId` is re-exported at the crate root; the physical `entity`
-//! module stays private. `moirai::prelude` remains withheld until Phase 4.
+//! Common application, world, schedule, query, bundle, state, and time vocabulary is
+//! available at the crate root. [`prelude`] contains the subset normally needed to
+//! author systems. Advanced construction helpers such as [`world::BundleWriter`] stay
+//! in their semantic namespace.
 //!
 //! # Privacy boundary
 //!
@@ -61,6 +56,10 @@ pub mod world;
 
 #[cfg(feature = "testkit")]
 pub mod testkit;
+#[cfg(any(test, feature = "testkit"))]
+#[cfg_attr(not(feature = "testkit"), allow(dead_code))]
+#[path = "testkit/ext.rs"]
+mod testkit_ext;
 
 pub use app::{App, AppBuilder, AppError, AppFault, BuildError};
 pub use component::{ComponentId, ComponentOptions, StorageKind};
@@ -77,10 +76,12 @@ pub use query::{
 };
 pub use schedule::stage;
 pub use schedule::{
-    Condition, FlushMode, Schedule, ScheduleBuilder, ScheduleError, System, SystemId, SystemSet,
+    Condition, FlushMode, Schedule, ScheduleBuilder, ScheduleError, StageId, System, SystemId,
+    SystemSet,
 };
 pub use state::{apply, State, StateError};
 pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
 pub use world::{
-    Commands, DynamicBundle, EntityScratch, EntityScratchError, World, WorldBuilder, WorldError,
+    Bundle, Commands, DynamicBundle, EntityScratch, EntityScratchError, World, WorldBuilder,
+    WorldError,
 };

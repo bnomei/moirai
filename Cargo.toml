@@ -49,3 +49,8 @@ harness = false
 name = "queries"
 path = "benches/queries.rs"
 harness = false
+
+[[test]]
+name = "testkit"
+path = "tests/testkit.rs"
+required-features = ["testkit"]

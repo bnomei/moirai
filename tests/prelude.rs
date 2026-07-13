@@ -12,5 +12,7 @@ fn prelude_exports_system_authoring_vocabulary() {
     let _ = core::mem::size_of::<EntityRef<'_>>();
     let _ = core::mem::size_of::<EntityScratch<u8>>();
     let _ = core::mem::size_of::<EntityScratchError>();
+    fn accepts_bundle(_bundle: impl Bundle) {}
+    accepts_bundle((1u8,));
     let _ = WorldTick::ZERO;
 }

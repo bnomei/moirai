@@ -23,8 +23,8 @@ fn phase_2_root_and_namespace_paths_compile() {
 #[test]
 fn phase_4_schedule_and_app_paths_compile() {
     use moirai::{
-        stage, App, AppBuilder, Condition, FlushMode, Schedule, ScheduleBuilder, State, StateError,
-        System, SystemSet, WorldTick,
+        stage, App, AppBuilder, Condition, FlushMode, Schedule, ScheduleBuilder, StageId, State,
+        StateError, System, SystemSet, WorldTick,
     };
     let _ = stage::UPDATE;
     let _ = FlushMode::Final;
@@ -32,6 +32,7 @@ fn phase_4_schedule_and_app_paths_compile() {
     let _ = core::mem::size_of::<SystemSet>();
     let _ = core::mem::size_of::<Schedule>();
     let _ = core::mem::size_of::<ScheduleBuilder>();
+    let _ = core::mem::size_of::<StageId>();
     let _ = core::mem::size_of::<App>();
     let _ = core::mem::size_of::<AppBuilder>();
     let _ = core::mem::size_of::<State<u8>>();
@@ -48,6 +49,38 @@ fn phase_4_schedule_and_app_paths_compile() {
     app_builder
         .set_stage_flush_mode(stage::UPDATE, FlushMode::Stage)
         .expect("public stage flush authoring");
+}
+
+#[test]
+fn stage_ids_resolve_only_through_their_own_schedule() {
+    use moirai::{stage, AppBuilder, ScheduleError};
+
+    let first = AppBuilder::new().build().expect("first app");
+    let second = AppBuilder::new().build().expect("second app");
+    let update = first
+        .schedule()
+        .stage_id(stage::UPDATE)
+        .expect("standard update stage");
+
+    assert_eq!(
+        first.schedule().stage_label(&update).expect("owned handle"),
+        stage::UPDATE
+    );
+    assert_eq!(
+        second.schedule().stage_label(&update),
+        Err(ScheduleError::OwnerMismatch)
+    );
+    assert!(first.schedule().stage_id("missing").is_none());
+}
+
+#[test]
+fn bundle_is_curated_at_root_while_writer_stays_in_world() {
+    use moirai::world::BundleWriter;
+    use moirai::Bundle;
+
+    fn accepts_bundle(_bundle: impl Bundle) {}
+    accepts_bundle((1u8,));
+    let _ = core::mem::size_of::<BundleWriter<'_>>();
 }
 
 #[test]
@@ -143,6 +176,9 @@ fn implementation_modules_are_not_public() {
     cases.compile_fail("tests/ui/internal_event_storage.rs");
     cases.compile_fail("tests/ui/internal_schedule_runner.rs");
     cases.compile_fail("tests/ui/internal_world_query_plan.rs");
+    cases.compile_fail("tests/ui/stage_id_raw_index.rs");
+    #[cfg(not(feature = "testkit"))]
+    cases.compile_fail("tests/ui/inherent_test_controls.rs");
 }
 
 #[cfg(feature = "std")]
@@ -172,7 +208,7 @@ fn std_feature_is_additive() {}
 fn testkit_namespace_paths_compile() {
     use moirai::testkit::{
         reports_match, CapturePolicy, MetricSample, ReplayConfig, ReplayFailure, ReplayReport,
-        ReplayRunError, StepIndex, StepRecord, StepSnapshot,
+        ReplayRunError, ScheduleTestExt, StepIndex, StepRecord, StepSnapshot, WorldTestExt,
     };
     let _ = core::mem::size_of::<CapturePolicy>();
     let _ = core::mem::size_of::<ReplayConfig>();
@@ -184,4 +220,8 @@ fn testkit_namespace_paths_compile() {
     let _ = core::mem::size_of::<StepRecord<u8>>();
     let _ = core::mem::size_of::<StepSnapshot<u8>>();
     let _: fn(&ReplayReport<u8>, &ReplayReport<u8>) -> bool = reports_match::<u8>;
+    fn accepts_world_ext<T: WorldTestExt>() {}
+    fn accepts_schedule_ext<T: ScheduleTestExt>() {}
+    accepts_world_ext::<moirai::World>();
+    accepts_schedule_ext::<moirai::Schedule>();
 }
