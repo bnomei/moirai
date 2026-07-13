@@ -6,7 +6,7 @@ use crate::entity::{AllocatorError, EntityAllocator, EntityId};
 use crate::operation::StageOperation;
 use crate::query::QueryError;
 use crate::world::guard::RunGuard;
-use crate::world::{WorldEvents, WorldOwner};
+use crate::world::{Bundle, BundleWriter, WorldError, WorldEvents, WorldOwner};
 
 /// Restricted command surface available during query traversal.
 pub struct QueryCommands<'w> {
@@ -25,8 +25,49 @@ impl<'w> QueryCommands<'w> {
     }
 
     pub fn despawn(&mut self, entity: EntityId) -> Result<(), QueryError> {
+        self.ensure_target(entity)?;
         self.queue.push(CommandOp::Despawn { entity });
         Ok(())
+    }
+
+    pub fn insert<T: 'static>(&mut self, entity: EntityId, value: T) -> Result<(), QueryError> {
+        self.ensure_target(entity)?;
+        self.queue
+            .enqueue_insert(entity, value)
+            .map_err(map_command_error)
+    }
+
+    pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<(), QueryError> {
+        self.ensure_target(entity)?;
+        self.queue
+            .enqueue_remove::<T>(entity)
+            .map_err(map_command_error)
+    }
+
+    pub fn insert_bundle<B: Bundle>(
+        &mut self,
+        entity: EntityId,
+        bundle: B,
+    ) -> Result<(), QueryError> {
+        self.ensure_target(entity)?;
+        let queue_len = self.queue.len();
+        match bundle.write(&mut BundleWriter::query(self.allocator, self.queue, entity)) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.queue.truncate(queue_len);
+                Err(map_command_error(error))
+            }
+        }
+    }
+
+    fn ensure_target(&self, entity: EntityId) -> Result<(), QueryError> {
+        if self.allocator.is_alive(entity) || self.allocator.is_reserved(entity) {
+            Ok(())
+        } else {
+            Err(QueryError::CommandRejected {
+                detail: alloc::format!("stale command target {entity:?}"),
+            })
+        }
     }
 }
 
@@ -96,18 +137,19 @@ impl<'w> QueryEffects<'w> {
 }
 
 fn map_allocator_error_query(error: AllocatorError) -> QueryError {
-    match error {
-        AllocatorError::GenerationOverflow => QueryError::BorrowConflict {
-            detail: String::from("allocator generation overflow"),
-        },
-        AllocatorError::SlotRetired => QueryError::BorrowConflict {
-            detail: String::from("allocator slot retired"),
-        },
+    let detail = match error {
+        AllocatorError::GenerationOverflow => String::from("allocator generation overflow"),
+        AllocatorError::SlotRetired => String::from("allocator slot retired"),
         AllocatorError::StaleEntity | AllocatorError::DoubleFree | AllocatorError::NotLive => {
-            QueryError::BorrowConflict {
-                detail: String::from("allocator rejected entity"),
-            }
+            String::from("allocator rejected entity")
         }
+    };
+    QueryError::CommandRejected { detail }
+}
+
+fn map_command_error(error: WorldError) -> QueryError {
+    QueryError::CommandRejected {
+        detail: alloc::format!("{error:?}"),
     }
 }
 
@@ -190,15 +232,15 @@ mod tests {
     fn map_allocator_error_query_covers_all_variants() {
         assert!(matches!(
             map_allocator_error_query(AllocatorError::GenerationOverflow),
-            QueryError::BorrowConflict { .. }
+            QueryError::CommandRejected { .. }
         ));
         assert!(matches!(
             map_allocator_error_query(AllocatorError::SlotRetired),
-            QueryError::BorrowConflict { .. }
+            QueryError::CommandRejected { .. }
         ));
         assert!(matches!(
             map_allocator_error_query(AllocatorError::StaleEntity),
-            QueryError::BorrowConflict { .. }
+            QueryError::CommandRejected { .. }
         ));
     }
 }

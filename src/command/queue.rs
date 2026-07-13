@@ -5,10 +5,12 @@ use core::any::{Any, TypeId};
 
 use crate::entity::{AllocatorError, EntityAllocator, EntityId};
 use crate::time::ChangeTick;
-use crate::world::{Bundle, BundleWriter, FlushError, World, WorldError};
+use crate::world::{Bundle, BundleWriter, FlushError, World, WorldError, WorldOwner};
 
 pub(crate) struct CommandQueue {
     ops: Vec<CommandOp>,
+    owner: Option<WorldOwner>,
+    components: Vec<(Option<TypeId>, bool)>,
 }
 
 pub(crate) enum CommandOp {
@@ -57,7 +59,19 @@ impl<T: 'static> ErasedComponentValue for T {
 
 impl CommandQueue {
     pub fn new() -> Self {
-        Self { ops: Vec::new() }
+        Self {
+            ops: Vec::new(),
+            owner: None,
+            components: Vec::new(),
+        }
+    }
+
+    pub(crate) fn configured(owner: WorldOwner, components: Vec<(Option<TypeId>, bool)>) -> Self {
+        Self {
+            ops: Vec::new(),
+            owner: Some(owner),
+            components,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -66,6 +80,105 @@ impl CommandQueue {
 
     pub fn push(&mut self, op: CommandOp) {
         self.ops.push(op);
+    }
+
+    pub(crate) fn owner(&self) -> &WorldOwner {
+        self.owner
+            .as_ref()
+            .expect("world command queue is configured with an owner")
+    }
+
+    pub(crate) fn is_tag_component(&self, component_index: usize) -> bool {
+        self.components
+            .get(component_index)
+            .map(|(_, is_tag)| *is_tag)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn enqueue_insert<T: 'static>(
+        &mut self,
+        entity: EntityId,
+        value: T,
+    ) -> Result<(), WorldError> {
+        let component_index = self
+            .components
+            .iter()
+            .position(|(type_id, _)| *type_id == Some(TypeId::of::<T>()))
+            .ok_or_else(|| WorldError::UnregisteredComponent {
+                name: String::from(core::any::type_name::<T>()),
+            })?;
+        if self.components[component_index].1 {
+            self.ops.push(CommandOp::InsertTag {
+                entity,
+                component_index: component_index as u32,
+            });
+        } else {
+            self.ops.push(CommandOp::Insert {
+                entity,
+                component_index: component_index as u32,
+                value: Box::new(value),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn enqueue_dynamic_insert(
+        &mut self,
+        entity: EntityId,
+        component_index: usize,
+        value: Box<dyn ErasedComponentValue>,
+    ) -> Result<(), WorldError> {
+        let (expected_type, is_tag) = self.components.get(component_index).ok_or_else(|| {
+            WorldError::UnregisteredComponent {
+                name: alloc::format!("component {component_index}"),
+            }
+        })?;
+        if *is_tag || *expected_type != Some(value.as_ref().type_id()) {
+            return Err(WorldError::WrongStorageKind {
+                name: alloc::format!("component {component_index}"),
+            });
+        }
+        self.ops.push(CommandOp::Insert {
+            entity,
+            component_index: component_index as u32,
+            value,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn enqueue_tag(
+        &mut self,
+        entity: EntityId,
+        component_index: usize,
+    ) -> Result<(), WorldError> {
+        if !self.is_tag_component(component_index) {
+            return Err(WorldError::WrongStorageKind {
+                name: alloc::format!("component {component_index}"),
+            });
+        }
+        self.ops.push(CommandOp::InsertTag {
+            entity,
+            component_index: component_index as u32,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn enqueue_remove<T: 'static>(
+        &mut self,
+        entity: EntityId,
+    ) -> Result<(), WorldError> {
+        let component_index = self
+            .components
+            .iter()
+            .position(|(type_id, _)| *type_id == Some(TypeId::of::<T>()))
+            .ok_or_else(|| WorldError::UnregisteredComponent {
+                name: String::from(core::any::type_name::<T>()),
+            })?;
+        self.ops.push(CommandOp::Remove {
+            entity,
+            component_index: component_index as u32,
+        });
+        Ok(())
     }
 
     pub fn discard(&mut self, allocator: &mut EntityAllocator) -> Result<(), WorldError> {
@@ -278,24 +391,30 @@ impl<'w> Commands<'w> {
     pub fn insert<T: 'static>(&mut self, entity: EntityId, value: T) -> Result<(), WorldError> {
         self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
-        let component_index = self.world.component_index::<T>()? as u32;
-        self.world.command_queue_mut().push(CommandOp::Insert {
-            entity,
-            component_index,
-            value: Box::new(value),
-        });
-        Ok(())
+        self.world.command_queue_mut().enqueue_insert(entity, value)
     }
 
     pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<(), WorldError> {
         self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
-        let component_index = self.world.component_index::<T>()? as u32;
-        self.world.command_queue_mut().push(CommandOp::Remove {
-            entity,
-            component_index,
-        });
-        Ok(())
+        self.world.command_queue_mut().enqueue_remove::<T>(entity)
+    }
+
+    pub fn insert_bundle<B: Bundle>(
+        &mut self,
+        entity: EntityId,
+        bundle: B,
+    ) -> Result<(), WorldError> {
+        self.world.ensure_mutable()?;
+        self.world.ensure_command_target(entity)?;
+        let queue_len = self.world.command_queue_mut().len();
+        match bundle.write(&mut BundleWriter::deferred(self.world, entity)) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.world.command_queue_mut().truncate(queue_len);
+                Err(error)
+            }
+        }
     }
 }
 

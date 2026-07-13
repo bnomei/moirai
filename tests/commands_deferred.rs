@@ -1,5 +1,5 @@
 use moirai::component::ComponentOptions;
-use moirai::world::{WorldBuilder, WorldError};
+use moirai::world::{Bundle, BundleWriter, DynamicBundle, WorldBuilder, WorldError};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -223,5 +223,127 @@ fn deferred_non_clone_values_drop_once_on_discard_and_failed_preflight() {
         .expect("duplicate despawn");
     assert!(matches!(world.flush(), Err(WorldError::Flush(_))));
     assert_eq!(drops.get(), 2);
+    assert!(!world.has_pending_commands());
+}
+
+#[test]
+fn deferred_bundle_inserts_into_an_existing_entity() {
+    let drops = Rc::new(Cell::new(0));
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("health");
+    builder
+        .register_component::<OwnedHealth>(ComponentOptions::table())
+        .expect("owned");
+    let mut world = builder.build().expect("build");
+    let entity = world.spawn().expect("spawn");
+
+    world
+        .commands()
+        .expect("commands")
+        .insert_bundle(
+            entity,
+            (
+                Health(9),
+                OwnedHealth {
+                    value: 11,
+                    drops: Rc::clone(&drops),
+                },
+            ),
+        )
+        .expect("bundle");
+    assert!(world.get::<Health>(entity).expect("health").is_none());
+
+    let report = world.flush().expect("flush");
+    assert_eq!(report.commands_applied, 2);
+    assert_eq!(
+        world.get::<Health>(entity).expect("health"),
+        Some(&Health(9))
+    );
+    assert_eq!(
+        world
+            .get::<OwnedHealth>(entity)
+            .expect("owned")
+            .expect("present")
+            .value,
+        11
+    );
+    assert_eq!(drops.get(), 0);
+}
+
+#[test]
+fn deferred_dynamic_bundle_inserts_into_an_existing_entity() {
+    let mut builder = WorldBuilder::new();
+    let tag = builder.register_tag("selected").expect("tag");
+    builder
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("health");
+    let mut world = builder.build().expect("build");
+    let entity = world.spawn().expect("spawn");
+    let mut bundle = DynamicBundle::new();
+    bundle.push(&world, Health(4)).expect("health");
+    bundle.push_tag(&tag).expect("tag");
+
+    world
+        .commands()
+        .expect("commands")
+        .insert_bundle(entity, bundle)
+        .expect("bundle");
+    world.flush().expect("flush");
+
+    assert_eq!(
+        world.get::<Health>(entity).expect("health"),
+        Some(&Health(4))
+    );
+    assert!(world.has_tag(entity, &tag).expect("tag"));
+}
+
+struct RejectedExistingBundle {
+    drops: Rc<Cell<usize>>,
+}
+
+impl Bundle for RejectedExistingBundle {
+    fn write(self, writer: &mut BundleWriter<'_>) -> Result<(), WorldError> {
+        writer.insert(DropTrackedForBundle { drops: self.drops })?;
+        Err(WorldError::WrongStorageKind {
+            name: String::from("reject bundle"),
+        })
+    }
+}
+
+struct DropTrackedForBundle {
+    drops: Rc<Cell<usize>>,
+}
+
+impl Drop for DropTrackedForBundle {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+    }
+}
+
+#[test]
+fn rejected_existing_entity_bundle_leaves_the_batch_unchanged() {
+    let drops = Rc::new(Cell::new(0));
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<DropTrackedForBundle>(ComponentOptions::sparse())
+        .expect("tracked");
+    let mut world = builder.build().expect("build");
+    let entity = world.spawn().expect("spawn");
+
+    let error = world
+        .commands()
+        .expect("commands")
+        .insert_bundle(
+            entity,
+            RejectedExistingBundle {
+                drops: Rc::clone(&drops),
+            },
+        )
+        .expect_err("reject");
+
+    assert!(matches!(error, WorldError::WrongStorageKind { .. }));
+    assert_eq!(drops.get(), 1);
     assert!(!world.has_pending_commands());
 }

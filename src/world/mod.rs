@@ -79,7 +79,16 @@ impl World {
         resources: ResourceStore,
         events: WorldEvents,
     ) -> Self {
+        let command_components = (0..registry.len())
+            .map(|index| {
+                (
+                    registry.type_id_for_index(index),
+                    registry.entry_is_tag(index),
+                )
+            })
+            .collect();
         Self {
+            command_queue: CommandQueue::configured(owner.clone(), command_components),
             owner,
             allocator: EntityAllocator::new(),
             registry,
@@ -87,7 +96,6 @@ impl World {
             archetypes,
             resources,
             events,
-            command_queue: CommandQueue::new(),
             change_tick: ChangeTick::ZERO,
             world_tick: WorldTick::ZERO,
             run_guard: RunGuard::Idle,

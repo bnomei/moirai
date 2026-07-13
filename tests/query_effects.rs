@@ -3,7 +3,7 @@ use moirai::component::ComponentOptions;
 use moirai::event::{EventOptions, EventReaderStart};
 use moirai::query::{QueryParams, QuerySpec};
 use moirai::schedule::{stage, System};
-use moirai::world::WorldBuilder;
+use moirai::world::{Bundle, BundleWriter, WorldBuilder, WorldError};
 use moirai::{AppBuilder, QueryError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -293,4 +293,139 @@ fn query_effects_rejects_commands_during_render() {
     let mut app = app_builder.build().expect("app");
     app.update(1.0 / 60.0).expect("update");
     app.render(1.0 / 60.0).expect("render");
+}
+
+#[test]
+fn query_effects_insert_remove_and_bundle_are_deferred_safely() {
+    let mut app_builder = AppBuilder::new();
+    app_builder
+        .world_builder()
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("position");
+    app_builder
+        .world_builder()
+        .register_component::<Velocity>(ComponentOptions::sparse())
+        .expect("velocity");
+    app_builder
+        .world_builder()
+        .register_component::<Damage>(ComponentOptions::sparse())
+        .expect("damage");
+    app_builder
+        .add_system(System::new("seed", stage::STARTUP, |world, _dt| {
+            let mut commands = world.commands().expect("commands");
+            let entity = commands.spawn().expect("spawn");
+            commands.insert(entity, Position(1)).expect("position");
+            commands.insert(entity, Velocity(2)).expect("velocity");
+        }))
+        .expect("seed");
+    app_builder
+        .add_system(System::new("mutate", stage::UPDATE, |world, _dt| {
+            world
+                .for_each_mut_with_effects::<Position>(
+                    &QuerySpec::new(),
+                    QueryParams::new(),
+                    |entity, position, effects| {
+                        position.0 += 1;
+                        let mut commands = effects.commands()?;
+                        commands.insert(entity, Damage(3))?;
+                        commands.remove::<Velocity>(entity)?;
+                        commands.insert_bundle(entity, (HealthForQuery(4),))?;
+                        Ok(())
+                    },
+                )
+                .expect("mutate");
+        }))
+        .expect("mutate");
+    app_builder
+        .world_builder()
+        .register_component::<HealthForQuery>(ComponentOptions::table())
+        .expect("health");
+
+    let mut app = app_builder.build().expect("app");
+    app.update(1.0 / 60.0).expect("update");
+    let entity = app
+        .world_mut()
+        .query::<Position>(&QuerySpec::new(), QueryParams::new())
+        .expect("query")
+        .next()
+        .expect("entity")
+        .0;
+    assert_eq!(
+        app.world().get::<Damage>(entity).expect("damage"),
+        Some(&Damage(3))
+    );
+    assert!(app
+        .world()
+        .get::<Velocity>(entity)
+        .expect("velocity")
+        .is_none());
+    assert_eq!(
+        app.world().get::<HealthForQuery>(entity).expect("health"),
+        Some(&HealthForQuery(4))
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HealthForQuery(i32);
+
+struct RejectedQueryBundle;
+
+impl Bundle for RejectedQueryBundle {
+    fn write(self, writer: &mut BundleWriter<'_>) -> Result<(), WorldError> {
+        writer.insert(Damage(99))?;
+        Err(WorldError::WrongStorageKind {
+            name: String::from("reject query bundle"),
+        })
+    }
+}
+
+#[test]
+fn query_bundle_rejection_is_dedicated_and_transactional() {
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("position");
+    builder
+        .world_builder()
+        .register_component::<Damage>(ComponentOptions::sparse())
+        .expect("damage");
+    builder
+        .add_system(System::new("seed", stage::STARTUP, |world, _dt| {
+            let mut commands = world.commands().expect("commands");
+            let entity = commands.spawn().expect("spawn");
+            commands.insert(entity, Position(1)).expect("position");
+        }))
+        .expect("seed");
+    builder
+        .add_system(System::new("reject", stage::UPDATE, |world, _dt| {
+            world
+                .for_each_mut_with_effects::<Position>(
+                    &QuerySpec::new(),
+                    QueryParams::new(),
+                    |entity, _, effects| {
+                        let error = effects
+                            .commands()?
+                            .insert_bundle(entity, RejectedQueryBundle)
+                            .expect_err("reject");
+                        assert!(matches!(error, QueryError::CommandRejected { .. }));
+                        Ok(())
+                    },
+                )
+                .expect("query");
+            assert!(!world.has_pending_commands());
+        }))
+        .expect("reject");
+
+    let mut app = builder.build().expect("build");
+    app.update(1.0 / 60.0).expect("update");
+    let entity = app
+        .world_mut()
+        .query::<Position>(&QuerySpec::new(), QueryParams::new())
+        .expect("query")
+        .next()
+        .expect("entity")
+        .0;
+
+    assert!(app.world().get::<Damage>(entity).expect("damage").is_none());
 }

@@ -32,6 +32,9 @@ pub enum QueryError {
     BorrowConflict {
         detail: String,
     },
+    CommandRejected {
+        detail: String,
+    },
     OwnerMismatch,
     TraversalAborted {
         entity: crate::EntityId,
@@ -63,6 +66,7 @@ impl core::fmt::Display for QueryError {
                 write!(f, "exact-id query missing unavailable entity {entity:?}")
             }
             Self::BorrowConflict { detail } => write!(f, "query borrow conflict: {detail}"),
+            Self::CommandRejected { detail } => write!(f, "query command rejected: {detail}"),
             Self::OwnerMismatch => f.write_str("query handle owner mismatch"),
             Self::TraversalAborted { entity, detail } => {
                 write!(f, "query traversal aborted at {entity:?}: {detail}")

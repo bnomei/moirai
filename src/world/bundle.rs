@@ -94,41 +94,57 @@ impl Bundle for DynamicBundle {
 
 /// Safe bundle write surface without storage access.
 pub struct BundleWriter<'w> {
-    world: &'w mut World,
     entity: EntityId,
-    deferred: bool,
+    target: BundleTarget<'w>,
+}
+
+enum BundleTarget<'w> {
+    Immediate(&'w mut World),
+    Deferred(&'w mut World),
+    Query {
+        allocator: &'w crate::entity::EntityAllocator,
+        queue: &'w mut crate::command::CommandQueue,
+    },
 }
 
 impl<'w> BundleWriter<'w> {
     pub(crate) fn new(world: &'w mut World, entity: EntityId) -> Self {
         Self {
-            world,
             entity,
-            deferred: false,
+            target: BundleTarget::Immediate(world),
         }
     }
 
     pub(crate) fn deferred(world: &'w mut World, entity: EntityId) -> Self {
         Self {
-            world,
             entity,
-            deferred: true,
+            target: BundleTarget::Deferred(world),
+        }
+    }
+
+    pub(crate) fn query(
+        allocator: &'w crate::entity::EntityAllocator,
+        queue: &'w mut crate::command::CommandQueue,
+        entity: EntityId,
+    ) -> Self {
+        Self {
+            entity,
+            target: BundleTarget::Query { allocator, queue },
         }
     }
 
     pub fn insert<T: 'static>(&mut self, value: T) -> Result<(), WorldError> {
-        if self.deferred {
-            self.world.ensure_mutable()?;
-            self.world.ensure_command_target(self.entity)?;
-            let component_index = self.world.component_index::<T>()? as u32;
-            self.world.command_queue_mut().push(CommandOp::Insert {
-                entity: self.entity,
-                component_index,
-                value: Box::new(value),
-            });
-            Ok(())
-        } else {
-            self.world.insert(self.entity, value).map(|_| ())
+        match &mut self.target {
+            BundleTarget::Immediate(world) => world.insert(self.entity, value).map(|_| ()),
+            BundleTarget::Deferred(world) => {
+                world.ensure_mutable()?;
+                world.ensure_command_target(self.entity)?;
+                world.command_queue_mut().enqueue_insert(self.entity, value)
+            }
+            BundleTarget::Query { allocator, queue } => {
+                ensure_query_target(allocator, self.entity)?;
+                queue.enqueue_insert(self.entity, value)
+            }
         }
     }
 
@@ -137,42 +153,63 @@ impl<'w> BundleWriter<'w> {
         component_id: ComponentId,
         value: Box<dyn ErasedComponentValue>,
     ) -> Result<(), WorldError> {
-        if self.deferred {
-            self.world.ensure_mutable()?;
-            self.world.ensure_command_target(self.entity)?;
-            self.world.command_queue_mut().push(CommandOp::Insert {
-                entity: self.entity,
-                component_index: component_id.index() as u32,
-                value,
-            });
-            Ok(())
-        } else {
-            self.world
+        match &mut self.target {
+            BundleTarget::Immediate(world) => world
                 .insert_dynamic(self.entity, component_id, value)
-                .map(|_| ())
+                .map(|_| ()),
+            BundleTarget::Deferred(world) => {
+                world.ensure_mutable()?;
+                world.ensure_command_target(self.entity)?;
+                world.validate_component_insert(
+                    self.entity,
+                    component_id.index() as u32,
+                    value.as_ref().type_id(),
+                )?;
+                world.command_queue_mut().push(CommandOp::Insert {
+                    entity: self.entity,
+                    component_index: component_id.index() as u32,
+                    value,
+                });
+                Ok(())
+            }
+            BundleTarget::Query { allocator, queue } => {
+                ensure_query_target(allocator, self.entity)?;
+                queue.enqueue_dynamic_insert(self.entity, component_id.index(), value)
+            }
         }
     }
 
     pub(crate) fn insert_tag_id(&mut self, component_id: ComponentId) -> Result<(), WorldError> {
-        if self.deferred {
-            self.world.ensure_mutable()?;
-            self.world.ensure_command_target(self.entity)?;
-            self.world.command_queue_mut().push(CommandOp::InsertTag {
-                entity: self.entity,
-                component_index: component_id.index() as u32,
-            });
-            Ok(())
-        } else {
-            self.world.add_tag_id(self.entity, component_id)
+        match &mut self.target {
+            BundleTarget::Immediate(world) => world.add_tag_id(self.entity, component_id),
+            BundleTarget::Deferred(world) => {
+                world.ensure_mutable()?;
+                world.ensure_command_target(self.entity)?;
+                world
+                    .command_queue_mut()
+                    .enqueue_tag(self.entity, component_id.index())
+            }
+            BundleTarget::Query { allocator, queue } => {
+                ensure_query_target(allocator, self.entity)?;
+                queue.enqueue_tag(self.entity, component_id.index())
+            }
         }
     }
 
     pub(crate) fn world_owner(&self) -> &crate::world::WorldOwner {
-        self.world.owner()
+        match &self.target {
+            BundleTarget::Immediate(world) | BundleTarget::Deferred(world) => world.owner(),
+            BundleTarget::Query { queue, .. } => queue.owner(),
+        }
     }
 
     pub(crate) fn is_tag_component(&self, component_id: &ComponentId) -> bool {
-        self.world.is_tag_component(component_id)
+        match &self.target {
+            BundleTarget::Immediate(world) | BundleTarget::Deferred(world) => {
+                world.is_tag_component(component_id)
+            }
+            BundleTarget::Query { queue, .. } => queue.is_tag_component(component_id.index()),
+        }
     }
 
     #[cfg(test)]
@@ -182,7 +219,21 @@ impl<'w> BundleWriter<'w> {
 
     #[cfg(test)]
     pub(crate) fn test_world(&mut self) -> &mut World {
-        self.world
+        match &mut self.target {
+            BundleTarget::Immediate(world) | BundleTarget::Deferred(world) => world,
+            BundleTarget::Query { .. } => panic!("query bundle writer has no world"),
+        }
+    }
+}
+
+fn ensure_query_target(
+    allocator: &crate::entity::EntityAllocator,
+    entity: EntityId,
+) -> Result<(), WorldError> {
+    if allocator.is_alive(entity) || allocator.is_reserved(entity) {
+        Ok(())
+    } else {
+        Err(WorldError::StaleEntity { entity })
     }
 }
 
