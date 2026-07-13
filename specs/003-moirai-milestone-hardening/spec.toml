@@ -1,0 +1,10 @@
+spec_id = "003-moirai-milestone-hardening"
+name = "Moirai milestone hardening"
+depends_on = ["002-moirai-integration-readiness"]
+global_scope = ["src", "tests", "docs", "specs/002-moirai-integration-readiness"]
+spec_kind = "review-fix"
+execution_policy = "auto-continue"
+fanout_policy = "serial"
+human_checkpoint = "on-blocker"
+commit_policy = "after-validation"
+review_policy = "required"
