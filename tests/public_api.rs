@@ -7,7 +7,7 @@ use moirai::{
 
 #[test]
 fn crate_links_as_no_std_alloc_library() {
-    let _ = core::mem::size_of::<EntityId>();
+    assert_eq!(core::mem::size_of::<EntityId>(), 16);
     let _ = core::mem::size_of::<ComponentId>();
     let _ = core::mem::size_of::<Q16>();
     let _ = core::mem::size_of::<World>();
@@ -18,6 +18,24 @@ fn crate_links_as_no_std_alloc_library() {
 fn phase_2_root_and_namespace_paths_compile() {
     let _ = ComponentOptions::sparse();
     let _ = StorageKind::Sparse;
+
+    struct Position;
+
+    let mut builder = moirai::AppBuilder::new();
+    let _position = builder
+        .world_builder()
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("component registration through the public WorldBuilder path");
+}
+
+#[test]
+fn entity_ids_reject_cross_world_use_even_for_matching_first_slots() {
+    let mut first = WorldBuilder::new().build().expect("first world");
+    let mut second = WorldBuilder::new().build().expect("second world");
+    let first_entity = first.spawn().expect("first entity");
+    let _second_entity = second.spawn().expect("matching second-world slot");
+
+    assert!(second.despawn(first_entity).is_err());
 }
 
 #[test]
@@ -38,7 +56,9 @@ fn phase_4_schedule_and_app_paths_compile() {
     let _ = core::mem::size_of::<State<u8>>();
     let _ = core::mem::size_of::<StateError>();
     let _ = WorldTick::ZERO;
-    let condition = Condition::from_world(|_world| true);
+    let condition = Condition::from_world(|_world| true)
+        .and(Condition::in_state(2u16))
+        .and(Condition::state_changed::<u16>());
     let set = SystemSet::new("set");
     let _ = System::new("system", stage::UPDATE, |_world, _dt| {})
         .before_set(&set)

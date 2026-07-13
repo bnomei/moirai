@@ -326,14 +326,16 @@ before any tick or World mutation; zero delta remains valid.
 request; an explicitly installed transition system applies it at a host-selected boundary. It
 retains one previous value, not a navigation/pause stack. The
 `GameState { Menu, Game, Pause, Inventory }` enum and push/pop policy are pd-asteroids domain code.
-`System::in_state` and `state_changed` are generic conveniences over the resource.
+`Condition::in_state(value)` and `Condition::state_changed::<S>()` are generic conveniences over
+the resource. Attach them to a system with `System::run_if`, or to a registered set with
+`AppBuilder::set_run_if`.
 The base contract is `S: Eq + 'static` and does not require Clone. `state::apply::<S>(label, stage)`
 constructs the generic transition system; AppBuilder never chooses its stage implicitly.
 
 ## Component, resource, and event conveniences
 
-- `AppBuilder::register_component::<T>(options)` uses `type_name::<T>()` as the default diagnostic
-  name and returns `ComponentId`.
+- `AppBuilder::world_builder().register_component::<T>(options)` uses `type_name::<T>()` as the
+  default diagnostic name and returns `ComponentId`.
 - An explicitly named/untyped tag API remains available for authored data and compatibility.
 - `ComponentOptions` has private fields with `sparse()`, `table()`, and `tag()` constructors.
 - Typed `tag()` registration accepts only zero-sized, non-dropping marker types; non-ZST or
@@ -343,16 +345,16 @@ constructs the generic transition system; AppBuilder never chooses its stage imp
   conflicts return a contextual error.
 - `ComponentId` cannot be fabricated with a public unchecked constructor. Raw conversion, if
   needed for diagnostics, is explicitly named and does not imply cross-world stability.
-- `ComponentId`, `EventId`, and query-cache handles retain a private `Rc<WorldOwner>` plus a
-  slot/generation where relevant. They are Clone rather than Copy and reject cross-World use.
+- `ComponentId`, `EventId`, and query-cache handles retain a private cloned `WorldOwner` token plus
+  a slot/generation where relevant. They are Clone rather than Copy and reject cross-World use.
   `EventReader` and `QueryCursor` also carry mutable progress, deliberately do not implement Clone,
   and require an explicit owner-validated `fork` for an independent cursor. Hot execution resolves
   handles to private dense ids.
-- `EntityId` is an opaque 8-byte Copy handle with private `u32` slot and `u32` generation (initial
-  generation 1), relative to one World. It has no public raw bit conversion. Same-world stale
-  handles are always rejected; passing an id to another World is a caller contract violation and
-  is not guaranteed to be detected if slot/generation happen to coincide. Persistence/network
-  protocols use host ids, never EntityId layout.
+- `EntityId` is an opaque 16-byte Copy handle with a private `u32` World owner token and packed
+  `u32` slot/`u32` generation (initial generation 1). It has no public raw bit conversion.
+  Cross-World use is rejected even when slot/generation happen to coincide, and same-World stale
+  handles are rejected after despawn. Persistence/network protocols use host ids, never EntityId
+  layout.
 - Resources are type-keyed. Multiple logical instances use host newtypes; the unused pd named
   resource surface is not ported.
 - A resource type declared required by compiled Schedule is locked in World. Idle replacement is
@@ -442,9 +444,9 @@ beside live component references. Its command view is available only in Update o
 Render may still use its declared event view. Resource-dependent traversal uses
 `World::resource_scope`.
 
-World-owned query entries use an `alloc::rc::Rc` owner token. Public cache handles retain that token
-plus a private slot/generation, so cross-World and stale cache use is rejected without a global
-counter, target atomics, or public raw keys.
+World-owned query entries use the private `WorldOwner` token allocated by a checked `AtomicU32`
+counter. Public cache handles retain a cloned token plus a private slot/generation, so cross-World
+and stale cache use is rejected without exposing public raw keys.
 
 ### Exhaustion taxonomy
 

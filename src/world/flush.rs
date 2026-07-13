@@ -57,6 +57,7 @@ mod tests {
     use super::*;
     use crate::component::ComponentOptions;
     use crate::operation::StageOperation;
+    #[cfg(feature = "testkit")]
     use crate::time::ChangeTick;
     use crate::world::WorldBuilder;
 
