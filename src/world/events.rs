@@ -4,7 +4,7 @@ use crate::event::{ComponentAdded, ComponentRemoved, EventReader, EventReaderSta
 use crate::world::{EventReadError, World, WorldError};
 
 impl World {
-    pub fn send<E: Clone + 'static>(&mut self, event: E) -> Result<(), WorldError> {
+    pub fn send<E: 'static>(&mut self, event: E) -> Result<(), WorldError> {
         let event_id = self
             .events
             .registry
@@ -31,10 +31,10 @@ impl World {
             .create_reader(self.owner.clone(), event_id, start)
     }
 
-    pub fn read_event<E: 'static>(
-        &self,
-        reader: &mut EventReader<E>,
-    ) -> Result<Option<&E>, EventReadError> {
+    pub fn read_event<'a, E: Clone + 'static>(
+        &mut self,
+        reader: &'a mut EventReader<E>,
+    ) -> Result<Option<&'a E>, EventReadError> {
         self.events.storage.read_next(&self.owner, reader)
     }
 
@@ -120,6 +120,18 @@ impl World {
         }
     }
 
+    pub(crate) fn emit_component_removed_if(
+        &mut self,
+        should_emit: bool,
+        entity: crate::entity::EntityId,
+        component_index: usize,
+    ) -> Result<(), WorldError> {
+        match should_emit {
+            true => self.emit_component_removed(entity, component_index),
+            false => Ok(()),
+        }
+    }
+
     pub(crate) fn emit_component_removed(
         &mut self,
         entity: crate::entity::EntityId,
@@ -138,5 +150,106 @@ impl World {
             Ok(()) | Err(WorldError::EventChannelClosed) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::event::EventReaderStart;
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Health(#[allow(dead_code)] i32);
+
+    #[test]
+    fn event_reader_rejects_unregistered_event_type() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        assert!(matches!(
+            world.event_reader::<Health>(EventReaderStart::OldestRetained),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
+    }
+
+    #[test]
+    fn lifecycle_readers_reject_missing_lifecycle_channels() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+        world.events.lifecycle.clear_added_event_for_test(0);
+        assert!(matches!(
+            world.on_add_reader::<Health>(EventReaderStart::OldestRetained),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+        world.events.lifecycle.clear_removed_event_for_test(0);
+        assert!(matches!(
+            world.on_remove_reader::<Health>(EventReaderStart::OldestRetained),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn emit_component_added_propagates_non_closed_send_errors() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.events.storage.clear_channels_for_test();
+        assert!(matches!(
+            world.emit_component_added(entity, 0, true),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
+    }
+
+    #[test]
+    fn emit_component_removed_if_skips_emit_when_not_requested() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Health(1)).expect("insert");
+        let mut reader = world
+            .on_remove_reader::<Health>(EventReaderStart::OldestRetained)
+            .expect("reader");
+
+        world
+            .emit_component_removed_if(false, entity, 0)
+            .expect("skip emit");
+        assert!(world
+            .read_event(&mut reader)
+            .expect("read after skip")
+            .is_none());
+
+        world
+            .emit_component_removed_if(true, entity, 0)
+            .expect("emit");
+        let event = world
+            .read_event(&mut reader)
+            .expect("read after emit")
+            .expect("removed event");
+        assert_eq!(event.entity, entity);
+    }
+
+    #[test]
+    fn emit_component_removed_propagates_non_closed_send_errors() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Health(1)).expect("insert");
+        world.events.storage.clear_channels_for_test();
+        assert!(matches!(
+            world.emit_component_removed(entity, 0),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
     }
 }

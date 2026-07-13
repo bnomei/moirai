@@ -10,10 +10,10 @@ pub(crate) fn entity_matches_structural(
     entity: EntityId,
     plan: &ResolvedPlan,
 ) -> bool {
-    if !world.is_alive(entity) {
+    if world.allocator_is_reserved(entity) {
         return false;
     }
-    if world.allocator_is_reserved(entity) {
+    if !world.is_alive(entity) {
         return false;
     }
     for &index in &plan.required_indices {
@@ -93,4 +93,140 @@ fn tick_in_window(tick: Option<ChangeTick>, since: ChangeTick, captured_now: Cha
         return false;
     };
     tick > since && tick <= captured_now
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::query::ExactIdPolicy;
+    use crate::time::ChangeTick;
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Marker(u8);
+
+    fn sparse_plan(primary: usize) -> ResolvedPlan {
+        ResolvedPlan {
+            fingerprint: 1,
+            primary_index: primary,
+            primary_is_table: false,
+            traversal: TraversalSource::Sparse {
+                component_index: primary,
+            },
+            required_indices: alloc::vec![primary],
+            without_indices: alloc::vec![],
+            with_tag_indices: alloc::vec![],
+            without_tag_indices: alloc::vec![],
+            added_index: None,
+            changed_index: None,
+            exact_id_policy: None,
+        }
+    }
+
+    #[test]
+    fn entity_matches_structural_rejects_reserved_entities() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        let mut world = builder.build().expect("build");
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        let plan = sparse_plan(0);
+        assert!(!entity_matches_structural(&world, reserved, &plan));
+    }
+
+    #[test]
+    fn entity_matches_structural_rejects_stale_generations() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        let mut world = builder.build().expect("build");
+        let live = world.spawn().expect("live");
+        let stale =
+            crate::entity::EntityId::from_parts(live.slot(), live.generation().wrapping_add(1));
+        let plan = sparse_plan(0);
+        assert!(!world.is_alive(stale));
+        assert!(!entity_matches_structural(&world, stale, &plan));
+    }
+
+    #[test]
+    fn entity_matches_structural_rejects_dead_and_reserved_entities() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        let mut world = builder.build().expect("build");
+        let live = world.spawn().expect("live");
+        world.insert(live, Marker(1)).expect("insert");
+        let plan = sparse_plan(0);
+
+        world.despawn(live).expect("despawn");
+        assert!(!entity_matches_structural(&world, live, &plan));
+
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        assert!(!entity_matches_structural(&world, reserved, &plan));
+    }
+
+    #[test]
+    fn entity_matches_rejects_changed_outside_window_and_missing_ticks() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Marker(1)).expect("insert");
+        world
+            .get_mut::<Marker>(entity)
+            .expect("mut")
+            .expect("present")
+            .0 = 2;
+
+        let mut plan = sparse_plan(0);
+        plan.changed_index = Some(0);
+        let since = ChangeTick::from_raw(10);
+        let captured_now = ChangeTick::from_raw(20);
+        assert!(!entity_matches(&world, entity, &plan, since, captured_now));
+
+        plan.added_index = Some(0);
+        plan.changed_index = None;
+        assert!(!entity_matches(
+            &world,
+            entity,
+            &plan,
+            ChangeTick::from_raw(100),
+            ChangeTick::from_raw(200),
+        ));
+    }
+
+    #[test]
+    fn validate_exact_ids_ignores_non_exact_traversal_with_error_policy() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        let world = builder.build().expect("build");
+        let mut plan = sparse_plan(0);
+        plan.exact_id_policy = Some(ExactIdPolicy::ErrorOnUnavailable);
+        assert!(validate_exact_ids(&world, &plan).is_ok());
+    }
+
+    #[test]
+    fn tick_in_window_rejects_missing_ticks() {
+        assert!(!tick_in_window(
+            None,
+            ChangeTick::ZERO,
+            ChangeTick::from_raw(1)
+        ));
+    }
 }

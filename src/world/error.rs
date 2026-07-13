@@ -59,6 +59,22 @@ impl From<FlushError> for WorldError {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::RegistrationError;
+
+    #[test]
+    fn registration_error_converts_into_world_error() {
+        let error: WorldError = RegistrationError::InvalidTag {
+            name: String::from("tag"),
+            detail: String::from("detail"),
+        }
+        .into();
+        assert!(matches!(error, WorldError::Registration(_)));
+    }
+}
+
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventReadError {

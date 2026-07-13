@@ -5,7 +5,6 @@ use crate::query::{QueryCache, QueryError, QueryParams, QuerySpec};
 use crate::world::World;
 
 use super::collect::collect_query1_structural_members;
-use super::spec::resolve_query1;
 
 const RETIRED_GENERATION: u32 = u32::MAX;
 
@@ -44,7 +43,28 @@ impl World {
                 ),
             });
         }
-        let plan = resolve_query1::<T>(self, &spec)?;
+        let plan = self.resolve_query1_plan::<T>(&spec)?;
+        let members = collect_query1_structural_members(self, &plan);
+        let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
+        Ok(QueryCache {
+            owner: self.owner_token(),
+            slot: slot as u32,
+            generation: self.membership_cache_slot(slot).generation,
+        })
+    }
+
+    pub fn build_query2_cache<A: Clone + 'static, B: Clone + 'static>(
+        &mut self,
+        spec: QuerySpec,
+    ) -> Result<QueryCache, QueryError> {
+        if spec.exact_ids.is_some() {
+            return Err(QueryError::UnsupportedCachePolicy {
+                detail: alloc::string::String::from(
+                    "membership cache does not support exact-id specs",
+                ),
+            });
+        }
+        let (plan, _, _) = self.resolve_query2_plan::<A, B>(&spec)?;
         let members = collect_query1_structural_members(self, &plan);
         let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
         Ok(QueryCache {
@@ -126,6 +146,15 @@ impl World {
         self.invalidate_membership_cache_handle(cache);
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_membership_cache_generation_for_test(
+        &mut self,
+        cache: &QueryCache,
+        generation: u32,
+    ) {
+        self.membership_caches[cache.slot as usize].generation = generation;
+    }
+
     #[cfg(any(test, feature = "testkit"))]
     pub(crate) fn invalidate_membership_cache_handle(&mut self, cache: &QueryCache) {
         if !cache.owner.same(&self.owner_token()) {
@@ -180,11 +209,12 @@ mod tests {
     use crate::operation::StageOperation;
     use crate::query::{QueryParams, QuerySpec};
     use crate::world::WorldBuilder;
+    use alloc::vec;
 
     #[derive(Clone, Copy)]
     struct Position(#[allow(dead_code)] i32);
 
-    #[derive(Clone)]
+    #[derive(Clone, Copy)]
     struct FrameEvent(#[allow(dead_code)] u8);
 
     #[test]
@@ -200,7 +230,7 @@ mod tests {
         world.invalidate_query_cache(&cache);
         let params = QueryParams::new().membership_cache(&cache);
         assert!(matches!(
-            world.query::<Position>(QuerySpec::new(), params),
+            world.query::<Position>(&QuerySpec::new(), params),
             Err(QueryError::StaleCache)
         ));
     }
@@ -228,9 +258,196 @@ mod tests {
         world.clear_frame_events(StageOperation::Update);
 
         let count = world
-            .query::<Position>(spec, params)
+            .query::<Position>(&spec, params)
             .expect("query")
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[derive(Clone, Copy)]
+    struct Velocity(#[allow(dead_code)] i32);
+
+    #[test]
+    fn membership_cache_rejects_exact_id_specs() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        builder
+            .register_component::<Velocity>(ComponentOptions::sparse())
+            .expect("register velocity");
+        let mut world = builder.build().expect("build");
+        let spec = QuerySpec::new().exact_ids(vec![], crate::query::ExactIdPolicy::SkipUnavailable);
+        assert!(matches!(
+            world.build_query_cache::<Position>(spec),
+            Err(QueryError::UnsupportedCachePolicy { .. })
+        ));
+        assert!(matches!(
+            world.build_query2_cache::<Position, Velocity>(
+                QuerySpec::new().exact_ids(vec![], crate::query::ExactIdPolicy::SkipUnavailable,)
+            ),
+            Err(QueryError::UnsupportedCachePolicy { .. })
+        ));
+    }
+
+    #[test]
+    fn membership_cache_rejects_fingerprint_mismatch() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        builder
+            .register_component::<Velocity>(ComponentOptions::sparse())
+            .expect("register velocity");
+        let mut world = builder.build().expect("build");
+        let cache = world
+            .build_query_cache::<Position>(QuerySpec::new())
+            .expect("cache");
+        let other = QuerySpec::new().without::<Velocity>();
+        assert!(matches!(
+            world.query::<Position>(&other, QueryParams::new().membership_cache(&cache)),
+            Err(QueryError::WrongQuery { .. })
+        ));
+    }
+
+    #[test]
+    fn membership_cache_reuses_retired_slot() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let first = world
+            .build_query_cache::<Position>(QuerySpec::new())
+            .expect("first");
+        world.invalidate_query_cache(&first);
+        let second = world
+            .build_query_cache::<Position>(QuerySpec::new())
+            .expect("second");
+        assert_eq!(first.slot, second.slot);
+    }
+
+    #[test]
+    fn invalidate_ignores_foreign_owner_and_stale_generation() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let cache = world
+            .build_query_cache::<Position>(QuerySpec::new())
+            .expect("cache");
+        let foreign = QueryCache {
+            owner: crate::world::WorldOwner::new(),
+            slot: cache.slot,
+            generation: cache.generation,
+        };
+        world.invalidate_query_cache(&foreign);
+        let mut stale = cache.clone();
+        stale.generation = cache.generation.wrapping_add(1);
+        world.invalidate_query_cache(&stale);
+        assert!(world
+            .query::<Position>(
+                &QuerySpec::new(),
+                QueryParams::new().membership_cache(&cache)
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_query_params_rejects_dual_caches_and_moving_window() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position(1)).expect("insert");
+        let spec = QuerySpec::new();
+        let membership = world
+            .build_query_cache::<Position>(spec.clone())
+            .expect("membership");
+        let result = world
+            .build_query_result_cache::<Position>(spec.clone())
+            .expect("result");
+        let plan = world.resolve_query1_plan::<Position>(&spec).expect("plan");
+        let dual = QueryParams {
+            since: None,
+            cursor: None,
+            membership_cache: Some(&membership),
+            result_cache: Some(&result),
+        };
+        assert!(matches!(
+            world.validate_query_params_caches(&dual, &plan),
+            Err(QueryError::UnsupportedCachePolicy { .. })
+        ));
+
+        let added = QuerySpec::new().added::<Position>();
+        let added_plan = world
+            .resolve_query1_plan::<Position>(&added)
+            .expect("added plan");
+        assert!(matches!(
+            world.validate_query_params_caches(
+                &QueryParams::new().result_cache(&result),
+                &added_plan
+            ),
+            Err(QueryError::MovingChangeWindow)
+        ));
+    }
+
+    #[test]
+    fn invalidate_ignores_missing_cache_slot() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let missing = QueryCache {
+            owner: world.owner_token(),
+            slot: 99,
+            generation: 1,
+        };
+        world.invalidate_query_cache(&missing);
+    }
+
+    #[test]
+    fn invalidate_retires_generation_at_max_minus_one() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let cache = world
+            .build_query_cache::<Position>(QuerySpec::new())
+            .expect("cache");
+        world.set_membership_cache_generation_for_test(&cache, u32::MAX - 1);
+        let mut retiring = cache.clone();
+        retiring.generation = u32::MAX - 1;
+        world.invalidate_query_cache(&retiring);
+        assert_eq!(
+            world.membership_cache_slot(cache.slot as usize).generation,
+            RETIRED_GENERATION
+        );
+    }
+
+    #[test]
+    fn result_cache_rejects_exact_id_specs() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position(1)).expect("insert");
+        let result = world
+            .build_query_result_cache::<Position>(QuerySpec::new())
+            .expect("result");
+        let spec =
+            QuerySpec::new().exact_ids(vec![entity], crate::query::ExactIdPolicy::SkipUnavailable);
+        let plan = world.resolve_query1_plan::<Position>(&spec).expect("plan");
+        assert!(matches!(
+            world.validate_query_params_caches(&QueryParams::new().result_cache(&result), &plan),
+            Err(QueryError::ExactIdOrderConflict)
+        ));
     }
 }

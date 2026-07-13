@@ -78,3 +78,45 @@ fn discard_releases_reserved_entities() {
     assert!(!world.is_alive(entity));
     assert!(!world.has_pending_commands());
 }
+
+#[derive(Clone, Copy)]
+struct Marker;
+
+#[test]
+fn deferred_tag_insert_via_commands() {
+    use moirai::world::DynamicBundle;
+
+    let mut builder = WorldBuilder::new();
+    let tag = builder
+        .register_component::<Marker>(ComponentOptions::tag())
+        .expect("tag");
+    let mut world = builder.build().expect("build");
+    let mut bundle = DynamicBundle::new();
+    bundle.push_tag(&tag).expect("push");
+    let entity = world
+        .commands()
+        .expect("commands")
+        .spawn_bundle(bundle)
+        .expect("spawn");
+    world.flush().expect("flush");
+    assert!(world.has_tag(entity, &tag).expect("has"));
+}
+
+#[test]
+fn deferred_remove_component_via_commands() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+    let entity = world.spawn().expect("spawn");
+    world.insert(entity, Health(1)).expect("insert");
+
+    world
+        .commands()
+        .expect("commands")
+        .remove::<Health>(entity)
+        .expect("queue");
+    world.flush().expect("flush");
+    assert!(world.get::<Health>(entity).expect("get").is_none());
+}

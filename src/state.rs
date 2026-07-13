@@ -83,3 +83,64 @@ pub fn apply<S: Eq + 'static>(
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::time::ChangeTick;
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    enum Phase {
+        A,
+        B,
+        C,
+    }
+
+    #[test]
+    fn state_request_idempotent_and_conflicting() {
+        let mut state = State::new(Phase::A);
+        state.request(Phase::B).expect("first");
+        state.request(Phase::B).expect("repeat");
+        assert!(matches!(
+            state.request(Phase::C),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+        assert_eq!(state.pending(), Some(&Phase::B));
+    }
+
+    #[test]
+    fn apply_system_errors_when_state_resource_missing() {
+        use crate::schedule::stage;
+        use crate::world::WorldBuilder;
+
+        #[derive(Clone, Eq, PartialEq)]
+        enum Menu {
+            #[allow(dead_code)]
+            Open,
+        }
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<State<Menu>>();
+        let mut world = builder.build().expect("world");
+        let mut system = apply::<Menu>("apply", stage::UPDATE);
+        world
+            .begin_run(crate::operation::StageOperation::Update)
+            .expect("begin");
+        let err = (system.body)(&mut world, 0.0).expect_err("missing state");
+        assert_eq!(err, "state resource missing");
+        world.end_run();
+    }
+
+    #[test]
+    fn apply_pending_moves_current_and_records_tick() {
+        let mut state = State::new(Phase::A);
+        state.request(Phase::B).expect("request");
+        let tick = ChangeTick::from_raw(9);
+        state.apply_pending(tick);
+        assert_eq!(state.current(), &Phase::B);
+        assert_eq!(state.previous(), Some(&Phase::A));
+        assert_eq!(state.transition_tick(), Some(tick));
+        state.apply_pending(tick);
+        assert_eq!(state.current(), &Phase::B);
+    }
+}

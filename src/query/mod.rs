@@ -22,7 +22,7 @@
 //!
 //! let spec = QuerySpec::new();
 //! let count = world
-//!     .query::<Position>(spec, QueryParams::new())
+//!     .query::<Position>(&spec, QueryParams::new())
 //!     .expect("query")
 //!     .count();
 //! assert_eq!(count, 1);
@@ -47,7 +47,7 @@
 //! world.insert(entity, Velocity(1)).expect("insert");
 //!
 //! world
-//!     .for_each_mut::<Velocity>(QuerySpec::new(), QueryParams::new(), |_, vel| {
+//!     .for_each_mut::<Velocity>(&QuerySpec::new(), QueryParams::new(), |_, vel| {
 //!         vel.0 += 1;
 //!         Ok(())
 //!     })

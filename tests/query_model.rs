@@ -140,7 +140,7 @@ fn apply_op(world: &mut World, ids: &mut BTreeMap<usize, EntityId>, model: &mut 
 fn compare_query1(world: &mut World, model: &Model, ids: &BTreeMap<usize, EntityId>) {
     let spec = QuerySpec::new();
     let actual_slots: Vec<usize> = world
-        .query::<Position>(spec.clone(), QueryParams::new())
+        .query::<Position>(&spec, QueryParams::new())
         .expect("query")
         .filter_map(|(entity, _)| {
             ids.iter()
@@ -159,7 +159,7 @@ fn compare_cached(
     let spec = QuerySpec::new();
     let params = QueryParams::new().membership_cache(cache);
     let actual_slots: Vec<usize> = world
-        .query::<Position>(spec, params)
+        .query::<Position>(&spec, params)
         .expect("cached")
         .filter_map(|(entity, _)| {
             ids.iter()
@@ -221,7 +221,7 @@ fn query2_randomized_matches_reference_model() {
         apply_op(&mut world, &mut ids, &mut model, op);
         let expected = model.query_pos_vel();
         let actual: Vec<usize> = world
-            .query2::<Position, Velocity>(QuerySpec::new(), QueryParams::new())
+            .query2::<Position, Velocity>(&QuerySpec::new(), QueryParams::new())
             .expect("query2")
             .filter_map(|(entity, _, _)| {
                 ids.iter()

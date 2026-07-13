@@ -1,9 +1,11 @@
 pub(crate) mod cache;
+pub(crate) mod cached_source;
 mod collect;
 mod filter;
 mod ids;
 pub(crate) mod mutate;
 pub(crate) mod plan;
+pub(crate) mod plan_cache;
 mod query1;
 mod query2;
 pub(crate) mod result_cache;

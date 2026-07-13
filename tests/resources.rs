@@ -60,6 +60,15 @@ fn resource_scope_updates_value() {
 }
 
 #[test]
+fn resource_added_and_changed_ticks_absent_when_missing() {
+    let mut builder = WorldBuilder::new();
+    builder.register_resource::<Score>();
+    let world = builder.build().expect("build");
+    assert_eq!(world.resource_changed_tick::<Score>().expect("tick"), None);
+    assert_eq!(world.resource::<Score>().expect("get"), None);
+}
+
+#[test]
 fn resource_scope_rejects_revision_reads_of_the_scoped_resource() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();

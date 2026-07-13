@@ -126,4 +126,19 @@ fn std_feature_is_additive() {}
 
 #[cfg(feature = "testkit")]
 #[test]
-fn testkit_feature_compiles_private_module() {}
+fn testkit_namespace_paths_compile() {
+    use moirai::testkit::{
+        reports_match, CapturePolicy, MetricSample, ReplayConfig, ReplayFailure, ReplayReport,
+        ReplayRunError, StepIndex, StepRecord, StepSnapshot,
+    };
+    let _ = core::mem::size_of::<CapturePolicy>();
+    let _ = core::mem::size_of::<ReplayConfig>();
+    let _ = core::mem::size_of::<MetricSample>();
+    let _ = core::mem::size_of::<StepIndex>();
+    let _ = core::mem::size_of::<ReplayReport<u8>>();
+    let _ = core::mem::size_of::<ReplayFailure<ReplayRunError<()>, u8>>();
+    let _ = core::mem::size_of::<ReplayRunError<()>>();
+    let _ = core::mem::size_of::<StepRecord<u8>>();
+    let _ = core::mem::size_of::<StepSnapshot<u8>>();
+    let _: fn(&ReplayReport<u8>, &ReplayReport<u8>) -> bool = reports_match::<u8>;
+}

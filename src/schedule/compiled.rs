@@ -1,4 +1,3 @@
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -22,7 +21,7 @@ pub(crate) struct CompiledSystem {
     pub enabled: bool,
     pub flush_mode: FlushMode,
     pub conditions: Vec<Condition>,
-    pub in_set: Option<String>,
+    pub in_set_index: Option<usize>,
     pub id: SystemId,
 }
 
@@ -38,7 +37,7 @@ pub(crate) struct CompiledSchedule {
     pub fixed_accumulator: FixedAccumulator,
     pub startup_complete: bool,
     pub system_enabled: Vec<bool>,
-    pub set_conditions: BTreeMap<String, Condition>,
+    pub set_conditions: Vec<Condition>,
 }
 
 impl CompiledSchedule {
@@ -61,6 +60,7 @@ impl CompiledSchedule {
         self.stages[stage_index].descriptor.flush_mode
     }
 
+    #[allow(dead_code)]
     pub fn system_name(&self, system_index: usize) -> &str {
         &self.systems[system_index].name
     }
@@ -78,5 +78,70 @@ impl CompiledSchedule {
         self.system_enabled[index] = enabled;
         self.systems[index].enabled = enabled;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schedule::stage;
+    use alloc::boxed::Box;
+    use alloc::vec;
+
+    fn compiled_with_update_stage() -> CompiledSchedule {
+        CompiledSchedule {
+            owner: ScheduleOwner::new(),
+            lease: ExecutionLease::new(),
+            generation: 1,
+            stages: vec![CompiledStage {
+                descriptor: StageDescriptor {
+                    label: String::from(stage::UPDATE),
+                    operation: StageOperation::Update,
+                    flush_mode: FlushMode::Final,
+                },
+                system_order: Vec::new(),
+            }],
+            systems: Vec::new(),
+            update_stage_order: vec![0],
+            render_stage_order: Vec::new(),
+            fixed_config: None,
+            fixed_accumulator: FixedAccumulator::new(),
+            startup_complete: false,
+            system_enabled: Vec::new(),
+            set_conditions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn system_name_returns_registered_label() {
+        let mut schedule = compiled_with_update_stage();
+        schedule.systems.push(CompiledSystem {
+            name: String::from("work"),
+            stage_index: 0,
+            body: Box::new(|_world, _dt| Ok(())),
+            enabled: true,
+            flush_mode: FlushMode::Final,
+            in_set_index: None,
+            conditions: Vec::new(),
+            id: SystemId::new(schedule.owner.clone(), 0, schedule.generation),
+        });
+        schedule.system_enabled.push(true);
+        assert_eq!(schedule.system_name(0), "work");
+    }
+
+    #[test]
+    fn operation_stages_returns_update_order() {
+        let compiled = compiled_with_update_stage();
+        assert_eq!(compiled.operation_stages(StageOperation::Update), &[0]);
+    }
+
+    #[test]
+    fn set_system_enabled_rejects_stale_handle_index() {
+        let mut compiled = compiled_with_update_stage();
+        let id = SystemId::new(compiled.owner.clone(), 9, compiled.generation);
+        assert!(matches!(
+            compiled.set_system_enabled(&id, false),
+            Err(crate::schedule::ScheduleError::StaleHandle)
+        ));
     }
 }

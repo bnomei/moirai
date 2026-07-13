@@ -48,3 +48,33 @@ pub(crate) struct StageDescriptor {
     pub operation: StageOperation,
     pub flush_mode: crate::schedule::FlushMode,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_id_index_round_trip() {
+        let owner = ScheduleOwner::new();
+        let id = StageId::new(owner, 3);
+        assert_eq!(id.index(), 3);
+    }
+
+    #[test]
+    fn stage_id_owner_mismatch_is_rejected() {
+        let owner_a = ScheduleOwner::new();
+        let owner_b = ScheduleOwner::new();
+        let id = StageId::new(owner_a, 0);
+        assert!(matches!(
+            id.validate_owner(&owner_b),
+            Err(crate::schedule::ScheduleError::OwnerMismatch)
+        ));
+    }
+
+    #[test]
+    fn stage_id_owner_match_is_accepted() {
+        let owner = ScheduleOwner::new();
+        let id = StageId::new(owner.clone(), 0);
+        assert!(id.validate_owner(&owner).is_ok());
+    }
+}

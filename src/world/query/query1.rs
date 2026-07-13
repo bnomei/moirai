@@ -1,61 +1,80 @@
-use alloc::vec::Vec;
-
 use crate::entity::EntityId;
 use crate::query::{Query1, QueryError, QueryParams, QuerySpec};
 use crate::storage::TypedSparseStorage;
 use crate::time::ChangeTick;
 use crate::world::World;
 
+use super::cached_source::QueryCachedSource;
 use super::filter::{entity_matches, validate_exact_ids};
 use super::plan::{ResolvedPlan, TraversalSource};
-use super::spec::resolve_query1;
 
 impl World {
     pub fn query_fingerprint<T: Clone + 'static>(
-        &self,
+        &mut self,
         spec: &QuerySpec,
     ) -> Result<u64, QueryError> {
-        Ok(resolve_query1::<T>(self, spec)?.fingerprint)
+        Ok(self.resolve_query1_plan::<T>(spec)?.fingerprint)
     }
 
     pub fn query<'w, 'c, T: Clone + 'static>(
         &'w mut self,
-        spec: QuerySpec,
+        spec: &QuerySpec,
         params: QueryParams<'c>,
     ) -> Result<Query1<'w, 'c, T>, QueryError> {
-        let plan = resolve_query1::<T>(self, &spec)?;
+        let plan = self.resolve_query1_plan::<T>(spec)?;
         validate_exact_ids(self, &plan)?;
         self.validate_query_params_caches(&params, &plan)?;
         let captured_now = self.change_tick();
         let since = params.since_tick(plan.fingerprint, self)?;
-        let cached_ids = if params.membership_cache.is_some() || params.result_cache.is_some() {
-            Some(
-                self.resolve_cached_entities(&params, &plan, since, captured_now)?
-                    .clone(),
-            )
+
+        let table_component = match &plan.traversal {
+            TraversalSource::Table { component_index } => Some(*component_index),
+            _ => None,
+        };
+
+        let cached = if let Some(cache) = params.result_cache {
+            self.refresh_result_cache(cache, &plan, since, captured_now)?;
+            Some(QueryCachedSource::Result(cache.clone()))
+        } else if let Some(cache) = params.membership_cache {
+            self.refresh_membership_cache(cache, &plan)?;
+            Some(QueryCachedSource::Membership(cache.clone()))
         } else {
             None
         };
-        Query1::new(self, plan, since, captured_now, params.cursor, cached_ids)
+
+        if let Some(component_index) = table_component {
+            self.ensure_table_archetypes(component_index);
+        }
+        let table_archetypes =
+            table_component.map(|index| self.table_archetype_cache[index].as_slice());
+
+        Query1::new(
+            self,
+            plan,
+            since,
+            captured_now,
+            params.cursor,
+            cached,
+            table_archetypes,
+        )
     }
 
-    pub(crate) fn query1_state<T: Clone + 'static>(
-        &self,
+    pub(crate) fn query1_state<'w, T: Clone + 'static>(
+        &'w self,
         plan: &ResolvedPlan,
-        cached_ids: Option<Vec<EntityId>>,
-    ) -> Result<crate::query::Query1State<'_, T>, QueryError> {
-        if let Some(ids) = cached_ids {
-            return Ok(crate::query::Query1State::Cached { ids, index: 0 });
+        cached: Option<QueryCachedSource>,
+        table_archetypes: Option<&'w [usize]>,
+    ) -> Result<crate::query::Query1State<'w, T>, QueryError> {
+        if let Some(source) = cached {
+            return Ok(crate::query::Query1State::Cached { source, index: 0 });
         }
         match &plan.traversal {
             TraversalSource::Sparse { component_index } => {
                 let store = self.sparse_store_by_index::<T>(*component_index)?;
                 Ok(crate::query::Query1State::Sparse { store, index: 0 })
             }
-            TraversalSource::Table { component_index } => {
-                let archetypes = self
-                    .archetypes
-                    .archetypes_with_component(*component_index as u32);
+            TraversalSource::Table { .. } => {
+                let archetypes = table_archetypes.expect("table archetypes prepared");
                 Ok(crate::query::Query1State::Table {
                     archetypes,
                     archetype_index: 0,
@@ -95,6 +114,20 @@ impl World {
             return None;
         }
         self.archetypes.get_table(entity, plan.primary_index as u32)
+    }
+
+    pub(crate) fn query1_match_cached<T: Clone + 'static>(
+        &self,
+        entity: EntityId,
+        plan: &ResolvedPlan,
+    ) -> Option<&T> {
+        if plan.primary_is_table {
+            self.archetypes.get_table(entity, plan.primary_index as u32)
+        } else {
+            self.sparse_store_by_index::<T>(plan.primary_index)
+                .ok()?
+                .get(entity)
+        }
     }
 
     pub(crate) fn query1_match_any_storage<T: Clone + 'static>(

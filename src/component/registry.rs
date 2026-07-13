@@ -143,6 +143,16 @@ impl ComponentRegistry {
         self.entries.get(id.index()).map(|entry| entry.is_tag)
     }
 
+    pub(crate) fn entry_is_tag(&self, index: usize) -> bool {
+        self.entries.get(index).is_some_and(|entry| entry.is_tag)
+    }
+
+    pub(crate) fn entry_is_table(&self, index: usize) -> bool {
+        self.entries
+            .get(index)
+            .is_some_and(|entry| entry.storage == StorageKind::Table)
+    }
+
     pub(crate) fn component_name(&self, id: &ComponentId) -> String {
         self.entries
             .get(id.index())
@@ -252,17 +262,16 @@ impl ComponentRegistry {
         align: usize,
     ) -> Option<(usize, ConflictKind)> {
         for (index, entry) in self.entries.iter().enumerate() {
-            if entry.type_id == type_id
-                && type_id.is_some()
-                && (entry.name != name
+            if entry.type_id == type_id && type_id.is_some() {
+                if entry.size != size || entry.align != align {
+                    return Some((index, ConflictKind::Layout));
+                } else if entry.name != name
                     || entry.is_tag != options.is_tag()
                     || entry.storage != options.storage()
-                    || entry.size != size
-                    || entry.align != align)
-            {
-                return Some((index, ConflictKind::Type));
-            }
-            if entry.name == name
+                {
+                    return Some((index, ConflictKind::Type));
+                }
+            } else if entry.name == name
                 && (entry.type_id != type_id
                     || entry.is_tag != options.is_tag()
                     || entry.storage != options.storage()
@@ -271,14 +280,21 @@ impl ComponentRegistry {
             {
                 return Some((index, ConflictKind::Name));
             }
-            if entry.type_id == type_id
-                && type_id.is_some()
-                && (entry.size != size || entry.align != align)
-            {
-                return Some((index, ConflictKind::Layout));
-            }
         }
         None
+    }
+
+    #[cfg(test)]
+    pub(crate) fn find_conflict_for_test(
+        &self,
+        type_id: Option<TypeId>,
+        name: &str,
+        options: ComponentOptions,
+        size: usize,
+        align: usize,
+    ) -> bool {
+        self.find_conflict(type_id, name, options, size, align)
+            .is_some()
     }
 
     fn validate_typed_tag<T: 'static>(name: &str) -> Result<(), RegistrationError> {
@@ -342,3 +358,13 @@ impl std::error::Error for RegistrationError {}
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod default_tests {
+    use super::ComponentRegistry;
+
+    #[test]
+    fn default_registry_is_empty() {
+        assert_eq!(ComponentRegistry::default().len(), 0);
+    }
+}

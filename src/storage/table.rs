@@ -134,3 +134,55 @@ impl<T: Clone + 'static> ErasedTableColumn for TypedTableColumn<T> {
         self.changed.get(row).copied().map(ChangeTick::from_raw)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Score(i32);
+
+    #[test]
+    fn type_id_reports_component_type() {
+        let column = TypedTableColumn::<Score>::new();
+        assert_eq!(ErasedTableColumn::type_id(&column), TypeId::of::<Score>());
+    }
+
+    #[test]
+    fn replace_value_appends_when_row_is_out_of_range() {
+        let mut column = TypedTableColumn::<Score>::new();
+        let tick = ChangeTick::from_raw(3);
+        assert!(column.replace_value(4, Box::new(Score(7)), tick).is_none());
+        assert_eq!(column.len(), 1);
+        assert_eq!(
+            column
+                .get_value(0)
+                .and_then(|value| value.downcast_ref::<Score>()),
+            Some(&Score(7))
+        );
+    }
+
+    #[test]
+    fn replace_value_refreshes_added_tick_for_unstamped_rows() {
+        let mut column = TypedTableColumn::<Score>::new();
+        let tick = ChangeTick::from_raw(8);
+        let row = column.append_value(Box::new(Score(1)), ChangeTick::from_raw(1));
+        column.added[row] = 0;
+        column.changed[row] = 0;
+        assert!(column
+            .replace_value(row, Box::new(Score(2)), tick)
+            .is_some());
+        assert_eq!(column.added[row], tick.raw());
+    }
+
+    #[test]
+    fn stamp_row_marks_added_for_fresh_rows() {
+        let mut column = TypedTableColumn::<Score>::new();
+        let first = ChangeTick::from_raw(1);
+        let row = column.append_value(Box::new(Score(1)), first);
+        let second = ChangeTick::from_raw(2);
+        let _ = column.replace_value(row, Box::new(Score(2)), second);
+        assert_eq!(column.added_tick(row), Some(first));
+        assert_eq!(column.changed_tick(row), Some(second));
+    }
+}

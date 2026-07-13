@@ -174,8 +174,7 @@ impl EntityAllocator {
             Some((SlotState::Free | SlotState::Reserved, _)) if expected == SlotState::Live => {
                 Err(AllocatorError::StaleEntity)
             }
-            Some((SlotState::Free | SlotState::Reserved, _)) => Err(AllocatorError::NotLive),
-            Some((SlotState::Live, _)) => Err(AllocatorError::NotLive),
+            Some(_) => Err(AllocatorError::NotLive),
             None => Err(AllocatorError::StaleEntity),
         }
     }
@@ -196,6 +195,17 @@ impl EntityAllocator {
     #[cfg(test)]
     pub(crate) fn set_generation_for_test(&mut self, id: EntityId, generation: u32) {
         self.generations[id.slot() as usize] = generation;
+    }
+
+    #[cfg(test)]
+    #[allow(private_interfaces)]
+    pub(crate) fn ensure_state_for_test(
+        &self,
+        slot: usize,
+        expected: SlotState,
+        generation: u32,
+    ) -> Result<(), AllocatorError> {
+        self.ensure_state(slot, expected, generation)
     }
 }
 

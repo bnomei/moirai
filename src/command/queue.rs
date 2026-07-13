@@ -326,3 +326,108 @@ impl Default for CommandQueue {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Health(#[allow(dead_code)] i32);
+
+    fn world_with_health() -> World {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("health");
+        builder.build().expect("build")
+    }
+
+    #[test]
+    fn preflight_rejects_invalid_spawn_insert_and_remove_targets() {
+        let mut world = world_with_health();
+        let live = world.spawn().expect("live");
+        let stale = EntityId::from_parts(99, 1);
+        let mut queue = CommandQueue::new();
+        queue.push(CommandOp::SpawnReserved { entity: live });
+        assert!(matches!(
+            queue.preflight(&world),
+            Err(FlushError::CommandValidation { .. })
+        ));
+
+        queue = CommandQueue::new();
+        queue.push(CommandOp::Insert {
+            entity: stale,
+            component_index: 0,
+            value: Box::new(Health(1)),
+        });
+        assert!(matches!(
+            queue.preflight(&world),
+            Err(FlushError::CommandValidation { .. })
+        ));
+
+        queue = CommandQueue::new();
+        queue.push(CommandOp::InsertTag {
+            entity: stale,
+            component_index: 0,
+        });
+        assert!(matches!(
+            queue.preflight(&world),
+            Err(FlushError::CommandValidation { .. })
+        ));
+
+        queue = CommandQueue::new();
+        queue.push(CommandOp::Remove {
+            entity: stale,
+            component_index: 0,
+        });
+        assert!(matches!(
+            queue.preflight(&world),
+            Err(FlushError::CommandValidation { .. })
+        ));
+    }
+
+    #[test]
+    fn preflight_dedupes_live_set_for_duplicate_reserved_spawns() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        let mut queue = CommandQueue::new();
+        queue.push(CommandOp::SpawnReserved { entity: reserved });
+        queue.push(CommandOp::SpawnReserved { entity: reserved });
+        queue.preflight(&world).expect("valid batch");
+    }
+
+    #[test]
+    fn helper_errors_and_default_queue() {
+        let entity = EntityId::from_parts(1, 1);
+        assert!(matches!(
+            map_allocator_error(entity, AllocatorError::StaleEntity),
+            WorldError::StaleEntity { .. }
+        ));
+        assert!(matches!(
+            map_allocator_error(entity, AllocatorError::GenerationOverflow),
+            WorldError::Allocator(crate::world::WorldAllocatorError::GenerationOverflow)
+        ));
+        assert!(matches!(
+            map_allocator_error(entity, AllocatorError::SlotRetired),
+            WorldError::Allocator(crate::world::WorldAllocatorError::SlotRetired)
+        ));
+        assert!(!format_world_error(WorldError::StaleEntity { entity }).is_empty());
+        assert!(CommandQueue::default().is_empty());
+    }
+
+    #[test]
+    fn live_set_push_tracks_entities_not_seen_yet() {
+        let mut live = LiveSet {
+            entities: alloc::vec::Vec::new(),
+        };
+        let entity = EntityId::from_parts(4, 1);
+        live.insert(entity);
+        assert!(live.contains(entity));
+    }
+}

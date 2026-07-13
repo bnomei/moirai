@@ -248,12 +248,23 @@ impl ScheduleBuilder {
             });
         }
 
+        let mut set_conditions = Vec::with_capacity(self.sets.len());
+        let mut set_index_map = BTreeMap::<String, usize>::new();
+        for (index, (label, condition)) in self.sets.into_iter().enumerate() {
+            set_index_map.insert(label, index);
+            set_conditions.push(condition);
+        }
+
         let mut compiled_systems = Vec::with_capacity(self.systems.len());
         for (index, system) in self.systems.into_iter().enumerate() {
             let stage_index = *self
                 .stage_index
                 .get(&system.stage_label)
                 .expect("validated stage");
+            let in_set_index = system
+                .in_set
+                .as_ref()
+                .and_then(|label| set_index_map.get(label).copied());
             compiled_systems.push(CompiledSystem {
                 name: system.name.clone(),
                 stage_index,
@@ -261,7 +272,7 @@ impl ScheduleBuilder {
                 enabled: system.enabled,
                 flush_mode: system.flush_mode,
                 conditions: system.conditions,
-                in_set: system.in_set,
+                in_set_index,
                 id: crate::schedule::system::SystemId::new(
                     self.owner.clone(),
                     index as u32,
@@ -305,7 +316,7 @@ impl ScheduleBuilder {
                 fixed_accumulator: FixedAccumulator::new(),
                 startup_complete: false,
                 system_enabled,
-                set_conditions: self.sets,
+                set_conditions,
             },
         })
     }
@@ -402,4 +413,80 @@ fn topological_sort(
     }
 
     Ok(order)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::WorldBuilder;
+    use crate::StageOperation;
+
+    #[test]
+    fn build_rejects_running_world() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        world.begin_run(StageOperation::Update).expect("begin");
+        assert!(matches!(
+            ScheduleBuilder::standard().build(&mut world),
+            Err(BuildError::WorldRunning)
+        ));
+        world.end_run();
+    }
+
+    #[test]
+    fn build_detects_duplicate_labels_when_add_system_validation_bypassed() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let mut builder = ScheduleBuilder::standard();
+        builder
+            .systems
+            .push(System::new("dup", stage::UPDATE, |_world, _dt| {}));
+        builder
+            .systems
+            .push(System::new("dup", stage::UPDATE, |_world, _dt| {}));
+        assert!(matches!(
+            builder.build(&mut world),
+            Err(BuildError::DuplicateSystemLabel { label })
+                if label == "dup"
+        ));
+    }
+
+    #[test]
+    fn build_detects_fixed_update_without_config_when_add_system_validation_bypassed() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let mut builder = ScheduleBuilder::new();
+        builder
+            .add_stage(stage::FIXED_UPDATE, StageOperation::Update)
+            .expect("stage");
+        builder
+            .systems
+            .push(System::new("fixed", stage::FIXED_UPDATE, |_world, _dt| {}));
+        assert!(matches!(
+            builder.build(&mut world),
+            Err(BuildError::FixedUpdateWithoutConfig)
+        ));
+    }
+
+    #[test]
+    fn topological_sort_rejects_unknown_before_and_after_edges() {
+        let stage = StageDescriptor {
+            label: String::from(stage::UPDATE),
+            operation: StageOperation::Update,
+            flush_mode: FlushMode::Final,
+        };
+        let stages = vec![stage];
+        let mut names = BTreeMap::new();
+        names.insert(String::from("leaf"), 0);
+        let systems = vec![System::new("leaf", stage::UPDATE, |_world, _dt| {}).before("ghost")];
+        assert!(matches!(
+            topological_sort(0, &[0], &systems, &stages, &names),
+            Err(BuildError::UnknownSystem { label })
+                if label == "ghost"
+        ));
+
+        let systems = vec![System::new("leaf", stage::UPDATE, |_world, _dt| {}).after("missing")];
+        assert!(matches!(
+            topological_sort(0, &[0], &systems, &stages, &names),
+            Err(BuildError::UnknownSystem { label })
+                if label == "missing"
+        ));
+    }
 }

@@ -93,6 +93,23 @@ impl ArchetypeStorage {
         None
     }
 
+    #[cfg(test)]
+    pub(crate) fn write_migration_column_for_test<T: Clone + 'static>(
+        &mut self,
+        archetype: usize,
+        component_index: u32,
+        row: usize,
+        value: T,
+        tick: ChangeTick,
+    ) {
+        let column = self.column_position(archetype, component_index);
+        if self.columns[archetype][column].len() <= row {
+            self.columns[archetype][column].append_value(Box::new(value), tick);
+        } else {
+            let _ = self.columns[archetype][column].replace_value(row, Box::new(value), tick);
+        }
+    }
+
     pub fn get_table<T: Clone + 'static>(
         &self,
         entity: EntityId,
@@ -200,6 +217,13 @@ impl ArchetypeStorage {
 
     pub fn table_component_indices(&self, entity: EntityId) -> Vec<u32> {
         self.signature_for(entity).components.clone()
+    }
+
+    pub(crate) fn has_component(&self, entity: EntityId, component_index: u32) -> bool {
+        let Some(location) = self.location(entity) else {
+            return false;
+        };
+        self.signatures[location.archetype as usize].contains(component_index)
     }
 
     pub(crate) fn archetypes_with_component(&self, component_index: u32) -> Vec<usize> {
@@ -429,5 +453,169 @@ fn append_row_between(
 impl ComponentRegistry {
     pub(crate) fn is_table_component(&self, component_id: &ComponentId) -> bool {
         matches!(self.storage_kind(component_id), Some(StorageKind::Table))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::time::ChangeTick;
+    use alloc::vec;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Health(i32);
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Mana(i32);
+
+    fn entity(slot: u32) -> EntityId {
+        EntityId::from_parts(slot, 1)
+    }
+
+    fn table_storage() -> ArchetypeStorage {
+        let mut factories = vec![None, None];
+        factories[0] = Some(table_column_factory::<Health>());
+        factories[1] = Some(table_column_factory::<Mana>());
+        ArchetypeStorage::new(factories)
+    }
+
+    #[test]
+    fn insert_replace_and_remove_table_paths() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(1);
+        let later = ChangeTick::from_raw(2);
+        assert!(storage
+            .insert_table(entity(1), 0, Health(3), tick)
+            .is_none());
+        assert_eq!(
+            storage.insert_table(entity(1), 0, Health(9), later),
+            Some(Health(3))
+        );
+        assert_eq!(
+            storage.get_table::<Health>(entity(1), 0).map(|h| h.0),
+            Some(9)
+        );
+        assert!(!storage.remove_table_index(entity(1), 1));
+        storage.insert_table(entity(1), 1, Mana(2), later);
+        assert!(storage.remove_table_index(entity(1), 1));
+        assert!(!storage.has_component(entity(1), 1));
+        assert!(storage.table_added_tick(entity(1), 0).is_some());
+        assert!(storage
+            .get_table_mut::<Health>(entity(1), 0, later)
+            .is_some());
+    }
+
+    #[test]
+    fn get_two_table_mut_rejects_duplicate_index_and_missing_components() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(1);
+        storage.insert_table(entity(2), 0, Health(1), tick);
+        assert!(storage
+            .get_two_table_mut::<Health, Mana>(entity(2), 0, 0, tick)
+            .is_none());
+        assert!(storage
+            .get_two_table_mut::<Health, Mana>(entity(2), 0, 1, tick)
+            .is_none());
+        storage.insert_table(entity(2), 1, Mana(4), tick);
+        let (health, mana) = storage
+            .get_two_table_mut::<Health, Mana>(entity(2), 0, 1, tick)
+            .expect("pair");
+        assert_eq!(health.0, 1);
+        assert_eq!(mana.0, 4);
+    }
+
+    #[test]
+    fn has_component_and_remove_entity_clear_location() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(3);
+        storage.insert_table(entity(3), 0, Health(2), tick);
+        assert!(storage.has_component(entity(3), 0));
+        assert!(!storage.has_component(entity(9), 0));
+        storage.remove_entity(entity(3));
+        assert!(!storage.has_component(entity(3), 0));
+    }
+
+    #[test]
+    fn place_entity_reuses_row_when_signature_unchanged() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(4);
+        storage.insert_table(entity(4), 0, Health(1), tick);
+        let before = storage.get_table::<Health>(entity(4), 0).copied();
+        storage.insert_table(entity(4), 0, Health(2), tick);
+        assert_eq!(
+            storage.get_table::<Health>(entity(4), 0).copied(),
+            before.map(|_| Health(2))
+        );
+    }
+
+    #[test]
+    fn table_tick_and_mut_access_reject_missing_component_index() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(5);
+        storage.insert_table(entity(6), 0, Health(4), tick);
+        assert!(storage
+            .get_table_mut::<Health>(entity(6), 1, tick)
+            .is_none());
+        assert!(storage.table_added_tick(entity(6), 1).is_none());
+        assert!(storage.table_changed_tick(entity(6), 1).is_none());
+    }
+
+    #[test]
+    fn insert_second_table_component_reuses_existing_row_when_present() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(7);
+        storage.insert_table(entity(8), 0, Health(1), tick);
+        storage.insert_table(entity(9), 0, Health(2), tick);
+        storage.insert_table(entity(8), 1, Mana(3), tick);
+        storage.insert_table(entity(9), 1, Mana(4), tick);
+        assert_eq!(
+            storage.get_table::<Mana>(entity(8), 1).copied(),
+            Some(Mana(3))
+        );
+        assert_eq!(
+            storage.get_table::<Mana>(entity(9), 1).copied(),
+            Some(Mana(4))
+        );
+    }
+
+    #[test]
+    fn migration_column_write_uses_replace_when_len_exceeds_row() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(9);
+        storage.insert_table(entity(40), 0, Health(1), tick);
+        storage.insert_table(entity(40), 1, Mana(1), tick);
+        let archetype = storage.location(entity(40)).expect("located").archetype as usize;
+        storage.write_migration_column_for_test(archetype, 1, 0, Mana(7), tick);
+        assert_eq!(
+            storage.get_table::<Mana>(entity(40), 1).map(|m| m.0),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn insert_table_migration_replaces_when_target_column_is_longer_than_row() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(8);
+        storage.insert_table(entity(20), 0, Health(1), tick);
+        storage.insert_table(entity(20), 1, Mana(3), tick);
+        storage.insert_table(entity(21), 0, Health(2), tick);
+        let archetype = storage.location(entity(20)).expect("located").archetype as usize;
+        storage.write_migration_column_for_test(archetype, 1, 1, Mana(99), tick);
+        storage.insert_table(entity(21), 1, Mana(5), tick);
+        assert_eq!(
+            storage.get_table::<Mana>(entity(21), 1).map(|m| m.0),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn place_entity_returns_existing_row_for_current_archetype() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(6);
+        storage.insert_table(entity(7), 0, Health(1), tick);
+        let location = storage.location(entity(7)).expect("location");
+        let signature = storage.signature_for(entity(7));
+        let row = storage.place_entity(entity(7), &signature, tick);
+        assert_eq!(row, location.row);
     }
 }

@@ -78,3 +78,44 @@ impl Default for QueryParams<'_> {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::query::QuerySpec;
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Marker(#[allow(dead_code)] u8);
+
+    #[test]
+    fn default_matches_new() {
+        let params = QueryParams::default();
+        assert!(params.since.is_none());
+        assert!(params.cursor.is_none());
+        assert!(params.membership_cache.is_none());
+        assert!(params.result_cache.is_none());
+    }
+
+    #[test]
+    fn commit_cursor_validates_and_commits_active_cursor() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Marker(1)).expect("insert");
+
+        let spec = QuerySpec::new().added::<Marker>();
+        let fingerprint = world.query_fingerprint::<Marker>(&spec).expect("fp");
+        let mut cursor = QueryCursor::from_spec_start::<Marker>(&mut world, &spec).expect("cursor");
+        let mut params = QueryParams::new().cursor(&mut cursor);
+        let captured_now = world.change_tick();
+        params
+            .commit_cursor(fingerprint, &world, captured_now)
+            .expect("commit");
+        assert_eq!(cursor.since(), captured_now);
+    }
+}

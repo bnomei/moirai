@@ -1,11 +1,13 @@
+use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 use crate::entity::EntityId;
+use crate::world::query::cached_source::QueryCachedSource;
 
 /// Immutable single-component query iterator.
 pub struct Query1<'w, 'c, T: Clone + 'static> {
     pub(crate) world: &'w crate::world::World,
-    pub(crate) plan: crate::world::query::plan::ResolvedPlan,
+    pub(crate) plan: Rc<crate::world::query::plan::ResolvedPlan>,
     pub(crate) params_fingerprint: u64,
     pub(crate) captured_now: crate::time::ChangeTick,
     pub(crate) since: crate::time::ChangeTick,
@@ -20,7 +22,7 @@ pub(crate) enum Query1State<'w, T: Clone + 'static> {
         index: usize,
     },
     Table {
-        archetypes: Vec<usize>,
+        archetypes: &'w [usize],
         archetype_index: usize,
         row: usize,
     },
@@ -29,7 +31,7 @@ pub(crate) enum Query1State<'w, T: Clone + 'static> {
         index: usize,
     },
     Cached {
-        ids: Vec<EntityId>,
+        source: QueryCachedSource,
         index: usize,
     },
     Done,
@@ -46,13 +48,14 @@ pub struct Query2<'w, 'c, A: Clone + 'static, B: Clone + 'static> {
 impl<'w, 'c, T: Clone + 'static> Query1<'w, 'c, T> {
     pub(crate) fn new(
         world: &'w crate::world::World,
-        plan: crate::world::query::plan::ResolvedPlan,
+        plan: Rc<crate::world::query::plan::ResolvedPlan>,
         since: crate::time::ChangeTick,
         captured_now: crate::time::ChangeTick,
         cursor: Option<&'c mut crate::query::QueryCursor>,
-        cached_ids: Option<Vec<EntityId>>,
+        cached: Option<QueryCachedSource>,
+        table_archetypes: Option<&'w [usize]>,
     ) -> Result<Self, crate::query::QueryError> {
-        let state = world.query1_state::<T>(&plan, cached_ids)?;
+        let state = world.query1_state::<T>(&plan, cached, table_archetypes)?;
         Ok(Self {
             world,
             params_fingerprint: plan.fingerprint,
@@ -147,16 +150,33 @@ impl<'w, 'c, T: Clone + 'static> Iterator for Query1<'w, 'c, T> {
                     }
                     self.state = Query1State::Done;
                 }
-                Query1State::Cached { ids, index } => {
+                Query1State::Cached { source, index } => {
+                    let ids = match self
+                        .world
+                        .cached_query_entities(source, self.params_fingerprint)
+                    {
+                        Ok(ids) => ids,
+                        Err(_) => {
+                            self.state = Query1State::Done;
+                            continue;
+                        }
+                    };
                     while *index < ids.len() {
                         let entity = ids[*index];
                         *index += 1;
-                        if let Some(value) = self.world.query1_match_any_storage::<T>(
-                            entity,
-                            &self.plan,
-                            self.since,
-                            self.captured_now,
-                        ) {
+                        let value = if self.plan.added_index.is_some()
+                            || self.plan.changed_index.is_some()
+                        {
+                            self.world.query1_match_any_storage::<T>(
+                                entity,
+                                &self.plan,
+                                self.since,
+                                self.captured_now,
+                            )
+                        } else {
+                            self.world.query1_match_cached::<T>(entity, &self.plan)
+                        };
+                        if let Some(value) = value {
                             return Some((entity, value));
                         }
                     }
@@ -179,16 +199,25 @@ impl<'w, 'c, A: Clone + 'static, B: Clone + 'static> Query2<'w, 'c, A, B> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         world: &'w crate::world::World,
-        plan: crate::world::query::plan::ResolvedPlan,
+        plan: Rc<crate::world::query::plan::ResolvedPlan>,
         since: crate::time::ChangeTick,
         captured_now: crate::time::ChangeTick,
         cursor: Option<&'c mut crate::query::QueryCursor>,
-        cached_ids: Option<Vec<EntityId>>,
+        cached: Option<QueryCachedSource>,
+        table_archetypes: Option<&'w [usize]>,
         second_index: usize,
         second_is_table: bool,
     ) -> Result<Self, crate::query::QueryError> {
         Ok(Self {
-            inner: Query1::new(world, plan, since, captured_now, cursor, cached_ids)?,
+            inner: Query1::new(
+                world,
+                plan,
+                since,
+                captured_now,
+                cursor,
+                cached,
+                table_archetypes,
+            )?,
             second_index,
             second_is_table,
             _marker: core::marker::PhantomData,
@@ -210,5 +239,135 @@ impl<'w, 'c, A: Clone + 'static, B: Clone + 'static> Iterator for Query2<'w, 'c,
                 return Some((entity, first, second));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::query::{QueryError, QuerySpec};
+    use crate::world::query::plan::{ResolvedPlan, TraversalSource};
+    use crate::world::WorldBuilder;
+    use alloc::rc::Rc;
+
+    #[derive(Clone, Copy)]
+    struct Pos(i32);
+
+    #[derive(Clone, Copy)]
+    struct Vel(#[allow(dead_code)] i32);
+
+    fn sparse_world() -> crate::world::World {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Pos>(ComponentOptions::sparse())
+            .expect("pos");
+        builder
+            .register_component::<Vel>(ComponentOptions::sparse())
+            .expect("vel");
+        builder.build().expect("build")
+    }
+
+    #[test]
+    fn cached_iterator_stops_when_cache_lookup_fails_mid_iteration() {
+        use crate::world::query::cached_source::QueryCachedSource;
+
+        let mut world = sparse_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("insert");
+        let plan = world
+            .resolve_query1_plan::<Pos>(&QuerySpec::new())
+            .expect("plan");
+        let cache = world
+            .build_query_cache::<Pos>(QuerySpec::new())
+            .expect("cache");
+        let stale = cache.clone();
+        world.invalidate_query_cache(&cache);
+        let mut iter = Query1::<Pos> {
+            world: &world,
+            plan: plan.clone(),
+            params_fingerprint: plan.fingerprint,
+            captured_now: world.change_tick(),
+            since: crate::time::ChangeTick::ZERO,
+            cursor_committed: false,
+            cursor: None,
+            state: Query1State::Cached {
+                source: QueryCachedSource::Membership(stale),
+                index: 0,
+            },
+        };
+        assert!(iter.next().is_none());
+        assert!(matches!(iter.state, Query1State::Done));
+    }
+
+    #[test]
+    fn query2_new_propagates_query1_resolution_errors() {
+        let world = sparse_world();
+        let plan = Rc::new(crate::world::query::plan::ResolvedPlan {
+            fingerprint: 1,
+            primary_index: 0,
+            primary_is_table: false,
+            traversal: crate::world::query::plan::TraversalSource::Sparse {
+                component_index: 99,
+            },
+            required_indices: alloc::vec![99],
+            without_indices: alloc::vec![],
+            with_tag_indices: alloc::vec![],
+            without_tag_indices: alloc::vec![],
+            added_index: None,
+            changed_index: None,
+            exact_id_policy: None,
+        });
+        assert!(matches!(
+            Query2::<Pos, Vel>::new(
+                &world,
+                plan,
+                crate::time::ChangeTick::ZERO,
+                crate::time::ChangeTick::ZERO,
+                None,
+                None,
+                None,
+                1,
+                false,
+            ),
+            Err(QueryError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn query2_iterator_skips_entities_missing_second_component() {
+        let mut world = sparse_world();
+        let partial = world.spawn().expect("partial");
+        let matched = world.spawn().expect("matched");
+        world.insert(partial, Pos(1)).expect("partial");
+        world.insert(matched, Pos(2)).expect("matched pos");
+        world.insert(matched, Vel(9)).expect("matched vel");
+        let plan = Rc::new(ResolvedPlan {
+            fingerprint: 1,
+            primary_index: 0,
+            primary_is_table: false,
+            traversal: TraversalSource::Sparse { component_index: 0 },
+            required_indices: alloc::vec![0],
+            without_indices: alloc::vec![],
+            with_tag_indices: alloc::vec![],
+            without_tag_indices: alloc::vec![],
+            added_index: None,
+            changed_index: None,
+            exact_id_policy: None,
+        });
+        let mut iter = Query2::<Pos, Vel>::new(
+            &world,
+            plan,
+            crate::time::ChangeTick::ZERO,
+            world.change_tick(),
+            None,
+            None,
+            None,
+            1,
+            false,
+        )
+        .expect("query2");
+        assert_eq!(iter.next().map(|(_, pos, _)| pos.0), Some(2));
+        assert!(iter.next().is_none());
     }
 }

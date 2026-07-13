@@ -283,3 +283,122 @@ impl SparseStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::EntityId;
+    use crate::time::ChangeTick;
+
+    fn entity(slot: u32) -> EntityId {
+        EntityId::from_parts(slot, 1)
+    }
+
+    #[test]
+    fn typed_sparse_erased_trait_round_trip() {
+        let mut store = SparseStore::new_typed::<i32>();
+        let tick = ChangeTick::from_raw(1);
+        let typed = store.typed_mut::<i32>().expect("typed");
+        typed.insert_with_tick(entity(1), 7, tick);
+        *typed.get_mut_with_tick(entity(1), tick).expect("mut") = 9;
+        assert_eq!(store.sparse_added_tick(entity(1)), Some(tick));
+        assert_eq!(store.sparse_changed_tick(entity(1)), Some(tick));
+        store.remove_entity(entity(1));
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn tag_sparse_store_tracks_membership_and_ticks() {
+        let mut store = SparseStore::new_tag();
+        let tick = ChangeTick::from_raw(2);
+        let tag = store.tag_mut().expect("tag");
+        assert!(tag.insert_with_tick(entity(4), tick));
+        assert!(store.contains_entity(entity(4)));
+        assert_eq!(store.sparse_added_tick(entity(4)), Some(tick));
+        store.remove_entity(entity(4));
+        assert!(!store.contains_entity(entity(4)));
+    }
+
+    #[test]
+    fn empty_sparse_store_is_inert() {
+        let mut store = SparseStore::new_empty();
+        assert_eq!(store.len(), 0);
+        assert!(!store.contains_entity(entity(0)));
+        assert!(store.dense_slots().is_empty());
+        store.remove_entity(entity(0));
+        assert!(store.typed::<i32>().is_none());
+        assert!(store.tag().is_none());
+        assert!(store.as_erased_mut().is_none());
+        assert!(store.sparse_added_tick(entity(0)).is_none());
+        assert!(store.sparse_changed_tick(entity(0)).is_none());
+    }
+
+    #[test]
+    fn tag_sparse_storage_implements_erased_trait() {
+        let mut tag = TagSparseStorage::new();
+        let tick = ChangeTick::from_raw(4);
+        assert!(tag.insert_with_tick(entity(5), tick));
+        let erased: &mut dyn ErasedSparseStorage = &mut tag;
+        assert!(erased.contains_entity(entity(5)));
+        assert_eq!(erased.len(), 1);
+        assert_eq!(erased.added_tick(entity(5)), Some(tick));
+        assert_eq!(erased.changed_tick(entity(5)), Some(tick));
+        assert_eq!(erased.dense_slots(), &[5]);
+        assert!(erased.as_any().is::<TagSparseStorage>());
+        erased.remove_entity(entity(5));
+        assert_eq!(erased.len(), 0);
+    }
+
+    #[test]
+    fn typed_store_exposes_erased_mut_and_changed_tick() {
+        let mut store = SparseStore::new_typed::<i32>();
+        let tick = ChangeTick::from_raw(5);
+        let erased = store.as_erased_mut().expect("erased");
+        assert_eq!(erased.len(), 0);
+        let typed = store.typed_mut::<i32>().expect("typed");
+        typed.insert_with_tick(entity(6), 3, tick);
+        *typed.get_mut_with_tick(entity(6), tick).expect("mut") = 4;
+        assert_eq!(store.sparse_changed_tick(entity(6)), Some(tick));
+    }
+
+    #[test]
+    fn tag_sparse_changed_tick_is_exposed_through_store_facade() {
+        let mut store = SparseStore::new_tag();
+        let tick = ChangeTick::from_raw(6);
+        let tag = store.tag_mut().expect("tag");
+        assert!(tag.insert_with_tick(entity(7), tick));
+        assert_eq!(store.sparse_changed_tick(entity(7)), Some(tick));
+    }
+
+    #[test]
+    fn typed_store_tag_mut_returns_none() {
+        let mut store = SparseStore::new_typed::<i32>();
+        assert!(store.tag_mut().is_none());
+    }
+
+    #[test]
+    fn tag_sparse_as_any_mut_round_trip() {
+        let mut tag = TagSparseStorage::new();
+        let erased: &mut dyn ErasedSparseStorage = &mut tag;
+        assert!(erased.as_any_mut().is::<TagSparseStorage>());
+    }
+
+    #[test]
+    fn tag_sparse_erased_trait_and_store_facade() {
+        let mut store = SparseStore::new_tag();
+        let tick = ChangeTick::from_raw(3);
+        {
+            let tag = store.tag_mut().expect("tag");
+            assert!(tag.insert_with_tick(entity(2), tick));
+            assert_eq!(tag.len(), 1);
+            assert_eq!(tag.added_tick(entity(2)), Some(tick));
+            assert_eq!(tag.changed_tick(entity(2)), Some(tick));
+            assert_eq!(tag.dense_slots(), &[2]);
+        }
+        assert!(store.as_erased_mut().is_none());
+        assert_eq!(store.dense_slots(), &[2]);
+        store.remove_entity(entity(2));
+        assert_eq!(store.len(), 0);
+        assert!(!store.tag().expect("tag view").contains(entity(2)));
+    }
+}

@@ -108,6 +108,95 @@ fn unknown_system_set_is_rejected_at_build() {
 }
 
 #[test]
+fn stage_operation_mismatch_is_rejected() {
+    let mut builder = ScheduleBuilder::new();
+    builder
+        .add_stage(stage::UPDATE, StageOperation::Update)
+        .expect("update");
+    assert!(matches!(
+        builder.add_stage(stage::UPDATE, StageOperation::Render),
+        Err(BuildError::StageOperationMismatch { .. })
+    ));
+}
+
+#[test]
+fn set_run_if_unknown_set_is_rejected() {
+    let set = SystemSet::new("missing");
+    let mut builder = ScheduleBuilder::standard();
+    assert!(matches!(
+        builder.set_run_if(&set, Condition::always()),
+        Err(BuildError::UnknownSystemSet { .. })
+    ));
+}
+
+#[test]
+fn add_system_unknown_stage_is_rejected() {
+    let mut builder = ScheduleBuilder::standard();
+    assert!(matches!(
+        builder.add_system(System::new("orphan", "missing", |_world, _dt| {})),
+        Err(BuildError::UnknownStage { .. })
+    ));
+}
+
+#[test]
+fn build_rejects_unknown_system_edge_and_self_edge() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("a", stage::UPDATE, |_world, _dt| {}).before("missing"))
+        .expect("a");
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::UnknownSystem { .. })
+    ));
+
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("self_edge", stage::UPDATE, |_world, _dt| {}).before("self_edge"))
+        .expect("self");
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::SelfEdge { .. })
+    ));
+}
+
+#[test]
+fn build_rejects_live_lease_already_attached() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let _schedule = ScheduleBuilder::standard()
+        .build(&mut world)
+        .expect("schedule");
+    assert!(matches!(
+        ScheduleBuilder::standard().build(&mut world),
+        Err(BuildError::LiveLeaseAlreadyAttached)
+    ));
+}
+
+#[test]
+fn fixed_config_without_fixed_update_stage_is_rejected() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut builder = ScheduleBuilder::new();
+    builder
+        .add_stage(stage::UPDATE, StageOperation::Update)
+        .expect("update");
+    builder.fixed(
+        FixedConfig::new(Duration::from_secs_f32(1.0 / 60.0))
+            .expect("fixed")
+            .with_max_substeps(4)
+            .expect("substeps"),
+    );
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::FixedConfigWithoutFixedUpdate)
+    ));
+}
+
+#[test]
+fn schedule_builder_default_constructs() {
+    let _builder = ScheduleBuilder::default();
+}
+
+#[test]
 fn duplicate_system_labels_are_rejected_at_build() {
     let world = WorldBuilder::new().build().expect("world");
     let mut builder = ScheduleBuilder::standard();
@@ -384,7 +473,7 @@ fn frame_events_clear_per_operation_boundary() {
         .event_reader::<UpdateFrameEvent>(EventReaderStart::OldestRetained)
         .expect("reader");
     assert!(app
-        .world()
+        .world_mut()
         .read_event(&mut update_reader)
         .expect("read")
         .is_none());
@@ -399,7 +488,7 @@ fn frame_events_clear_per_operation_boundary() {
         .event_reader::<RenderFrameEvent>(EventReaderStart::OldestRetained)
         .expect("reader");
     assert!(app
-        .world()
+        .world_mut()
         .read_event(&mut render_reader)
         .expect("read")
         .is_none());
@@ -493,6 +582,24 @@ fn set_and_system_conditions_compose_with_and_semantics() {
     let mut app = builder.build().expect("build");
     app.update(1.0 / 60.0).expect("update");
     assert_eq!(RAN.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn apply_state_system_errors_when_resource_missing() {
+    #[derive(Clone, Eq, PartialEq)]
+    struct Menu;
+
+    let mut builder = AppBuilder::new();
+    builder
+        .add_system(apply::<Menu>("apply", stage::UPDATE))
+        .expect("apply");
+    let mut app = builder.build().expect("build");
+    assert!(matches!(app.update(1.0 / 60.0), Err(AppError::Fault(_))));
+}
+
+#[test]
+fn condition_debug_formats_as_opaque_label() {
+    assert_eq!(format!("{:?}", Condition::always()), "Condition");
 }
 
 #[test]
@@ -630,7 +737,7 @@ fn persistent_events_survive_update_until_read() {
         .event_reader::<Persistent>(EventReaderStart::OldestRetained)
         .expect("reader");
     assert_eq!(
-        app.world()
+        app.world_mut()
             .read_event(&mut reader)
             .expect("read")
             .map(|event| event.0),
@@ -754,4 +861,326 @@ fn panic_clears_running_and_faults_app() {
         app.update(1.0 / 60.0),
         Err(AppError::TerminalFault)
     ));
+}
+
+#[test]
+fn resource_exists_condition_gates_until_resource_present() {
+    static RAN: AtomicU32 = AtomicU32::new(0);
+    RAN.store(0, Ordering::SeqCst);
+
+    #[derive(Clone)]
+    struct Flag;
+
+    let mut builder = AppBuilder::new();
+    builder.world_builder().register_resource::<Flag>();
+    builder
+        .add_system(
+            System::new("needs_flag", stage::UPDATE, |_world, _dt| {
+                RAN.fetch_add(1, Ordering::SeqCst);
+            })
+            .run_if(Condition::resource_exists::<Flag>()),
+        )
+        .expect("add");
+    let mut app = builder.build().expect("build");
+    app.update(1.0 / 60.0).expect("without resource");
+    assert_eq!(RAN.load(Ordering::SeqCst), 0);
+    app.world_mut().insert_resource(Flag).expect("insert");
+    app.update(1.0 / 60.0).expect("with resource");
+    assert_eq!(RAN.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn condition_and_requires_both_true() {
+    static RAN: AtomicU32 = AtomicU32::new(0);
+    RAN.store(0, Ordering::SeqCst);
+
+    let mut builder = AppBuilder::new();
+    builder
+        .add_system(
+            System::new("and_gate", stage::UPDATE, |_world, _dt| {
+                RAN.fetch_add(1, Ordering::SeqCst);
+            })
+            .run_if(Condition::always().and(Condition::never())),
+        )
+        .expect("add");
+    let mut app = builder.build().expect("build");
+    app.update(1.0 / 60.0).expect("update");
+    assert_eq!(RAN.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn resource_added_runs_once_after_insert() {
+    static RAN: AtomicU32 = AtomicU32::new(0);
+    RAN.store(0, Ordering::SeqCst);
+
+    #[derive(Clone)]
+    struct Score(#[allow(dead_code)] u32);
+
+    let mut builder = AppBuilder::new();
+    builder.world_builder().register_resource::<Score>();
+    builder
+        .add_system(
+            System::new("watch", stage::UPDATE, |_world, _dt| {
+                RAN.fetch_add(1, Ordering::SeqCst);
+            })
+            .run_if(Condition::resource_added::<Score>()),
+        )
+        .expect("add");
+    let mut app = builder.build().expect("build");
+    app.update(1.0 / 60.0).expect("without resource");
+    assert_eq!(RAN.load(Ordering::SeqCst), 0);
+    app.world_mut().insert_resource(Score(1)).expect("insert");
+    app.update(1.0 / 60.0).expect("after insert");
+    assert_eq!(RAN.load(Ordering::SeqCst), 1);
+    app.update(1.0 / 60.0).expect("stale");
+    assert_eq!(RAN.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn set_resource_added_gates_members() {
+    static A: AtomicU32 = AtomicU32::new(0);
+    static B: AtomicU32 = AtomicU32::new(0);
+    A.store(0, Ordering::SeqCst);
+    B.store(0, Ordering::SeqCst);
+
+    #[derive(Clone)]
+    struct Flag;
+
+    let set = SystemSet::new("flagged");
+    let mut builder = AppBuilder::new();
+    builder.world_builder().register_resource::<Flag>();
+    builder.register_set(set.clone()).expect("set");
+    builder
+        .set_run_if(&set, Condition::resource_added::<Flag>())
+        .expect("cond");
+    builder
+        .add_system(
+            System::new("a", stage::UPDATE, |_world, _dt| {
+                A.fetch_add(1, Ordering::SeqCst);
+            })
+            .in_set(&set),
+        )
+        .expect("a");
+    builder
+        .add_system(
+            System::new("b", stage::UPDATE, |_world, _dt| {
+                B.fetch_add(1, Ordering::SeqCst);
+            })
+            .in_set(&set),
+        )
+        .expect("b");
+    let mut app = builder.build().expect("build");
+    app.update(1.0 / 60.0).expect("without resource");
+    assert_eq!(A.load(Ordering::SeqCst), 0);
+    assert_eq!(B.load(Ordering::SeqCst), 0);
+    app.world_mut().insert_resource(Flag).expect("insert");
+    app.update(1.0 / 60.0).expect("after insert");
+    assert_eq!(A.load(Ordering::SeqCst), 1);
+    assert_eq!(B.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn update_rejects_invalid_delta() {
+    let mut app = build_app(System::new("noop", stage::UPDATE, |_world, _dt| {}));
+    assert!(matches!(app.update(f32::NAN), Err(AppError::InvalidDelta)));
+    assert!(matches!(app.update(-1.0), Err(AppError::InvalidDelta)));
+    assert_eq!(app.world().world_tick().raw(), 0);
+}
+
+#[test]
+fn from_parts_rejects_lease_mismatch() {
+    let mut world_a = WorldBuilder::new().build().expect("a");
+    let world_b = WorldBuilder::new().build().expect("b");
+    let schedule = ScheduleBuilder::standard()
+        .build(&mut world_a)
+        .expect("schedule");
+    assert!(matches!(
+        moirai::App::from_parts(world_b, schedule),
+        Err(BuildError::LeaseMismatch)
+    ));
+}
+
+#[test]
+fn app_builder_and_app_builder_entry_construct() {
+    let _ = AppBuilder::default();
+    let _ = moirai::App::builder();
+}
+
+#[test]
+fn from_parts_rejects_pending_commands() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let schedule = ScheduleBuilder::standard()
+        .build(&mut world)
+        .expect("schedule");
+    let _ = world
+        .commands()
+        .expect("commands")
+        .spawn()
+        .expect("reserve");
+    assert!(matches!(
+        moirai::App::from_parts(world, schedule),
+        Err(BuildError::PendingCommands)
+    ));
+}
+
+#[test]
+#[cfg(feature = "testkit")]
+fn from_parts_rejects_poisoned_world() {
+    use moirai::component::ComponentOptions;
+    use moirai::ChangeTick;
+
+    #[derive(Clone, Copy)]
+    struct Health(#[allow(dead_code)] i32);
+
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+    let schedule = ScheduleBuilder::standard()
+        .build(&mut world)
+        .expect("schedule");
+    let entity = world.spawn().expect("spawn");
+    world.insert(entity, Health(0)).expect("seed");
+    world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+    world.insert(entity, Health(1)).expect("consume last tick");
+    assert!(matches!(
+        world.insert(entity, Health(2)),
+        Err(moirai::world::WorldError::ChangeTickExhausted)
+    ));
+    assert!(world.is_mutation_poisoned());
+    assert!(matches!(
+        moirai::App::from_parts(world, schedule),
+        Err(BuildError::WorldMutationPoisoned)
+    ));
+}
+
+#[test]
+#[cfg(feature = "testkit")]
+fn world_tick_exhaustion_faults_app() {
+    let mut app = build_app(System::new("noop", stage::UPDATE, |_world, _dt| {}));
+    app.world_mut().set_world_tick_for_test(u64::MAX);
+    assert!(matches!(
+        app.update(1.0 / 60.0),
+        Err(AppError::WorldTickExhausted)
+    ));
+    assert!(app.is_faulted());
+}
+
+#[test]
+fn add_stage_same_label_and_operation_is_idempotent() {
+    let mut builder = ScheduleBuilder::new();
+    builder
+        .add_stage(stage::UPDATE, StageOperation::Update)
+        .expect("first");
+    builder
+        .add_stage(stage::UPDATE, StageOperation::Update)
+        .expect("repeat");
+}
+
+#[test]
+fn schedule_build_rejects_pending_commands_running_and_poisoned_world() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let _ = world
+        .commands()
+        .expect("commands")
+        .spawn()
+        .expect("reserve");
+    assert!(matches!(
+        ScheduleBuilder::standard().build(&mut world),
+        Err(BuildError::PendingCommands)
+    ));
+
+    #[cfg(feature = "testkit")]
+    {
+        use moirai::component::ComponentOptions;
+        use moirai::ChangeTick;
+
+        #[derive(Clone, Copy)]
+        struct Health(#[allow(dead_code)] i32);
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Health(0)).expect("seed");
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+        world.insert(entity, Health(1)).expect("consume");
+        let _ = world.insert(entity, Health(2));
+        assert!(world.is_mutation_poisoned());
+        assert!(matches!(
+            ScheduleBuilder::standard().build(&mut world),
+            Err(BuildError::WorldMutationPoisoned)
+        ));
+    }
+}
+
+#[test]
+fn build_rejects_unknown_after_edge_and_cross_stage_after() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("a", stage::UPDATE, |_world, _dt| {}).after("missing"))
+        .expect("a");
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::UnknownSystem { .. })
+    ));
+
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("a", stage::UPDATE, |_world, _dt| {}).after("startup"))
+        .expect("a");
+    builder
+        .add_system(System::new("startup", stage::STARTUP, |_world, _dt| {}))
+        .expect("startup");
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::CrossStageSystemEdge { .. })
+    ));
+
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("leaf", stage::UPDATE, |_world, _dt| {}))
+        .expect("leaf");
+    builder
+        .add_system(System::new("before", stage::UPDATE, |_world, _dt| {}).before("missing"))
+        .expect("before");
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::UnknownSystem { .. })
+    ));
+}
+
+#[test]
+fn add_system_rejects_duplicate_label() {
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("dup", stage::UPDATE, |_world, _dt| {}))
+        .expect("first");
+    assert!(matches!(
+        builder.add_system(System::new("dup", stage::UPDATE, |_world, _dt| {})),
+        Err(BuildError::DuplicateSystemLabel { .. })
+    ));
+}
+
+#[test]
+fn condition_or_runs_when_either_true() {
+    static RAN: AtomicU32 = AtomicU32::new(0);
+    RAN.store(0, Ordering::SeqCst);
+
+    let mut builder = AppBuilder::new();
+    builder
+        .add_system(
+            System::new("or_gate", stage::UPDATE, |_world, _dt| {
+                RAN.fetch_add(1, Ordering::SeqCst);
+            })
+            .run_if(Condition::never().or(Condition::always())),
+        )
+        .expect("add");
+    let mut app = builder.build().expect("build");
+    app.update(1.0 / 60.0).expect("update");
+    assert_eq!(RAN.load(Ordering::SeqCst), 1);
 }

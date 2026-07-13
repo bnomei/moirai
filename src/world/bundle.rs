@@ -174,6 +174,16 @@ impl<'w> BundleWriter<'w> {
     pub(crate) fn is_tag_component(&self, component_id: &ComponentId) -> bool {
         self.world.is_tag_component(component_id)
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_entity(&self) -> EntityId {
+        self.entity
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_world(&mut self) -> &mut World {
+        self.world
+    }
 }
 
 macro_rules! impl_bundle_tuple {
@@ -205,3 +215,81 @@ impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Health(i32);
+
+    #[derive(Clone, Copy)]
+    struct Marker;
+
+    #[test]
+    fn dynamic_bundle_default_and_write_validation_errors() {
+        assert_eq!(DynamicBundle::default().entries.len(), 0);
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Marker>(ComponentOptions::tag())
+            .expect("tag");
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("health");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+
+        let mut tag_with_value = DynamicBundle::new();
+        tag_with_value.push_tag(&tag).expect("tag");
+        tag_with_value.entries[0].value = Some(Box::new(Health(1)));
+        assert!(matches!(
+            tag_with_value.write(&mut BundleWriter::new(&mut world, entity)),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+
+        let health_id = world.component_id::<Health>().expect("health");
+        let mut missing_value = DynamicBundle::new();
+        missing_value.push_entry(health_id, None).expect("entry");
+        assert!(matches!(
+            missing_value.write(&mut BundleWriter::new(&mut world, entity)),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn deferred_bundle_writer_queues_inserts() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("health");
+        let mut world = builder.build().expect("build");
+        let entity = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        BundleWriter::deferred(&mut world, entity)
+            .insert(Health(3))
+            .expect("queue");
+        assert!(world.has_pending_commands());
+    }
+
+    #[test]
+    fn tuple_bundle_writes_components() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("health");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        (Health(4),)
+            .write(&mut BundleWriter::new(&mut world, entity))
+            .expect("tuple");
+        assert_eq!(
+            world.get::<Health>(entity).expect("get").map(|h| h.0),
+            Some(4)
+        );
+    }
+}

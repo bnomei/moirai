@@ -14,6 +14,24 @@ use crate::world::{World, WorldError, WorldEvents, WorldOwner};
 
 type ResourceRegistrar = Box<dyn FnOnce(&mut ResourceStore)>;
 
+fn map_lifecycle_registration_error(error: EventRegistrationError) -> RegistrationError {
+    match error {
+        EventRegistrationError::TypeConflict {
+            name,
+            existing,
+            requested,
+        } => RegistrationError::NameConflict {
+            name,
+            existing,
+            requested,
+        },
+        EventRegistrationError::InvalidCapacity => RegistrationError::UnsupportedStorage {
+            name: alloc::string::String::from("component lifecycle event"),
+            detail: alloc::string::String::from("invalid lifecycle event capacity"),
+        },
+    }
+}
+
 /// Checked world schema construction.
 pub struct WorldBuilder {
     owner: WorldOwner,
@@ -144,21 +162,7 @@ impl WorldBuilder {
     ) -> Result<(), RegistrationError> {
         self.lifecycle_registry
             .register_component(&mut self.event_registry, &self.owner, component_index)
-            .map_err(|error| match error {
-                EventRegistrationError::TypeConflict {
-                    name,
-                    existing,
-                    requested,
-                } => RegistrationError::NameConflict {
-                    name,
-                    existing,
-                    requested,
-                },
-                EventRegistrationError::InvalidCapacity => RegistrationError::UnsupportedStorage {
-                    name: alloc::string::String::from("component lifecycle event"),
-                    detail: alloc::string::String::from("invalid lifecycle event capacity"),
-                },
-            })
+            .map_err(map_lifecycle_registration_error)
     }
 
     fn ensure_factory_slots(&mut self, index: usize) {
@@ -172,5 +176,42 @@ impl WorldBuilder {
 impl Default for WorldBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+impl WorldBuilder {
+    pub(crate) fn owner_for_test(&self) -> WorldOwner {
+        self.owner.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_builder_constructs() {
+        let _ = WorldBuilder::default();
+    }
+
+    #[test]
+    fn lifecycle_registration_error_mapping() {
+        assert!(matches!(
+            map_lifecycle_registration_error(EventRegistrationError::TypeConflict {
+                name: alloc::string::String::from("Added"),
+                existing: alloc::string::String::from("a"),
+                requested: alloc::string::String::from("b"),
+            }),
+            RegistrationError::NameConflict { .. }
+        ));
+        assert!(matches!(
+            map_lifecycle_registration_error(
+                EventRegistrationError::InvalidCapacity
+            ),
+            RegistrationError::UnsupportedStorage { name, detail }
+                if name == "component lifecycle event"
+                    && detail == "invalid lifecycle event capacity"
+        ));
     }
 }

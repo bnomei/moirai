@@ -67,10 +67,11 @@ impl App {
         if !world.validate_execution_lease(schedule.execution_lease()) {
             return Err(BuildError::LeaseMismatch);
         }
+        let set_count = schedule.set_count();
         Ok(Self {
             world,
             schedule,
-            run_context: RunContext::new(),
+            run_context: RunContext::with_set_capacity(set_count),
             faulted: false,
             fault: None,
             observer: None,
@@ -155,8 +156,9 @@ impl App {
             .map_err(|_| self.fault_tick_exhaustion())?;
 
         self.run_context.fixed_step = None;
-        let update_stages = self.schedule.update_stage_indices();
-        for stage_index in update_stages {
+        let update_stage_count = self.schedule.update_stage_indices().len();
+        for stage_order_index in 0..update_stage_count {
+            let stage_index = self.schedule.update_stage_indices()[stage_order_index];
             let stage_label = self.schedule.stage_label(stage_index);
             if stage_label == stage::FIXED_UPDATE {
                 if let Some(config) = fixed_config {
@@ -472,3 +474,33 @@ impl core::fmt::Display for AppError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for AppError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schedule::{stage, ScheduleBuilder, System};
+    use crate::time::FixedConfig;
+    use crate::world::WorldBuilder;
+    use core::time::Duration;
+
+    #[test]
+    fn fixed_step_exhaustion_records_fault() {
+        let fixed = FixedConfig::new(Duration::from_millis(16))
+            .expect("fixed")
+            .with_max_substeps(1)
+            .expect("cap");
+        let mut world = WorldBuilder::new().build().expect("world");
+        let mut schedule_builder = ScheduleBuilder::standard();
+        schedule_builder.fixed(fixed);
+        schedule_builder
+            .add_system(System::new("fixed", stage::FIXED_UPDATE, |_world, _dt| {}))
+            .expect("fixed");
+        let mut schedule = schedule_builder.build(&mut world).expect("schedule");
+        schedule
+            .fixed_accumulator_mut()
+            .set_next_index_for_test(u64::MAX);
+        let mut app = App::from_parts(world, schedule).expect("app");
+        assert!(matches!(app.update(1.0), Err(AppError::FixedStepExhausted)));
+        assert!(app.is_faulted());
+    }
+}

@@ -228,3 +228,81 @@ impl core::fmt::Display for EventRegistrationError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for EventRegistrationError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct Damage(#[allow(dead_code)] u32);
+
+    #[derive(Clone, Copy)]
+    struct Heal(#[allow(dead_code)] u32);
+
+    #[test]
+    fn external_source_flag_round_trip() {
+        let options = EventOptions::manual().external_source();
+        assert!(options.is_external_source());
+        assert_eq!(options.retention(), EventRetention::Manual);
+    }
+
+    #[test]
+    fn default_registry_is_empty() {
+        let registry = EventRegistry::default();
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn duplicate_registration_is_idempotent() {
+        let owner = WorldOwner::new();
+        let mut registry = EventRegistry::new();
+        let options = EventOptions::manual();
+        let first = registry.register::<Damage>(&owner, options).expect("first");
+        let second = registry
+            .register::<Damage>(&owner, options)
+            .expect("repeat");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn same_name_different_type_is_rejected() {
+        let owner = WorldOwner::new();
+        let mut registry = EventRegistry::new();
+        let name = type_name::<Damage>().to_string();
+        registry.entries.push(EventEntry {
+            name: name.clone(),
+            type_id: TypeId::of::<Heal>(),
+            options: EventOptions::manual(),
+            lifecycle_component_index: None,
+        });
+        let err = registry
+            .register::<Damage>(&owner, EventOptions::manual())
+            .expect_err("conflict");
+        assert!(matches!(err, EventRegistrationError::TypeConflict { .. }));
+    }
+
+    #[test]
+    fn event_id_validate_owner_rejects_foreign_world() {
+        let owner_a = WorldOwner::new();
+        let owner_b = WorldOwner::new();
+        let id = EventId::new(owner_a, 0);
+        assert!(registry_owner_check(&id, &owner_b).is_err());
+    }
+
+    #[test]
+    fn type_id_accessor_returns_registered_type() {
+        let owner = WorldOwner::new();
+        let mut registry = EventRegistry::new();
+        let id = registry
+            .register::<Damage>(&owner, EventOptions::manual())
+            .expect("register");
+        assert_eq!(registry.type_id(&id), Some(TypeId::of::<Damage>()));
+    }
+
+    fn registry_owner_check(
+        id: &EventId,
+        owner: &WorldOwner,
+    ) -> Result<(), EventRegistrationError> {
+        id.validate_owner(owner)
+    }
+}

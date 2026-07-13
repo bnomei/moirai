@@ -56,7 +56,7 @@ fn cold_query1_sparse_resolve() {
     let mut sum = 0i32;
     for _ in 0..32 {
         for (_, pos) in world
-            .query::<BenchPos>(spec.clone(), QueryParams::new())
+            .query::<BenchPos>(&spec, QueryParams::new())
             .expect("query")
         {
             sum += pos.0;
@@ -71,7 +71,7 @@ fn warm_query1_sparse() {
     let spec = QuerySpec::new();
     for _ in 0..8 {
         for (_, pos) in world
-            .query::<BenchPos>(spec.clone(), QueryParams::new())
+            .query::<BenchPos>(&spec, QueryParams::new())
             .expect("query")
         {
             divan::black_box(pos.0);
@@ -79,7 +79,7 @@ fn warm_query1_sparse() {
     }
     for _ in 0..128 {
         for (_, pos) in world
-            .query::<BenchPos>(spec.clone(), QueryParams::new())
+            .query::<BenchPos>(&spec, QueryParams::new())
             .expect("query")
         {
             divan::black_box(pos.0);
@@ -93,7 +93,7 @@ fn warm_query2_sparse() {
     let spec = QuerySpec::new();
     for _ in 0..8 {
         for (_, pos, vel) in world
-            .query2::<BenchPos, BenchVel>(spec.clone(), QueryParams::new())
+            .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())
             .expect("query2")
         {
             divan::black_box((pos.0, vel.0));
@@ -101,7 +101,7 @@ fn warm_query2_sparse() {
     }
     for _ in 0..128 {
         for (_, pos, vel) in world
-            .query2::<BenchPos, BenchVel>(spec.clone(), QueryParams::new())
+            .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())
             .expect("query2")
         {
             divan::black_box((pos.0, vel.0));
@@ -118,7 +118,7 @@ fn warm_query_cache_hit() {
         .expect("cache");
     for _ in 0..8 {
         for (_, pos) in world
-            .query::<BenchPos>(spec.clone(), QueryParams::new().membership_cache(&cache))
+            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
             .expect("query")
         {
             divan::black_box(pos.0);
@@ -126,7 +126,7 @@ fn warm_query_cache_hit() {
     }
     for _ in 0..128 {
         for (_, pos) in world
-            .query::<BenchPos>(spec.clone(), QueryParams::new().membership_cache(&cache))
+            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
             .expect("query")
         {
             divan::black_box(pos.0);
@@ -140,7 +140,7 @@ fn closure_mutation_sparse() {
     let spec = QuerySpec::new();
     for _ in 0..8 {
         world
-            .for_each_mut::<BenchPos>(spec.clone(), QueryParams::new(), |_entity, pos| {
+            .for_each_mut::<BenchPos>(&spec, QueryParams::new(), |_entity, pos| {
                 pos.0 += 1;
                 Ok(())
             })
@@ -148,7 +148,7 @@ fn closure_mutation_sparse() {
     }
     for _ in 0..64 {
         world
-            .for_each_mut::<BenchPos>(spec.clone(), QueryParams::new(), |_entity, pos| {
+            .for_each_mut::<BenchPos>(&spec, QueryParams::new(), |_entity, pos| {
                 pos.0 += 1;
                 Ok(())
             })
@@ -162,7 +162,7 @@ fn mixed_query2_warm() {
     let spec = QuerySpec::new();
     for _ in 0..64 {
         for (_, pos, table) in world
-            .query2::<BenchPos, BenchTable>(spec.clone(), QueryParams::new())
+            .query2::<BenchPos, BenchTable>(&spec, QueryParams::new())
             .expect("query2")
         {
             divan::black_box((pos.0, table.0));

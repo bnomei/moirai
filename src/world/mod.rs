@@ -19,11 +19,13 @@ pub use bundle::{Bundle, BundleWriter, DynamicBundle};
 pub use error::{EventReadError, FlushError, FlushReport, WorldAllocatorError, WorldError};
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::rc::Weak;
+use alloc::rc::{Rc, Weak};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::{type_name, TypeId};
+use core::cell::RefCell;
 
 use crate::command::{CommandQueue, ErasedComponentValue};
 use crate::component::{ComponentId, ComponentRegistry, StorageKind};
@@ -62,6 +64,10 @@ pub struct World {
     query_topology_revision: u64,
     membership_caches: Vec<crate::world::query::cache::MembershipCacheSlot>,
     result_caches: Vec<crate::world::query::result_cache::ResultCacheSlot>,
+    table_archetype_cache: Vec<alloc::vec::Vec<usize>>,
+    table_archetype_cache_topology: u64,
+    query_resolve_scratch: RefCell<crate::world::query::plan_cache::QueryResolveScratch>,
+    resolved_plan_cache: BTreeMap<u64, Rc<crate::world::query::plan::ResolvedPlan>>,
 }
 
 impl World {
@@ -93,11 +99,37 @@ impl World {
             query_topology_revision: 1,
             membership_caches: Vec::new(),
             result_caches: Vec::new(),
+            table_archetype_cache: Vec::new(),
+            table_archetype_cache_topology: 0,
+            query_resolve_scratch: RefCell::new(
+                crate::world::query::plan_cache::QueryResolveScratch::default(),
+            ),
+            resolved_plan_cache: BTreeMap::new(),
         }
     }
 
     pub(crate) fn bump_query_topology(&mut self) {
         self.query_topology_revision = self.query_topology_revision.saturating_add(1);
+        self.table_archetype_cache.clear();
+        self.table_archetype_cache_topology = 0;
+    }
+
+    pub(crate) fn ensure_table_archetypes(&mut self, component_index: usize) -> &[usize] {
+        if self.table_archetype_cache_topology != self.query_topology_revision {
+            self.table_archetype_cache.clear();
+            self.table_archetype_cache_topology = self.query_topology_revision;
+        }
+        if self.table_archetype_cache.len() <= component_index {
+            self.table_archetype_cache
+                .resize(component_index + 1, Vec::new());
+        }
+        let slot = &mut self.table_archetype_cache[component_index];
+        if slot.is_empty() {
+            *slot = self
+                .archetypes
+                .archetypes_with_component(component_index as u32);
+        }
+        slot.as_slice()
     }
 
     pub(crate) fn run_guard_state(&self) -> guard::RunGuard {
@@ -131,6 +163,14 @@ impl World {
 
     pub(crate) fn end_run(&mut self) {
         self.run_guard = RunGuard::Idle;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_run_guard_running_for_test(
+        &mut self,
+        operation: crate::operation::StageOperation,
+    ) {
+        self.run_guard = RunGuard::Running(operation);
     }
 
     pub(crate) fn advance_world_tick(&mut self) -> Result<(), crate::time::WorldTickError> {
@@ -256,9 +296,7 @@ impl World {
             });
         }
         let removed = self.remove_tag_index(entity, tag.index());
-        if removed {
-            self.emit_component_removed(entity, tag.index())?;
-        }
+        self.emit_component_removed_if(removed, entity, tag.index())?;
         Ok(removed)
     }
 
@@ -352,24 +390,18 @@ impl World {
         let index = component_id.index();
         if self.is_tag_component(&component_id) {
             let removed = self.remove_tag_index(entity, index);
-            if removed {
-                self.emit_component_removed(entity, index)?;
-            }
+            self.emit_component_removed_if(removed, entity, index)?;
             return Ok(None);
         }
         if self.registry.is_table_component(&component_id) {
             let removed = self
                 .archetypes
                 .remove_table(entity, component_id.index() as u32);
-            if removed.is_some() {
-                self.emit_component_removed(entity, index)?;
-            }
+            self.emit_component_removed_if(removed.is_some(), entity, index)?;
             return Ok(removed);
         }
         let removed = self.sparse_store_mut::<T>(component_id)?.remove(entity);
-        if removed.is_some() {
-            self.emit_component_removed(entity, index)?;
-        }
+        self.emit_component_removed_if(removed.is_some(), entity, index)?;
         Ok(removed)
     }
 
@@ -409,11 +441,10 @@ impl World {
     }
 
     pub(crate) fn entity_has_component(&self, entity: EntityId, index: usize) -> bool {
-        let component_id = ComponentId::new(self.owner.clone(), index as u32);
-        if self.is_tag_component(&component_id) {
+        if self.registry.entry_is_tag(index) {
             return self.entity_has_tag(entity, index);
         }
-        if self.registry.is_table_component(&component_id) {
+        if self.registry.entry_is_table(index) {
             return self.archetype_has_component(entity, index as u32);
         }
         self.sparse_stores
@@ -476,9 +507,7 @@ impl World {
     }
 
     fn archetype_has_component(&self, entity: EntityId, component_index: u32) -> bool {
-        self.archetypes
-            .table_component_indices(entity)
-            .contains(&component_index)
+        self.archetypes.has_component(entity, component_index)
     }
 
     pub(crate) fn command_queue_mut(&mut self) -> &mut CommandQueue {
@@ -867,19 +896,25 @@ impl World {
     pub fn set_change_tick_for_test(&mut self, tick: ChangeTick) {
         self.change_tick = tick;
     }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn set_world_tick_for_test(&mut self, raw: u64) {
+        self.world_tick.set_raw(raw);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::component::ComponentOptions;
+    use crate::entity::AllocatorError;
     use crate::time::ChangeTick;
 
     #[derive(Clone, Copy)]
     struct Marker(u8);
 
     #[derive(Clone, Copy)]
-    struct Other;
+    struct Other(#[allow(dead_code)] u8);
 
     #[derive(Clone, Copy)]
     struct TableComp(i32);
@@ -959,13 +994,9 @@ mod tests {
         let mut world = builder.build().expect("build");
         world.insert_resource(Score(1)).expect("seed");
         world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
-        world.insert_resource(Score(2)).expect("last tick");
+        world.insert_resource(Score(2)).expect("consume last tick");
 
-        let result = world.resource_scope::<Score, _>(|value, _| {
-            if let Some(score) = value {
-                score.0 = 5;
-            }
-        });
+        let result = world.resource_scope::<Score, _>(|_, _| ());
         assert!(matches!(result, Err(WorldError::ChangeTickExhausted)));
         assert_eq!(
             world.resource::<Score>().expect("unchanged"),
@@ -974,11 +1005,32 @@ mod tests {
     }
 
     #[test]
+    fn resource_scope_closure_mutates_before_restore() {
+        #[derive(Debug, PartialEq)]
+        struct Score(i32);
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<Score>();
+        let mut world = builder.build().expect("build");
+        world.insert_resource(Score(1)).expect("seed");
+
+        world
+            .resource_scope::<Score, _>(|value, _| {
+                if let Some(score) = value {
+                    score.0 = 5;
+                }
+            })
+            .expect("scope");
+
+        assert_eq!(world.resource::<Score>().expect("get"), Some(&Score(5)));
+    }
+
+    #[test]
     fn frame_events_clear_per_operation() {
         use crate::event::{EventOptions, EventReaderStart};
         use crate::operation::StageOperation;
 
-        #[derive(Clone)]
+        #[derive(Clone, Copy)]
         struct FrameEvent(#[allow(dead_code)] u8);
 
         let mut builder = WorldBuilder::new();
@@ -1038,6 +1090,61 @@ mod tests {
     }
 
     #[test]
+    fn component_ticks_track_sparse_table_and_tag() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("sparse");
+        builder
+            .register_component::<TableComp>(ComponentOptions::table())
+            .expect("table");
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+
+        let sparse_entity = world.spawn().expect("sparse");
+        world
+            .insert(sparse_entity, Marker(1))
+            .expect("sparse insert");
+        let sparse_index = world.registry_id_of::<Marker>().expect("id").index();
+        let sparse_added = world
+            .component_added_tick(sparse_entity, sparse_index)
+            .expect("sparse added");
+        world
+            .get_mut::<Marker>(sparse_entity)
+            .expect("mut")
+            .expect("present")
+            .0 = 2;
+        let sparse_changed = world
+            .component_changed_tick(sparse_entity, sparse_index)
+            .expect("sparse changed");
+        assert!(sparse_changed > sparse_added);
+
+        let table_entity = world.spawn().expect("table");
+        world
+            .insert(table_entity, TableComp(3))
+            .expect("table insert");
+        let table_index = world.registry_id_of::<TableComp>().expect("id").index();
+        assert!(world
+            .component_added_tick(table_entity, table_index)
+            .is_some());
+        world
+            .get_mut::<TableComp>(table_entity)
+            .expect("mut")
+            .expect("present")
+            .0 = 4;
+        assert!(world
+            .component_changed_tick(table_entity, table_index)
+            .is_some());
+
+        let tag_entity = world.spawn().expect("tag");
+        world.add_tag(tag_entity, &tag).expect("add tag");
+        let tag_index = tag.index();
+        assert!(world.component_added_tick(tag_entity, tag_index).is_some());
+    }
+
+    #[test]
     fn change_tick_exhaustion_poison_world_mutations() {
         let mut world = test_world();
         world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
@@ -1056,5 +1163,700 @@ mod tests {
                 .map(|m| m.0),
             Some(1)
         );
+    }
+
+    #[test]
+    fn get_mut_table_absent_returns_none() {
+        let mut world = table_world();
+        let entity = world.spawn().expect("spawn");
+        assert!(world.get_mut::<TableComp>(entity).expect("mut").is_none());
+    }
+
+    #[test]
+    fn remove_tag_via_remove_generic_emits_removed() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        assert!(world.remove::<Player>(entity).expect("remove").is_none());
+        assert!(!world.has_tag(entity, &tag).expect("has"));
+    }
+
+    #[test]
+    fn len_sparse_reports_members() {
+        let mut world = test_world();
+        let a = world.spawn().expect("a");
+        let b = world.spawn().expect("b");
+        world.insert(a, Marker(1)).expect("a");
+        world.insert(b, Marker(2)).expect("b");
+        assert_eq!(world.len_sparse::<Marker>().expect("len"), 2);
+    }
+
+    #[test]
+    fn validate_component_insert_rejects_value_on_tag() {
+        use core::any::TypeId;
+
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        assert!(matches!(
+            world.validate_component_insert(entity, tag.index() as u32, TypeId::of::<Marker>()),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_component_insert_rejects_type_mismatch() {
+        use core::any::TypeId;
+
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        let marker_index = world.registry_id_of::<Marker>().expect("id").index() as u32;
+        assert!(matches!(
+            world.validate_component_insert(entity, marker_index, TypeId::of::<Other>()),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn ensure_command_target_rejects_stale_entity() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world.despawn(entity).expect("despawn");
+        assert!(matches!(
+            world.ensure_command_target(entity),
+            Err(WorldError::StaleEntity { .. })
+        ));
+    }
+
+    #[test]
+    fn generation_overflow_on_despawn_maps_allocator_error() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Marker(1)).expect("insert");
+        world
+            .allocator_mut()
+            .set_generation_for_test(entity, u32::MAX);
+        let exhausted = EntityId::from_parts(entity.slot(), u32::MAX);
+        assert!(matches!(
+            world.despawn(exhausted),
+            Err(WorldError::Allocator(
+                WorldAllocatorError::GenerationOverflow
+            ))
+        ));
+    }
+
+    #[test]
+    fn commit_reserved_spawn_maps_slot_retired() {
+        let mut world = test_world();
+        let entity = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        world
+            .allocator_mut()
+            .set_generation_for_test(entity, u32::MAX);
+        let exhausted = EntityId::from_parts(entity.slot(), u32::MAX);
+        assert_eq!(
+            world.allocator_mut().release_reserved(exhausted),
+            Err(AllocatorError::GenerationOverflow)
+        );
+        assert!(matches!(
+            world.commit_reserved_spawn(exhausted, ChangeTick::from_raw(1)),
+            Err(WorldError::Allocator(WorldAllocatorError::SlotRetired))
+        ));
+    }
+
+    #[test]
+    fn commit_despawn_releases_reserved_spawn() {
+        let mut world = test_world();
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        world
+            .commands()
+            .expect("commands")
+            .despawn(reserved)
+            .expect("queue");
+        world.flush().expect("flush");
+        assert!(!world.is_alive(reserved));
+    }
+
+    #[test]
+    fn deferred_commit_paths_cover_table_sparse_and_tag() {
+        use crate::world::DynamicBundle;
+
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("sparse");
+        builder
+            .register_component::<TableComp>(ComponentOptions::table())
+            .expect("table");
+        let mut world = builder.build().expect("build");
+
+        let mut bundle = DynamicBundle::new();
+        bundle.push_tag(&tag).expect("tag");
+        bundle.push(&world, Marker(3)).expect("sparse");
+        bundle.push(&world, TableComp(8)).expect("table");
+        let entity = world
+            .commands()
+            .expect("commands")
+            .spawn_bundle(bundle)
+            .expect("spawn");
+        world.flush().expect("flush");
+
+        assert!(world.has_tag(entity, &tag).expect("tag"));
+        assert_eq!(
+            world.get::<Marker>(entity).expect("sparse").map(|m| m.0),
+            Some(3)
+        );
+        assert_eq!(
+            world.get::<TableComp>(entity).expect("table").map(|c| c.0),
+            Some(8)
+        );
+
+        world
+            .commands()
+            .expect("commands")
+            .remove::<Marker>(entity)
+            .expect("remove sparse");
+        world.flush().expect("flush sparse remove");
+        assert!(world.remove_tag(entity, &tag).expect("remove tag"));
+        assert!(!world.has_tag(entity, &tag).expect("tag gone"));
+        assert!(world.get::<Marker>(entity).expect("sparse gone").is_none());
+    }
+
+    #[test]
+    fn collect_live_entities_includes_reserved_handles() {
+        let mut world = test_world();
+        let live = world.spawn().expect("live");
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserved");
+        let mut entities = Vec::new();
+        world.collect_live_entities(&mut entities);
+        assert!(entities.contains(&live));
+        assert!(entities.contains(&reserved));
+    }
+
+    #[test]
+    fn remove_tag_via_remove_tag_emits_removed() {
+        use crate::event::EventReaderStart;
+
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        let mut reader = world
+            .on_remove_reader::<Player>(EventReaderStart::OldestRetained)
+            .expect("reader");
+        assert!(world.remove_tag(entity, &tag).expect("remove"));
+        assert!(!world.has_tag(entity, &tag).expect("gone"));
+        assert!(world.read_event(&mut reader).expect("read").is_some());
+    }
+
+    #[test]
+    fn remove_tag_propagates_emit_errors() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        world.events.storage.clear_channels_for_test();
+        assert!(matches!(
+            world.remove_tag(entity, &tag),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
+    }
+
+    #[test]
+    fn sparse_remove_emits_component_removed() {
+        use crate::event::EventReaderStart;
+
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Marker(1)).expect("insert");
+        let mut reader = world
+            .on_remove_reader::<Marker>(EventReaderStart::OldestRetained)
+            .expect("reader");
+        assert_eq!(
+            world.remove::<Marker>(entity).expect("remove").map(|m| m.0),
+            Some(1)
+        );
+        assert!(world.read_event(&mut reader).expect("read").is_some());
+    }
+
+    #[test]
+    fn sparse_remove_propagates_emit_errors() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Marker(1)).expect("insert");
+        world.events.storage.clear_channels_for_test();
+        assert!(matches!(
+            world.remove::<Marker>(entity),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
+    }
+
+    #[test]
+    fn component_changed_tick_for_tag_matches_added_on_insert() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        let tag_index = tag.index();
+        let added = world
+            .component_added_tick(entity, tag_index)
+            .expect("tag add records added tick");
+        assert_eq!(world.component_changed_tick(entity, tag_index), Some(added));
+
+        assert!(!world.add_tag(entity, &tag).expect("re-add existing tag"));
+        let changed_after_readd = world
+            .component_changed_tick(entity, tag_index)
+            .expect("re-add bumps changed tick");
+        assert!(changed_after_readd > added);
+    }
+
+    #[test]
+    fn entity_has_component_checks_tag_presence() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        assert!(world.entity_has_component(entity, tag.index()));
+    }
+
+    #[test]
+    fn sparse_store_by_index_rejects_wrong_type() {
+        let world = test_world();
+        let index = world.registry_id_of::<Marker>().expect("id").index();
+        assert!(matches!(
+            world.sparse_store_by_index::<Other>(index),
+            Err(crate::query::QueryError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn ensure_mutable_rejects_poisoned_world() {
+        let mut world = test_world();
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Marker(1)).expect("consume");
+        assert!(matches!(
+            world.insert(entity, Marker(2)),
+            Err(WorldError::ChangeTickExhausted)
+        ));
+        assert!(matches!(
+            world.ensure_mutable(),
+            Err(WorldError::ChangeTickExhausted)
+        ));
+    }
+
+    #[test]
+    fn get_mut_sparse_wrong_storage_kind() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<TableComp>(ComponentOptions::table())
+            .expect("table");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, TableComp(1)).expect("insert");
+        assert!(matches!(
+            world.get_mut::<Marker>(entity),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn despawn_emits_table_component_removed() {
+        let mut world = table_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, TableComp(1)).expect("insert");
+        world.despawn(entity).expect("despawn");
+        assert!(!world.is_alive(entity));
+    }
+
+    #[test]
+    fn remove_generic_on_table_propagates_emit_errors() {
+        let mut world = table_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, TableComp(4)).expect("insert");
+        world.events.storage.clear_channels_for_test();
+        assert!(matches!(
+            world.remove::<TableComp>(entity),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
+    }
+
+    #[test]
+    fn remove_generic_on_table_emits_removed() {
+        use crate::event::EventReaderStart;
+
+        let mut world = table_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, TableComp(4)).expect("insert");
+        let mut reader = world
+            .on_remove_reader::<TableComp>(EventReaderStart::OldestRetained)
+            .expect("reader");
+        assert_eq!(
+            world
+                .remove::<TableComp>(entity)
+                .expect("remove")
+                .map(|c| c.0),
+            Some(4)
+        );
+        assert!(world.read_event(&mut reader).expect("read").is_some());
+    }
+
+    #[test]
+    fn ensure_sparse_kind_rejects_table_component() {
+        let world = table_world();
+        let id = world.registry_id_of::<TableComp>().expect("id");
+        assert!(matches!(
+            world.ensure_sparse_kind(&id),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn expected_type_id_rejects_unregistered_index() {
+        let world = test_world();
+        assert!(matches!(
+            world.expected_type_id(99),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn commit_remove_sparse_missing_entity_is_noop() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        let index = world.registry_id_of::<Marker>().expect("id").index() as u32;
+        world
+            .commit_remove_index(entity, index, ChangeTick::from_raw(1))
+            .expect("noop");
+    }
+
+    #[test]
+    fn get_mut_tag_component_reports_wrong_storage_kind() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        assert!(matches!(
+            world.get_mut::<Player>(entity),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn commit_insert_erased_wrong_sparse_type_reports_kind() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        let marker_index = world.registry_id_of::<Marker>().expect("id").index() as u32;
+        assert!(matches!(
+            world.commit_insert_erased(entity, marker_index, Other, ChangeTick::from_raw(1)),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn map_allocator_error_maps_stale_entity() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world.despawn(entity).expect("free");
+        assert!(matches!(
+            world.despawn(entity),
+            Err(WorldError::StaleEntity { .. })
+        ));
+    }
+
+    #[test]
+    fn collect_live_entities_skips_empty_slots() {
+        let world = test_world();
+        let mut entities = Vec::new();
+        world.collect_live_entities_from_slots(&mut entities);
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn sparse_store_helpers_reject_wrong_type() {
+        let mut world = test_world();
+        let marker_id = world.registry_id_of::<Marker>().expect("marker");
+        assert!(matches!(
+            world.sparse_store::<TableComp>(marker_id.clone()),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+        assert!(matches!(
+            world.sparse_store_mut::<TableComp>(marker_id),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn ensure_sparse_kind_rejects_unregistered_component_id() {
+        let world = test_world();
+        let bogus = ComponentId::new(world.owner().clone(), 99);
+        assert!(matches!(
+            world.ensure_sparse_kind(&bogus),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn commit_remove_table_component_via_index() {
+        let mut world = table_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, TableComp(3)).expect("insert");
+        let index = world.registry_id_of::<TableComp>().expect("id").index() as u32;
+        world
+            .commit_remove_index(entity, index, ChangeTick::from_raw(1))
+            .expect("remove");
+        assert!(world.get::<TableComp>(entity).expect("get").is_none());
+    }
+
+    #[test]
+    fn resource_added_tick_reports_insert_tick() {
+        #[derive(Debug, PartialEq)]
+        struct Score(i32);
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<Score>();
+        let mut world = builder.build().expect("build");
+        world.insert_resource(Score(1)).expect("insert");
+        assert!(world
+            .resource_added_tick::<Score>()
+            .expect("tick")
+            .is_some());
+    }
+
+    #[test]
+    fn corrupted_sparse_store_reports_wrong_kind_on_insert_and_get_mut() {
+        use crate::storage::SparseStore;
+
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        let index = world.registry_id_of::<Marker>().expect("id").index();
+        world.sparse_stores[index] = SparseStore::new_tag();
+        assert!(matches!(
+            world.insert(entity, Marker(1)),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+        assert!(matches!(
+            world.get_mut::<Marker>(entity),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn remove_generic_on_tag_emits_removed() {
+        use crate::event::EventReaderStart;
+
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        let mut reader = world
+            .on_remove_reader::<Player>(EventReaderStart::OldestRetained)
+            .expect("reader");
+        assert!(world.remove::<Player>(entity).expect("remove").is_none());
+        assert!(!world.has_tag(entity, &tag).expect("gone"));
+        assert!(world.read_event(&mut reader).expect("read").is_some());
+    }
+
+    #[test]
+    fn remove_generic_on_tag_propagates_emit_errors() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.add_tag(entity, &tag).expect("add");
+        world.events.storage.clear_channels_for_test();
+        assert!(matches!(
+            world.remove::<Player>(entity),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
+    }
+
+    #[test]
+    fn commit_despawn_on_reserved_entity_releases_slot() {
+        let mut world = test_world();
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        world.commit_despawn(reserved).expect("release");
+        assert!(!world.is_alive(reserved));
+    }
+
+    #[test]
+    fn lock_resource_blocks_remove_while_locked() {
+        #[derive(Debug, PartialEq)]
+        struct Score(i32);
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<Score>();
+        let mut world = builder.build().expect("build");
+        world.insert_resource(Score(1)).expect("seed");
+        world.lock_resource::<Score>();
+        assert!(matches!(
+            world.remove_resource::<Score>(),
+            Err(WorldError::ResourceInUse { .. })
+        ));
+        world.unlock_resource::<Score>();
+    }
+
+    #[test]
+    fn from_parts_rejects_world_running() {
+        let mut world = test_world();
+        world
+            .begin_run(crate::operation::StageOperation::Update)
+            .expect("run");
+        let mut idle = test_world();
+        let schedule = crate::schedule::ScheduleBuilder::standard()
+            .build(&mut idle)
+            .expect("schedule");
+        assert!(matches!(
+            crate::app::App::from_parts(world, schedule),
+            Err(crate::schedule::BuildError::WorldRunning)
+        ));
+    }
+
+    #[test]
+    fn commit_insert_erased_tag_and_remove_tag_via_index() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        let index = tag.index() as u32;
+        let tick = ChangeTick::from_raw(1);
+        world
+            .commit_insert_erased::<()>(entity, index, (), tick)
+            .expect("insert tag");
+        assert!(world.has_tag(entity, &tag).expect("tagged"));
+        world
+            .commit_remove_index(entity, index, tick)
+            .expect("remove tag");
+        assert!(!world.has_tag(entity, &tag).expect("removed"));
+    }
+
+    #[test]
+    fn commit_remove_index_without_store_is_noop() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world
+            .commit_remove_index(entity, 99, ChangeTick::from_raw(1))
+            .expect("noop");
+    }
+
+    #[test]
+    fn collect_live_entities_skips_freed_slots_with_zero_generation() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world.despawn(entity).expect("despawn");
+        let mut entities = Vec::new();
+        world.collect_live_entities_from_slots(&mut entities);
+        assert!(!entities.contains(&entity));
+    }
+
+    #[test]
+    fn map_allocator_error_maps_not_live_to_stale_entity() {
+        let mut world = test_world();
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        assert!(matches!(
+            world.despawn(reserved),
+            Err(WorldError::EntityNotLive { .. })
+        ));
+    }
+
+    struct FailingBundle;
+
+    impl Bundle for FailingBundle {
+        fn write(self, writer: &mut BundleWriter<'_>) -> Result<(), WorldError> {
+            let entity = writer.test_entity();
+            writer
+                .test_world()
+                .allocator_mut()
+                .set_generation_for_test(entity, entity.generation().wrapping_add(1));
+            Err(WorldError::WrongStorageKind {
+                name: String::from("bundle write failed"),
+            })
+        }
+    }
+
+    #[test]
+    fn spawn_bundle_rollback_maps_allocator_error_on_stale_free() {
+        let mut world = test_world();
+        assert!(matches!(
+            world.spawn_bundle(FailingBundle),
+            Err(WorldError::StaleEntity { .. })
+        ));
+    }
+
+    #[test]
+    fn collect_live_entities_skips_zero_generation_slots() {
+        let mut world = test_world();
+        let entity = world.spawn().expect("spawn");
+        world.allocator_mut().set_generation_for_test(entity, 0);
+        let mut entities = Vec::new();
+        world.collect_live_entities_from_slots(&mut entities);
+        assert!(!entities.contains(&entity));
+    }
+
+    #[test]
+    fn fixed_step_round_trips_through_world_accessor() {
+        use core::time::Duration;
+
+        use crate::time::FixedStep;
+
+        let mut world = test_world();
+        assert!(world.fixed_step().is_none());
+        let step = FixedStep {
+            index: 0,
+            delta: Duration::from_millis(16),
+        };
+        world.set_fixed_step(Some(step));
+        assert_eq!(world.fixed_step(), Some(step));
     }
 }

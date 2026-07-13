@@ -172,6 +172,11 @@ fn round_half_away_to_i64(value: f32) -> i64 {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn round_half_away_i64_for_test(numerator: i64, denominator: i64) -> i64 {
+    round_half_away_i64(numerator, denominator)
+}
+
 fn round_half_away_i64(numerator: i64, denominator: i64) -> i64 {
     if denominator == 0 {
         return 0;

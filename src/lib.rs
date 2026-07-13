@@ -60,7 +60,7 @@ pub mod math;
 pub mod world;
 
 #[cfg(feature = "testkit")]
-mod testkit;
+pub mod testkit;
 
 pub use app::{App, AppBuilder, AppError, AppFault, BuildError};
 pub use component::{ComponentId, ComponentOptions, StorageKind};

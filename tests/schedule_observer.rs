@@ -15,6 +15,8 @@ impl Observer for CountingObserver {
         match event {
             DiagnosticEvent::UpdateStart { .. }
             | DiagnosticEvent::UpdateFinish
+            | DiagnosticEvent::RenderStart { .. }
+            | DiagnosticEvent::RenderFinish
             | DiagnosticEvent::StageStart { .. }
             | DiagnosticEvent::StageFinish { .. }
             | DiagnosticEvent::SystemStart { .. }
@@ -63,6 +65,32 @@ impl Observer for DebtObserver {
             );
         }
     }
+}
+
+#[test]
+fn observer_receives_render_events() {
+    let observer = CountingObserver {
+        events: AtomicU32::new(0),
+    };
+    let mut builder = AppBuilder::new();
+    builder.observer(observer);
+    builder
+        .add_system(System::new(
+            "draw",
+            moirai::schedule::stage::RENDER,
+            |_world, _dt| {},
+        ))
+        .expect("add");
+    let mut app = builder.build().expect("build");
+    app.update(1.0 / 60.0).expect("update");
+    let before = app.world().world_tick().raw();
+    app.render(1.0 / 60.0).expect("render");
+    assert_eq!(before, app.world().world_tick().raw());
+
+    let observed = app
+        .render_with(1.0 / 60.0, |world| world.world_tick().raw())
+        .expect("render_with");
+    assert_eq!(observed, before);
 }
 
 #[test]

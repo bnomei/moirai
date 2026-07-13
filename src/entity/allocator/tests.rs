@@ -140,6 +140,23 @@ fn reserved_is_not_alive() {
 }
 
 #[rstest]
+fn slot_retired_rejects_live_operations() {
+    let mut alloc = EntityAllocator::new();
+    let id = alloc.alloc();
+    alloc.set_generation_for_test(id, u32::MAX);
+    let exhausted = EntityId::from_parts(id.slot(), u32::MAX);
+    assert_eq!(
+        alloc.free(exhausted),
+        Err(AllocatorError::GenerationOverflow)
+    );
+    assert_eq!(alloc.free(exhausted), Err(AllocatorError::SlotRetired));
+    assert_eq!(
+        alloc.commit_reserved(exhausted),
+        Err(AllocatorError::SlotRetired)
+    );
+}
+
+#[rstest]
 fn generation_overflow_retires_slot() {
     let mut alloc = EntityAllocator::new();
     let id = alloc.alloc();
@@ -165,6 +182,63 @@ fn capacity_growth_preserves_live_handles() {
     for id in &live {
         assert!(alloc.is_alive(*id));
     }
+}
+
+#[rstest]
+fn free_on_reserved_handle_reports_stale_entity() {
+    let mut alloc = EntityAllocator::new();
+    let reserved = alloc.reserve().expect("reserve");
+    assert_eq!(alloc.free(reserved), Err(AllocatorError::StaleEntity));
+}
+
+#[rstest]
+fn commit_reserved_on_live_entity_reports_not_live() {
+    let mut alloc = EntityAllocator::new();
+    let live = alloc.alloc();
+    assert_eq!(alloc.commit_reserved(live), Err(AllocatorError::NotLive));
+}
+
+#[rstest]
+fn release_reserved_on_live_entity_reports_not_live() {
+    let mut alloc = EntityAllocator::new();
+    let live = alloc.alloc();
+    assert_eq!(alloc.release_reserved(live), Err(AllocatorError::NotLive));
+}
+
+#[rstest]
+fn commit_reserved_on_free_slot_reports_not_live() {
+    let mut alloc = EntityAllocator::new();
+    let live = alloc.alloc();
+    alloc.free(live).expect("free");
+    let next_gen = alloc.generation_for_slot(live.slot() as usize);
+    let future = EntityId::from_parts(live.slot(), next_gen);
+    assert_eq!(alloc.commit_reserved(future), Err(AllocatorError::NotLive));
+}
+
+#[rstest]
+fn ensure_state_live_slot_with_mismatched_generation_is_stale() {
+    let mut alloc = EntityAllocator::new();
+    let live = alloc.alloc();
+    alloc.set_generation_for_test(live, live.generation().wrapping_add(1));
+    assert_eq!(
+        alloc.ensure_state_for_test(live.slot() as usize, SlotState::Live, live.generation()),
+        Err(AllocatorError::StaleEntity)
+    );
+}
+
+#[rstest]
+fn ensure_state_rejects_out_of_range_slots() {
+    let mut alloc = EntityAllocator::new();
+    let missing = EntityId::from_parts(9_999, 1);
+    assert_eq!(alloc.free(missing), Err(AllocatorError::StaleEntity));
+}
+
+#[rstest]
+fn default_allocator_matches_new() {
+    assert_eq!(
+        EntityAllocator::default().counts(),
+        EntityAllocator::new().counts()
+    );
 }
 
 #[rstest]

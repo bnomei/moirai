@@ -36,6 +36,14 @@ impl ComponentOptions {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) const fn test_tag_table() -> Self {
+        Self {
+            storage: StorageKind::Table,
+            is_tag: true,
+        }
+    }
+
     pub(crate) fn storage(self) -> StorageKind {
         self.storage
     }

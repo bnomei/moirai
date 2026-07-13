@@ -11,7 +11,7 @@ pub struct QueryCursor {
 
 impl QueryCursor {
     pub fn from_spec_start<T: Clone + 'static>(
-        world: &crate::world::World,
+        world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
     ) -> Result<Self, QueryError> {
         let fingerprint = world.query_fingerprint::<T>(spec)?;
@@ -19,7 +19,7 @@ impl QueryCursor {
     }
 
     pub fn from_spec_now<T: Clone + 'static>(
-        world: &crate::world::World,
+        world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
     ) -> Result<Self, QueryError> {
         let fingerprint = world.query_fingerprint::<T>(spec)?;
@@ -88,9 +88,10 @@ mod tests {
         world.insert(entity, Position(1)).expect("insert");
 
         let spec = QuerySpec::new().added::<Position>();
-        let mut cursor = QueryCursor::from_spec_start::<Position>(&world, &spec).expect("cursor");
+        let mut cursor =
+            QueryCursor::from_spec_start::<Position>(&mut world, &spec).expect("cursor");
         let params = QueryParams::new().cursor(&mut cursor);
-        let mut query = world.query::<Position>(spec, params).expect("query");
+        let mut query = world.query::<Position>(&spec, params).expect("query");
         assert!(query.next().is_some());
         assert!(query.next().is_none());
         drop(query);
@@ -110,12 +111,53 @@ mod tests {
         world.insert(b, Position(2)).expect("insert");
 
         let spec = QuerySpec::new().added::<Position>();
-        let mut cursor = QueryCursor::from_spec_start::<Position>(&world, &spec).expect("cursor");
+        let mut cursor =
+            QueryCursor::from_spec_start::<Position>(&mut world, &spec).expect("cursor");
         let before = cursor.since();
         let params = QueryParams::new().cursor(&mut cursor);
-        let mut query = world.query::<Position>(spec, params).expect("query");
+        let mut query = world.query::<Position>(&spec, params).expect("query");
         let _ = query.next();
         drop(query);
         assert_eq!(cursor.since(), before);
+    }
+
+    #[test]
+    fn from_spec_now_and_from_now_capture_change_tick() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position(1)).expect("insert");
+        let spec = QuerySpec::new();
+        let fingerprint = world.query_fingerprint::<Position>(&spec).expect("fp");
+        let cursor = QueryCursor::from_spec_now::<Position>(&mut world, &spec).expect("now");
+        assert_eq!(cursor.since(), world.change_tick());
+        let direct = QueryCursor::from_now(&world, fingerprint).expect("direct");
+        assert_eq!(direct.since(), world.change_tick());
+    }
+
+    #[test]
+    fn validate_rejects_foreign_owner() {
+        let mut builder_a = WorldBuilder::new();
+        builder_a
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world_a = builder_a.build().expect("a");
+        let spec = QuerySpec::new();
+        let mut cursor =
+            QueryCursor::from_spec_start::<Position>(&mut world_a, &spec).expect("cursor");
+        let mut builder_b = WorldBuilder::new();
+        builder_b
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world_b = builder_b.build().expect("b");
+        let fingerprint = world_b.query_fingerprint::<Position>(&spec).expect("fp");
+        assert!(matches!(
+            cursor.validate(&world_b, fingerprint),
+            Err(QueryError::WrongOwner)
+        ));
+        let _ = &mut cursor;
     }
 }

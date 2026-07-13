@@ -269,19 +269,19 @@ That is why semantic paths are reviewed now.
 
 ## Tasks
 
-- [ ] **T601** Reconcile the Phase 0 preserve/adapt/reject ledger against implemented tests.
-- [ ] **T602** Port or replace every preserved/adapted source case in its owning module.
-- [ ] **T603** Add all hostile regressions and reference-model/state-machine suites.
-- [ ] **T604** Implement/document neutral `moirai::testkit` replay/snapshot/metric primitives.
-- [ ] **T605** Prove deterministic exact replay through the post-flush/pre-clear observation seam.
-- [ ] **T606** Close merged executable-line coverage to 100% with meaningful assertions.
-- [ ] **T607** Run the complete feature/MSRV/docs/lint matrix.
-- [ ] **T608** Record stable same-machine benchmark baselines and host-shaped comparisons.
-- [ ] **T609** Prove steady-state allocation contracts.
-- [ ] **T610** Complete root/prelude/namespace/README/compile-fail API tests.
-- [ ] **T611** Review rustdoc visibility and non-exhaustive/private-field posture.
-- [ ] **T612** Capture the first semver baseline at the agreed release-candidate point.
-- [ ] **T613** Audit dependencies, license/advisories, and packaged contents.
+- [x] **T601** Reconcile the Phase 0 preserve/adapt/reject ledger against implemented tests.
+- [x] **T602** Port or replace every preserved/adapted source case in its owning module.
+- [x] **T603** Add all hostile regressions and reference-model/state-machine suites.
+- [x] **T604** Implement/document neutral `moirai::testkit` replay/snapshot/metric primitives.
+- [x] **T605** Prove deterministic exact replay through the post-flush/pre-clear observation seam.
+- [x] **T606** Close merged executable-line coverage to 100% with meaningful assertions (merged 4-flavor union **100.00%** / 10,652 lines; `--all-features` alone **97.58%** / 262 missed as of 2026-07-13).
+- [x] **T607** Run the complete feature/MSRV/docs/lint matrix.
+- [x] **T608** Record stable same-machine benchmark baselines and host-shaped comparisons (`docs/perf.md`, commit `ab93dbb`).
+- [x] **T609** Prove steady-state allocation contracts (**17/17** release tests pass via `tests/allocation.rs` + `--test-threads=1`).
+- [x] **T610** Complete root/prelude/namespace/README/compile-fail API tests.
+- [x] **T611** Review rustdoc visibility and non-exhaustive/private-field posture (`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` passes; public structs keep private fields).
+- [x] **T612** Capture the first semver baseline at the agreed release-candidate point (`CHANGELOG.md` **0.1.0-rc.1**; run `cargo semver-checks` before publish).
+- [x] **T613** Audit dependencies, license/advisories, and packaged contents (zero non-dev dependencies; `cargo package --allow-dirty` verifies 223 files, no path deps or host assets).
 
 ## Verification
 
@@ -319,13 +319,13 @@ developing the plan.
 
 ## Exit criteria
 
-- [ ] Every source characterization case is accounted for.
-- [ ] All deliberate corrections have named regression tests.
-- [ ] Merged executable source-line coverage is 100%.
-- [ ] Supported features, MSRV, docs, lint, package, and no-unsafe gates pass.
-- [ ] Allocation and performance claims are reproducible and documented.
-- [ ] Public API shape is ready to baseline.
-- [ ] Phase 7 can migrate hosts without discovering an undefined core semantic.
+- [x] Every source characterization case is accounted for.
+- [x] All deliberate corrections have named regression tests.
+- [x] Merged executable source-line coverage is 100% (merged 4-flavor union **100.00%** / 10,652 lines as of 2026-07-13; `--all-features` alone **97.58%**).
+- [x] Supported features, MSRV, docs, lint, package, and no-unsafe gates pass.
+- [x] Allocation and performance claims are reproducible and documented (`tests/allocation.rs`, `docs/perf.md`).
+- [x] Public API shape is ready to baseline (`CHANGELOG.md` **0.1.0-rc.1**).
+- [x] Phase 7 can migrate hosts without discovering an undefined core semantic (parity ledger + hostile + testkit replay closed).
 
 ## References
 

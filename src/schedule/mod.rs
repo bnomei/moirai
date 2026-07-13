@@ -16,6 +16,7 @@ pub use stage::StageId;
 pub use system::{FlushMode, System, SystemId, SystemSet};
 
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::any::TypeId;
 
@@ -30,14 +31,18 @@ pub struct RunContext {
     resource_added_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     resource_changed_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     state_transition_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
-    set_resource_added_cursors: BTreeMap<(alloc::string::String, TypeId), ChangeTick>,
-    set_resource_changed_cursors: BTreeMap<(alloc::string::String, TypeId), ChangeTick>,
-    set_state_transition_cursors: BTreeMap<(alloc::string::String, TypeId), ChangeTick>,
-    set_gate_cache: BTreeMap<alloc::string::String, bool>,
+    set_resource_added_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
+    set_resource_changed_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
+    set_state_transition_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
+    set_gate_cache: Vec<Option<bool>>,
 }
 
 impl RunContext {
     pub fn new() -> Self {
+        Self::with_set_capacity(0)
+    }
+
+    pub(crate) fn with_set_capacity(set_count: usize) -> Self {
         Self {
             fixed_step: None,
             resource_added_cursors: BTreeMap::new(),
@@ -46,20 +51,25 @@ impl RunContext {
             set_resource_added_cursors: BTreeMap::new(),
             set_resource_changed_cursors: BTreeMap::new(),
             set_state_transition_cursors: BTreeMap::new(),
-            set_gate_cache: BTreeMap::new(),
+            set_gate_cache: vec![None; set_count],
         }
     }
 
     pub(crate) fn clear_set_cache(&mut self) {
-        self.set_gate_cache.clear();
+        for slot in &mut self.set_gate_cache {
+            *slot = None;
+        }
     }
 
-    pub(crate) fn set_gate(&mut self, label: &str, allowed: bool) {
-        self.set_gate_cache.insert(label.into(), allowed);
+    pub(crate) fn set_gate(&mut self, set_index: usize, allowed: bool) {
+        if self.set_gate_cache.len() <= set_index {
+            self.set_gate_cache.resize(set_index + 1, None);
+        }
+        self.set_gate_cache[set_index] = Some(allowed);
     }
 
-    pub(crate) fn set_gate_cached(&self, label: &str) -> Option<bool> {
-        self.set_gate_cache.get(label).copied()
+    pub(crate) fn set_gate_cached(&self, set_index: usize) -> Option<bool> {
+        self.set_gate_cache.get(set_index).copied().flatten()
     }
 
     pub(crate) fn resource_added_cursor(&self, system_index: usize, type_id: TypeId) -> ChangeTick {
@@ -123,71 +133,65 @@ impl RunContext {
 
     pub(crate) fn set_resource_added_cursor_for_set(
         &mut self,
-        set_label: &str,
+        set_index: usize,
         type_id: TypeId,
         tick: ChangeTick,
     ) {
         self.set_resource_added_cursors
-            .insert((set_label.into(), type_id), tick);
+            .insert((set_index, type_id), tick);
     }
 
     pub(crate) fn set_resource_changed_cursor_for_set(
         &mut self,
-        set_label: &str,
+        set_index: usize,
         type_id: TypeId,
         tick: ChangeTick,
     ) {
         self.set_resource_changed_cursors
-            .insert((set_label.into(), type_id), tick);
+            .insert((set_index, type_id), tick);
     }
 
     pub(crate) fn set_state_transition_cursor_for_set(
         &mut self,
-        set_label: &str,
+        set_index: usize,
         type_id: TypeId,
         tick: ChangeTick,
     ) {
         self.set_state_transition_cursors
-            .insert((set_label.into(), type_id), tick);
+            .insert((set_index, type_id), tick);
     }
 
     pub(crate) fn resource_added_cursor_for_set(
         &self,
-        set_label: &str,
+        set_index: usize,
         type_id: TypeId,
     ) -> ChangeTick {
         self.set_resource_added_cursors
-            .get(&(set_label.into(), type_id))
+            .get(&(set_index, type_id))
             .copied()
             .unwrap_or(ChangeTick::ZERO)
     }
 
     pub(crate) fn resource_changed_cursor_for_set(
         &self,
-        set_label: &str,
+        set_index: usize,
         type_id: TypeId,
     ) -> ChangeTick {
         self.set_resource_changed_cursors
-            .get(&(set_label.into(), type_id))
+            .get(&(set_index, type_id))
             .copied()
             .unwrap_or(ChangeTick::ZERO)
     }
 
     pub(crate) fn state_transition_cursor_for_set(
         &self,
-        set_label: &str,
+        set_index: usize,
         type_id: TypeId,
     ) -> ChangeTick {
         self.set_state_transition_cursors
-            .get(&(set_label.into(), type_id))
+            .get(&(set_index, type_id))
             .copied()
             .unwrap_or(ChangeTick::ZERO)
-    }
-
-    pub(crate) fn evaluated_set_labels(&self) -> impl Iterator<Item = &str> {
-        self.set_gate_cache
-            .keys()
-            .map(alloc::string::String::as_str)
     }
 }
 
@@ -292,8 +296,12 @@ impl Schedule {
         &mut self.compiled.fixed_accumulator
     }
 
-    pub(crate) fn update_stage_indices(&self) -> Vec<usize> {
-        self.compiled.update_stage_order.clone()
+    pub(crate) fn update_stage_indices(&self) -> &[usize] {
+        &self.compiled.update_stage_order
+    }
+
+    pub(crate) fn set_count(&self) -> usize {
+        self.compiled.set_conditions.len()
     }
 
     pub(crate) fn stage_label(&self, stage_index: usize) -> &str {
@@ -304,5 +312,29 @@ impl Schedule {
     pub fn stage_flush_mode_for_test(&self, label: &str) -> Option<FlushMode> {
         self.stage_index(label)
             .map(|index| self.compiled.stage_flush_mode(index))
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::{RunContext, Schedule};
+
+    #[test]
+    fn defaults_construct() {
+        assert_eq!(RunContext::default().set_gate_cache.len(), 0);
+        let _builder = Schedule::standard_builder();
+    }
+
+    #[test]
+    fn schedule_builder_entry_point_constructs() {
+        let _builder = Schedule::builder();
+    }
+
+    #[test]
+    fn set_gate_resizes_cache_for_out_of_range_indices() {
+        let mut context = RunContext::with_set_capacity(0);
+        context.set_gate(3, true);
+        assert_eq!(context.set_gate_cache.len(), 4);
+        assert_eq!(context.set_gate_cached(3), Some(true));
     }
 }

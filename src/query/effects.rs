@@ -78,7 +78,7 @@ impl<'w> QueryEffects<'w> {
         })
     }
 
-    pub fn send<E: Clone + 'static>(&mut self, event: E) -> Result<(), QueryError> {
+    pub fn send<E: 'static>(&mut self, event: E) -> Result<(), QueryError> {
         let event_id = self
             .events
             .registry
@@ -108,5 +108,97 @@ fn map_allocator_error_query(error: AllocatorError) -> QueryError {
                 detail: String::from("allocator rejected entity"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn send_ok_path_propagates_success() {
+        use crate::component::ComponentOptions;
+        use crate::event::{EventOptions, EventReaderStart};
+        use crate::operation::StageOperation;
+        use crate::world::WorldBuilder;
+
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        struct Ping(u8);
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Ping>(ComponentOptions::sparse())
+            .expect("component");
+        builder
+            .add_event::<Ping>(EventOptions::frame(StageOperation::Update))
+            .expect("event");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Ping(1)).expect("insert");
+        let mut reader = world
+            .event_reader::<Ping>(EventReaderStart::OldestRetained)
+            .expect("reader");
+        world.begin_run(StageOperation::Update).expect("begin");
+        world
+            .for_each_mut_with_effects::<Ping>(
+                &crate::query::QuerySpec::new(),
+                crate::query::QueryParams::new(),
+                |_, _, effects| effects.send(Ping(2)).map(|_| ()),
+            )
+            .expect("send");
+        world.end_run();
+        assert_eq!(
+            world.read_event(&mut reader).expect("read").map(|p| p.0),
+            Some(2)
+        );
+        assert!(world.read_event(&mut reader).expect("drain").is_none());
+    }
+
+    #[test]
+    fn send_maps_closed_channel_errors() {
+        use crate::component::ComponentOptions;
+        use crate::event::EventOptions;
+        use crate::operation::StageOperation;
+        use crate::world::WorldBuilder;
+
+        #[derive(Clone, Copy)]
+        struct Ping(#[allow(dead_code)] u8);
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Ping>(ComponentOptions::sparse())
+            .expect("component");
+        builder
+            .add_event::<Ping>(EventOptions::frame(StageOperation::Update))
+            .expect("event");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Ping(1)).expect("insert");
+        world.set_event_sequence_for_test(2, 0, true);
+        world.begin_run(StageOperation::Update).expect("begin");
+        let err = world
+            .for_each_mut_with_effects::<Ping>(
+                &crate::query::QuerySpec::new(),
+                crate::query::QueryParams::new(),
+                |_, _, effects| effects.send(Ping(2)).map(|_| ()),
+            )
+            .expect_err("closed");
+        world.end_run();
+        assert!(matches!(err, QueryError::WrongQuery { .. }));
+    }
+
+    #[test]
+    fn map_allocator_error_query_covers_all_variants() {
+        assert!(matches!(
+            map_allocator_error_query(AllocatorError::GenerationOverflow),
+            QueryError::BorrowConflict { .. }
+        ));
+        assert!(matches!(
+            map_allocator_error_query(AllocatorError::SlotRetired),
+            QueryError::BorrowConflict { .. }
+        ));
+        assert!(matches!(
+            map_allocator_error_query(AllocatorError::StaleEntity),
+            QueryError::BorrowConflict { .. }
+        ));
     }
 }

@@ -5,7 +5,6 @@ use crate::query::{QueryError, QueryResultCache, QuerySpec};
 use crate::world::World;
 
 use super::collect::collect_query1_entities;
-use super::spec::resolve_query1;
 
 const RETIRED_GENERATION: u32 = u32::MAX;
 
@@ -43,9 +42,37 @@ impl World {
         if spec.exact_ids.is_some() {
             return Err(QueryError::ExactIdOrderConflict);
         }
-        let plan = resolve_query1::<T>(self, &spec)?;
+        let plan = self.resolve_query1_plan::<T>(&spec)?;
         let captured_now = self.change_tick();
         let ids = collect_query1_entities(self, &plan, crate::time::ChangeTick::ZERO, captured_now);
+        let slot = self.allocate_result_cache_slot(plan.fingerprint, ids)?;
+        Ok(QueryResultCache {
+            owner: self.owner_token(),
+            slot: slot as u32,
+            generation: self.result_cache_slot(slot).generation,
+        })
+    }
+
+    pub fn build_query2_result_cache<A: Clone + 'static, B: Clone + 'static>(
+        &mut self,
+        spec: QuerySpec,
+    ) -> Result<QueryResultCache, QueryError> {
+        if spec.added.is_some() || spec.changed.is_some() {
+            return Err(QueryError::MovingChangeWindow);
+        }
+        if spec.exact_ids.is_some() {
+            return Err(QueryError::ExactIdOrderConflict);
+        }
+        let (plan, second_index, second_is_table) = self.resolve_query2_plan::<A, B>(&spec)?;
+        let captured_now = self.change_tick();
+        let ids = super::collect::collect_query2_entities(
+            self,
+            &plan,
+            crate::time::ChangeTick::ZERO,
+            captured_now,
+            second_index,
+            second_is_table,
+        );
         let slot = self.allocate_result_cache_slot(plan.fingerprint, ids)?;
         Ok(QueryResultCache {
             owner: self.owner_token(),
@@ -140,5 +167,200 @@ impl World {
         } else {
             entry.generation = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::query::{QueryParams, QuerySpec};
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Pos(i32);
+
+    fn world_with_entity() -> World {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Pos>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("insert");
+        world
+    }
+
+    #[test]
+    fn allocate_reuses_retired_slot() {
+        let mut world = world_with_entity();
+        let first = world
+            .build_query_result_cache::<Pos>(QuerySpec::new())
+            .expect("first");
+        world.invalidate_query_result_cache(&first);
+        let second = world
+            .build_query_result_cache::<Pos>(QuerySpec::new())
+            .expect("second");
+        assert_eq!(first.slot, second.slot);
+        assert!(second.generation > 0);
+    }
+
+    #[test]
+    fn validate_rejects_stale_generation() {
+        let mut world = world_with_entity();
+        let cache = world
+            .build_query_result_cache::<Pos>(QuerySpec::new())
+            .expect("cache");
+        world.invalidate_query_result_cache(&cache);
+        let plan = world
+            .resolve_query1_plan::<Pos>(&QuerySpec::new())
+            .expect("plan");
+        assert!(matches!(
+            world.refresh_result_cache(
+                &cache,
+                &plan,
+                crate::time::ChangeTick::ZERO,
+                world.change_tick()
+            ),
+            Err(QueryError::StaleCache)
+        ));
+    }
+
+    #[test]
+    fn refresh_updates_on_topology_revision_change() {
+        let mut world = world_with_entity();
+        let spec = QuerySpec::new();
+        let cache = world
+            .build_query_result_cache::<Pos>(spec.clone())
+            .expect("cache");
+        let plan = world.resolve_query1_plan::<Pos>(&spec).expect("plan");
+        let before = world
+            .refresh_result_cache(
+                &cache,
+                &plan,
+                crate::time::ChangeTick::ZERO,
+                world.change_tick(),
+            )
+            .expect("before")
+            .len();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(2)).expect("insert");
+        let plan = world.resolve_query1_plan::<Pos>(&spec).expect("plan");
+        let after = world
+            .refresh_result_cache(
+                &cache,
+                &plan,
+                crate::time::ChangeTick::ZERO,
+                world.change_tick(),
+            )
+            .expect("after")
+            .len();
+        assert_eq!(before, 1);
+        assert_eq!(after, 2);
+    }
+
+    #[test]
+    fn build_rejects_moving_change_window() {
+        let mut world = world_with_entity();
+        let spec = QuerySpec::new().added::<Pos>();
+        assert!(matches!(
+            world.build_query_result_cache::<Pos>(spec),
+            Err(QueryError::MovingChangeWindow)
+        ));
+    }
+
+    #[test]
+    fn build_query2_rejects_moving_change_window_and_exact_ids() {
+        let mut world = world_with_entity();
+        assert!(matches!(
+            world.build_query2_result_cache::<Pos, Pos>(QuerySpec::new().changed::<Pos>()),
+            Err(QueryError::MovingChangeWindow)
+        ));
+        let entity = world.spawn().expect("spawn");
+        assert!(matches!(
+            world.build_query2_result_cache::<Pos, Pos>(
+                QuerySpec::new()
+                    .exact_ids(vec![entity], crate::query::ExactIdPolicy::SkipUnavailable,)
+            ),
+            Err(QueryError::ExactIdOrderConflict)
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_fingerprint_mismatch() {
+        let mut world = world_with_entity();
+        let cache = world
+            .build_query_result_cache::<Pos>(QuerySpec::new())
+            .expect("cache");
+        let wrong = world.result_caches[cache.slot as usize]
+            .fingerprint
+            .wrapping_add(1);
+        assert!(matches!(
+            world.validate_result_cache(&cache, wrong),
+            Err(QueryError::WrongQuery { .. })
+        ));
+    }
+
+    #[test]
+    fn invalidate_guards_skip_wrong_owner_missing_slot_and_stale_generation() {
+        let mut world = world_with_entity();
+        let cache = world
+            .build_query_result_cache::<Pos>(QuerySpec::new())
+            .expect("cache");
+        let other_owner = crate::world::WorldOwner::new();
+        let foreign = QueryResultCache {
+            owner: other_owner,
+            slot: cache.slot,
+            generation: cache.generation,
+        };
+        world.invalidate_result_cache_handle(&foreign);
+        assert!(world.result_caches[cache.slot as usize].is_live());
+
+        let missing_slot = QueryResultCache {
+            owner: world.owner_token(),
+            slot: 99,
+            generation: 1,
+        };
+        world.invalidate_result_cache_handle(&missing_slot);
+
+        world.invalidate_result_cache_handle(&cache);
+        world.invalidate_result_cache_handle(&cache);
+        assert!(!world.result_caches[cache.slot as usize].is_live());
+    }
+
+    #[test]
+    fn invalidate_retires_generation_at_max_minus_one() {
+        let mut world = world_with_entity();
+        let cache = world
+            .build_query_result_cache::<Pos>(QuerySpec::new())
+            .expect("cache");
+        world.result_caches[cache.slot as usize].generation = u32::MAX - 1;
+        let cache = QueryResultCache {
+            owner: cache.owner,
+            slot: cache.slot,
+            generation: u32::MAX - 1,
+        };
+        world.invalidate_result_cache_handle(&cache);
+        assert_eq!(
+            world.result_caches[cache.slot as usize].generation,
+            RETIRED_GENERATION
+        );
+    }
+
+    #[test]
+    fn public_query_path_uses_cached_ids() {
+        let mut world = world_with_entity();
+        let spec = QuerySpec::new();
+        let cache = world
+            .build_query_result_cache::<Pos>(spec.clone())
+            .expect("cache");
+        let values: Vec<_> = world
+            .query::<Pos>(&spec, QueryParams::new().result_cache(&cache))
+            .expect("query")
+            .map(|(_, p)| p.0)
+            .collect();
+        assert_eq!(values, vec![1]);
     }
 }

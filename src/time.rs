@@ -119,6 +119,11 @@ impl FixedAccumulator {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_next_index_for_test(&mut self, next_index: u64) {
+        self.next_index = next_index;
+    }
+
     pub fn peek_substeps(
         &self,
         frame_delta: Duration,
@@ -235,6 +240,63 @@ impl fmt::Display for ChangeTick {
 mod tests {
     use super::{FixedAccumulator, FixedConfig};
     use core::time::Duration;
+
+    use alloc::format;
+
+    use super::{ChangeTick, FixedConfigError, FixedStepError, WorldTick};
+
+    #[test]
+    fn fixed_config_rejects_non_positive_delta() {
+        assert!(matches!(
+            FixedConfig::new(Duration::ZERO),
+            Err(FixedConfigError::NonPositiveDelta)
+        ));
+    }
+
+    #[test]
+    fn fixed_config_rejects_zero_substep_cap() {
+        let config = FixedConfig::new(Duration::from_millis(1)).expect("delta");
+        assert!(matches!(
+            config.with_max_substeps(0),
+            Err(FixedConfigError::ZeroSubstepCap)
+        ));
+    }
+
+    #[test]
+    fn preflight_substeps_zero_is_ok() {
+        let accumulator = FixedAccumulator::new();
+        accumulator.preflight_substeps(0).expect("zero substeps");
+    }
+
+    #[test]
+    fn preflight_substeps_reports_exhaustion_near_u64_max() {
+        let mut accumulator = FixedAccumulator::new();
+        accumulator.set_next_index_for_test(u64::MAX);
+        assert!(matches!(
+            accumulator.preflight_substeps(1),
+            Err(FixedStepError::Exhausted)
+        ));
+    }
+
+    #[test]
+    fn world_tick_and_change_tick_display_format_raw_values() {
+        assert_eq!(format!("{}", WorldTick::ZERO), "0");
+        assert_eq!(format!("{}", ChangeTick::from_raw(9)), "9");
+    }
+
+    #[test]
+    fn default_accumulator_matches_new() {
+        assert_eq!(
+            FixedAccumulator::default().peek_substeps(
+                Duration::from_millis(1),
+                &FixedConfig::new(Duration::from_millis(1)).expect("delta")
+            ),
+            FixedAccumulator::new().peek_substeps(
+                Duration::from_millis(1),
+                &FixedConfig::new(Duration::from_millis(1)).expect("delta")
+            )
+        );
+    }
 
     #[test]
     fn huge_deltas_drop_debt_without_iterating_or_preserving_whole_steps() {

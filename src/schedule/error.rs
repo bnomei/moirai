@@ -100,3 +100,18 @@ impl std::error::Error for BuildError {}
 
 #[cfg(feature = "std")]
 impl std::error::Error for ScheduleError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::WorldError;
+
+    #[test]
+    fn world_error_converts_into_build_error() {
+        let error: BuildError = WorldError::NestedRun.into();
+        assert!(matches!(
+            error,
+            BuildError::WorldBuild(WorldError::NestedRun)
+        ));
+    }
+}

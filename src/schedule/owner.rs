@@ -64,3 +64,47 @@ impl ExecutionLease {
         weak.strong_count() > 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+    use core::hash::{Hash, Hasher};
+
+    #[test]
+    fn schedule_owner_traits_and_lease_helpers() {
+        let a = ScheduleOwner::new();
+        let b = ScheduleOwner::new();
+        assert!(a.same(&a));
+        assert!(!a.same(&b));
+        assert_eq!(a, a);
+        let lease = ExecutionLease::new();
+        let weak = lease.downgrade();
+        assert!(ExecutionLease::same_weak(&weak, &lease));
+        assert!(ExecutionLease::is_weak_alive(&weak));
+        assert!(format!("{:?}", ScheduleOwner::default()).contains("ScheduleOwner"));
+
+        struct Capture(u64);
+        impl Hasher for Capture {
+            fn finish(&self) -> u64 {
+                self.0
+            }
+            fn write(&mut self, _: &[u8]) {}
+            fn write_u64(&mut self, i: u64) {
+                self.0 = i;
+            }
+            fn write_u128(&mut self, i: u128) {
+                self.0 = i as u64;
+            }
+            fn write_usize(&mut self, i: usize) {
+                self.0 = i as u64;
+            }
+        }
+        let mut hasher = Capture(0);
+        a.hash(&mut hasher);
+        hasher.write(&[]);
+        hasher.write_u64(7);
+        hasher.write_u128(9);
+        assert_ne!(hasher.finish(), 0);
+    }
+}

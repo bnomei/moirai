@@ -172,3 +172,40 @@ impl System {
         &self.name
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schedule::ScheduleError;
+    use crate::world::WorldBuilder;
+
+    #[test]
+    fn system_id_validate_owner_and_generation() {
+        let owner = ScheduleOwner::new();
+        let id = SystemId::new(owner.clone(), 0, 1);
+        assert!(id.validate_owner(&owner, 1).is_ok());
+        assert!(matches!(
+            id.validate_owner(&ScheduleOwner::new(), 1),
+            Err(ScheduleError::OwnerMismatch)
+        ));
+        assert!(matches!(
+            id.validate_owner(&owner, 0),
+            Err(ScheduleError::StaleHandle)
+        ));
+    }
+
+    #[test]
+    fn system_builder_fluent_api() {
+        let set = SystemSet::new("physics");
+        let _ = System::new("move", "Update", |_world, _dt| {})
+            .before("setup")
+            .after("cleanup")
+            .in_set(&set)
+            .run_if(Condition::always())
+            .requires_resource::<WorldBuilder>()
+            .flush_mode(FlushMode::Stage)
+            .flush_after()
+            .disabled()
+            .name();
+    }
+}

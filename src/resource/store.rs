@@ -318,3 +318,123 @@ impl Default for ResourceStore {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::time::ChangeTick;
+
+    #[derive(Debug, PartialEq)]
+    struct Score(i32);
+
+    #[derive(Debug, PartialEq)]
+    struct Other(i32);
+
+    #[test]
+    fn lock_blocks_remove_and_duplicate_lock_is_idempotent() {
+        let mut store = ResourceStore::new();
+        store.register::<Score>();
+        let tick = ChangeTick::from_raw(1);
+        store.insert(Score(1), tick).expect("insert");
+        store.lock::<Score>();
+        store.lock::<Score>();
+        assert!(matches!(
+            store.remove::<Score>(),
+            Err(WorldError::ResourceInUse { .. })
+        ));
+        store.unlock::<Score>();
+        assert_eq!(store.remove::<Score>().expect("remove"), Some(Score(1)));
+    }
+
+    #[test]
+    fn tick_helpers_and_default_constructor() {
+        let mut default_store = ResourceStore::default();
+        default_store.register::<Score>();
+        let tick = ChangeTick::from_raw(3);
+        default_store.insert(Score(9), tick).expect("insert");
+        assert_eq!(
+            default_store.added_tick::<Score>().expect("added"),
+            Some(tick)
+        );
+        assert_eq!(
+            default_store.changed_tick::<Score>().expect("changed"),
+            Some(tick)
+        );
+        let type_id = TypeId::of::<Score>();
+        assert_eq!(
+            default_store.added_tick_for(type_id).expect("added for"),
+            Some(tick)
+        );
+        assert_eq!(
+            default_store
+                .changed_tick_for(type_id)
+                .expect("changed for"),
+            Some(tick)
+        );
+        assert_eq!(
+            default_store
+                .transition_tick_for(type_id)
+                .expect("transition"),
+            None
+        );
+        assert!(default_store
+            .type_name(type_id)
+            .is_some_and(|name| name.ends_with("Score")));
+    }
+
+    #[test]
+    fn duplicate_register_returns_existing_index() {
+        let mut store = ResourceStore::new();
+        let first = store.register::<Score>();
+        let second = store.register::<Score>();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn scope_restore_and_tick_for_error_paths() {
+        let mut store = ResourceStore::new();
+        store.register::<Score>();
+        let tick = ChangeTick::from_raw(1);
+        store.insert(Score(1), tick).expect("insert");
+        let _ = store.take_for_scope::<Score>().expect("scope");
+        assert!(matches!(
+            store.take_for_scope::<Score>(),
+            Err(WorldError::ResourceScoped { .. })
+        ));
+        store.cancel_scope();
+
+        let mut other = ResourceStore::new();
+        other.register::<Score>();
+        other.register::<Other>();
+        other.scoped = Some(TypeId::of::<Other>());
+        assert!(matches!(
+            other.restore_scope(Score(2), tick),
+            Err(WorldError::ResourceScoped { .. })
+        ));
+
+        let mut store = ResourceStore::new();
+        store.register::<Score>();
+        assert!(store
+            .get_mut::<Score>(ChangeTick::from_raw(2))
+            .expect("absent")
+            .is_none());
+        assert!(matches!(
+            store.added_tick_for(TypeId::of::<i32>()),
+            Err(WorldError::UnregisteredResource { .. })
+        ));
+        assert!(matches!(
+            store.changed_tick_for(TypeId::of::<i32>()),
+            Err(WorldError::UnregisteredResource { .. })
+        ));
+        assert!(matches!(
+            store.transition_tick_for(TypeId::of::<i32>()),
+            Err(WorldError::UnregisteredResource { .. })
+        ));
+        assert_eq!(
+            store
+                .transition_tick_for(TypeId::of::<Score>())
+                .expect("registered"),
+            None
+        );
+    }
+}
