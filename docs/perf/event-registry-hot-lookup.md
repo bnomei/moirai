@@ -38,7 +38,7 @@ Add Divan cases with `[1, 4, 16, 64, 256]` registered ordinary/lifecycle event e
 
 Result:
 
-Accepted adaptively. The first 16 ordinary event types stay in the contiguous metadata vector; later ordinary types are additionally indexed in a `BTreeMap`, while lifecycle entries remain excluded. Median-of-five hot lookup/send improved 40-76% for middle/last targets at 64-256 entries and stayed within 1.8% for all 16-entry positions. Registration/build improved 16-18% at 16/256 entries and stayed within 1% at 1/64.
+Accepted adaptively. The first 16 ordinary event types stay in the contiguous metadata vector; later ordinary types are additionally indexed in a `BTreeMap`, while lifecycle entries remain excluded. The end-to-end hot-send sweep also includes the queue changes, so its absolute delta is not attributed solely to registry lookup. The registry-specific positional shape still improves materially: at 256 entries, last-versus-first send cost falls from 4.34x in the baseline to 2.08x with the adaptive index, while all 16-entry positions stay within 1.8%. The setup-inclusive registration/build case is retained only as a control and is not used to claim an index construction win.
 
 Decision and fallback:
 

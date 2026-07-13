@@ -46,7 +46,7 @@ The candidate is disproved if planning allocations are optimized away or immater
 
 ## Result
 
-Accepted. Query2 now prepares the fingerprint and second-component metadata first, returns the cached plan on a hit, and performs full resolution only on a miss. Median-of-five warm empty-plan latency improved 35.20% with zero selectors, 34.48% with eight, and 20.51% with thirty-two.
+Accepted. Query2 now prepares the fingerprint and second-component metadata first, returns the cached plan on a hit, and performs full resolution only on a miss. After correcting the harness to use distinct registered selectors, five warmed pairs improved 34.63% with zero additional selectors, 29.89% with eight, and 17.52% with thirty-two; all five pairs cleared the latency gate at every count.
 
 ## Decision and fallback
 

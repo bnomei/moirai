@@ -1,4 +1,4 @@
-use moirai::component::ComponentOptions;
+use moirai::component::{ComponentId, ComponentOptions};
 use moirai::query::{ExactIdPolicy, QueryParams, QuerySpec};
 use moirai::world::WorldBuilder;
 
@@ -28,6 +28,63 @@ struct ArchetypeC;
 
 #[derive(Clone, Copy)]
 struct ArchetypeD;
+
+#[derive(Clone, Copy)]
+struct ArchetypeE;
+
+macro_rules! selector_noise_types {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            #[derive(Clone, Copy)]
+            struct $name;
+        )+
+
+        fn register_selector_noise(builder: &mut WorldBuilder) -> Vec<ComponentId> {
+            vec![
+                $(
+                    builder
+                        .register_component::<$name>(ComponentOptions::sparse())
+                        .expect("register selector noise"),
+                )+
+            ]
+        }
+    };
+}
+
+selector_noise_types!(
+    SelectorNoise00,
+    SelectorNoise01,
+    SelectorNoise02,
+    SelectorNoise03,
+    SelectorNoise04,
+    SelectorNoise05,
+    SelectorNoise06,
+    SelectorNoise07,
+    SelectorNoise08,
+    SelectorNoise09,
+    SelectorNoise10,
+    SelectorNoise11,
+    SelectorNoise12,
+    SelectorNoise13,
+    SelectorNoise14,
+    SelectorNoise15,
+    SelectorNoise16,
+    SelectorNoise17,
+    SelectorNoise18,
+    SelectorNoise19,
+    SelectorNoise20,
+    SelectorNoise21,
+    SelectorNoise22,
+    SelectorNoise23,
+    SelectorNoise24,
+    SelectorNoise25,
+    SelectorNoise26,
+    SelectorNoise27,
+    SelectorNoise28,
+    SelectorNoise29,
+    SelectorNoise30,
+    SelectorNoise31,
+);
 
 fn sparse_world(count: usize) -> moirai::world::World {
     sparse_world_inner(count, false)
@@ -80,6 +137,18 @@ fn mixed_world(count: usize) -> moirai::world::World {
     world
 }
 
+fn query2_selector_world() -> (moirai::world::World, Vec<ComponentId>) {
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<BenchPos>(ComponentOptions::sparse())
+        .expect("register pos");
+    builder
+        .register_component::<BenchVel>(ComponentOptions::sparse())
+        .expect("register vel");
+    let selector_ids = register_selector_noise(&mut builder);
+    (builder.build().expect("build"), selector_ids)
+}
+
 fn empty_table_world(archetype_count: usize) -> moirai::world::World {
     let mut builder = WorldBuilder::new();
     builder
@@ -97,9 +166,16 @@ fn empty_table_world(archetype_count: usize) -> moirai::world::World {
     builder
         .register_component::<ArchetypeD>(ComponentOptions::table())
         .expect("register archetype d");
+    builder
+        .register_component::<ArchetypeE>(ComponentOptions::table())
+        .expect("register archetype e");
     let mut world = builder.build().expect("build");
 
-    for mask in 0..archetype_count.min(16) {
+    assert!(
+        archetype_count <= 31,
+        "five components encode 31 archetypes"
+    );
+    for mask in 1..=archetype_count {
         let entity = world.spawn().expect("spawn archetype entity");
         if mask & 1 != 0 {
             world.insert(entity, ArchetypeA).expect("insert a");
@@ -112,6 +188,9 @@ fn empty_table_world(archetype_count: usize) -> moirai::world::World {
         }
         if mask & 8 != 0 {
             world.insert(entity, ArchetypeD).expect("insert d");
+        }
+        if mask & 16 != 0 {
+            world.insert(entity, ArchetypeE).expect("insert e");
         }
     }
     world
@@ -361,10 +440,11 @@ fn query2_mixed_probe_isolated(bencher: divan::Bencher, count: usize) {
 
 #[divan::bench(args = [0, 8, 32])]
 fn query2_empty_warm_plan(bencher: divan::Bencher, selector_count: usize) {
-    let mut world = sparse_world_with_noise(0);
+    let (mut world, selector_ids) = query2_selector_world();
+    assert!(selector_count <= selector_ids.len());
     let mut spec = QuerySpec::new();
-    for _ in 0..selector_count {
-        spec = spec.without::<BenchNoise>();
+    for selector in selector_ids.into_iter().take(selector_count) {
+        spec = spec.without_id(selector);
     }
     let _ = world
         .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())

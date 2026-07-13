@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
@@ -86,6 +87,52 @@ def git_metadata(cwd: pathlib.Path) -> dict[str, Any]:
         "commit": run_metadata_command(["git", "rev-parse", "HEAD"], cwd),
         "dirty": bool(status),
         "status_short": status.splitlines() if status else [],
+    }
+
+
+def capture_working_tree(cwd: pathlib.Path, capture_dir: pathlib.Path) -> dict[str, Any]:
+    patch = subprocess.run(
+        ["git", "diff", "--binary", "HEAD", "--", "."],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+    )
+    patch_bytes = patch.stdout if patch.returncode == 0 else b""
+    (capture_dir / "working-tree.patch").write_bytes(patch_bytes)
+
+    untracked_result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+    )
+    untracked: list[dict[str, Any]] = []
+    if untracked_result.returncode == 0:
+        for raw_path in untracked_result.stdout.split(b"\0"):
+            if not raw_path:
+                continue
+            relative = raw_path.decode("utf-8", errors="surrogateescape")
+            path = cwd / relative
+            if path.is_file():
+                contents = path.read_bytes()
+                untracked.append(
+                    {
+                        "path": relative,
+                        "bytes": len(contents),
+                        "sha256": hashlib.sha256(contents).hexdigest(),
+                    }
+                )
+
+    identity = hashlib.sha256()
+    identity.update(patch_bytes)
+    for entry in sorted(untracked, key=lambda item: item["path"]):
+        identity.update(entry["path"].encode("utf-8", errors="surrogateescape"))
+        identity.update(entry["sha256"].encode("ascii"))
+    return {
+        "working_tree_sha256": identity.hexdigest(),
+        "tracked_patch_sha256": hashlib.sha256(patch_bytes).hexdigest(),
+        "tracked_patch_bytes": len(patch_bytes),
+        "untracked_files": untracked,
     }
 
 
@@ -176,6 +223,7 @@ def main() -> int:
         "power_note": args.power_note,
         "status": "running",
     }
+    metadata["git"].update(capture_working_tree(cwd, capture_dir))
     metadata_path = capture_dir / "metadata.json"
     write_json(metadata_path, metadata)
 

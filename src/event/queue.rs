@@ -950,6 +950,73 @@ mod tests {
         ));
     }
 
+    fn assert_ring_overflow_order_and_lag(capacity: usize, total: usize) {
+        let mut builder = WorldBuilder::new();
+        let event_id = builder
+            .add_event::<Damage>(EventOptions::bounded(capacity).expect("bounded"))
+            .expect("register");
+        let owner = builder.owner_for_test();
+        let mut storage = EventStorage::new(1);
+        storage.ensure_channel(event_id.index(), EventRetention::Bounded(capacity));
+        let mut slow = storage
+            .create_reader::<Damage>(
+                owner.clone(),
+                event_id.clone(),
+                EventReaderStart::OldestRetained,
+            )
+            .expect("slow reader");
+
+        for value in 0..total {
+            storage
+                .send(&event_id, Damage(value as u32))
+                .expect("overflowing send");
+        }
+
+        let channel = &storage.channels[event_id.index()];
+        assert!(matches!(&channel.entries, EventEntries::Ring(_)));
+        assert_eq!(channel.active_len, capacity);
+        assert_eq!(channel.entries.len(), capacity + 1);
+        let dropped = (total - capacity) as u64;
+        assert_eq!(
+            storage.read_next(&owner, &mut slow),
+            Err(EventReadError::Lagged { dropped })
+        );
+        assert_eq!(
+            storage
+                .read_next(&owner, &mut slow)
+                .expect("slow reader catches up")
+                .map(|event| event.0),
+            Some((total - capacity) as u32)
+        );
+
+        let mut oldest = storage
+            .create_reader::<Damage>(owner.clone(), event_id, EventReaderStart::OldestRetained)
+            .expect("oldest retained reader");
+        for expected in (total - capacity)..total {
+            assert_eq!(
+                storage
+                    .read_next(&owner, &mut oldest)
+                    .expect("retained read")
+                    .map(|event| event.0),
+                Some(expected as u32)
+            );
+        }
+        assert!(storage
+            .read_next(&owner, &mut oldest)
+            .expect("retained events drained")
+            .is_none());
+    }
+
+    #[test]
+    fn ring_capacity_17_preserves_order_and_exact_lag_after_repeated_overflow() {
+        assert_ring_overflow_order_and_lag(17, 100);
+    }
+
+    #[test]
+    fn ring_capacity_256_preserves_order_and_exact_lag_after_repeated_overflow() {
+        assert_ring_overflow_order_and_lag(256, 1_024);
+    }
+
     #[test]
     fn frame_clear_reports_lag_and_resets_oldest_reader_start() {
         let mut builder = WorldBuilder::new();

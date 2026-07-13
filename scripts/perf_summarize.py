@@ -61,6 +61,9 @@ def main() -> int:
     parser.add_argument("capture_dir", nargs="?", type=pathlib.Path)
     parser.add_argument("--baseline-dir", type=pathlib.Path)
     parser.add_argument("--candidate-dir", type=pathlib.Path)
+    parser.add_argument("--min-win-pct", type=float, default=5.0)
+    parser.add_argument("--max-regression-pct", type=float, default=3.0)
+    parser.add_argument("--required-wins", type=int, default=4)
     args = parser.parse_args()
     if args.capture_dir is not None and (args.baseline_dir or args.candidate_dir):
         parser.error("use capture_dir or the paired --baseline-dir/--candidate-dir options")
@@ -71,7 +74,7 @@ def main() -> int:
         if args.capture_dir is not None
         else [(args.baseline_dir, "baseline"), (args.candidate_dir, "candidate")]
     )
-    samples: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+    samples: dict[tuple[str, str, str], dict[int, float]] = defaultdict(dict)
     for capture_dir, selected_phase in sources:
         for metadata_path in sorted(capture_dir.glob("*/metadata.json")):
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -85,21 +88,40 @@ def main() -> int:
             ):
                 continue
             for case, median_ns in parse_stdout(stdout_path).items():
-                samples[(match.group("group"), case, match.group("phase"))].append(median_ns)
+                samples[(match.group("group"), case, match.group("phase"))][
+                    int(match.group("run"))
+                ] = median_ns
 
     groups = sorted({(group, case) for group, case, _phase in samples})
-    print("group\tcase\tbaseline_ns\tcandidate_ns\tdelta_pct\truns")
+    print(
+        "group\tcase\tbaseline_ns\tcandidate_ns\tdelta_pct\tpairs\twins\t"
+        "worst_regression_pct\tgate"
+    )
     for group, case in groups:
         baseline = samples.get((group, case, "baseline"), [])
         candidate = samples.get((group, case, "candidate"), [])
         if not baseline or not candidate:
             continue
-        baseline_median = statistics.median(baseline)
-        candidate_median = statistics.median(candidate)
+        paired_runs = sorted(baseline.keys() & candidate.keys())
+        if not paired_runs:
+            continue
+        baseline_median = statistics.median(baseline.values())
+        candidate_median = statistics.median(candidate.values())
         delta = (candidate_median / baseline_median - 1.0) * 100.0
+        pair_deltas = [
+            (candidate[run] / baseline[run] - 1.0) * 100.0 for run in paired_runs
+        ]
+        wins = sum(delta <= -args.min_win_pct for delta in pair_deltas)
+        worst_regression = max(pair_deltas)
+        required_wins = min(args.required_wins, len(paired_runs))
+        if required_wins == 0:
+            gate_passed = delta <= args.max_regression_pct
+        else:
+            gate_passed = wins >= required_wins and worst_regression <= args.max_regression_pct
+        gate = "pass" if gate_passed else "fail"
         print(
             f"{group}\t{case}\t{baseline_median:.3f}\t{candidate_median:.3f}\t{delta:+.2f}\t"
-            f"{len(baseline)}/{len(candidate)}"
+            f"{len(paired_runs)}\t{wins}\t{worst_regression:+.2f}\t{gate}"
         )
     return 0
 

@@ -41,8 +41,8 @@ A compile-only CI smoke gate remains cheaper and more portable for every pull re
 
 Result:
 
-Accepted as a reproducibility protocol. `scripts/perf_capture.py`, run through UV, records the exact command, label, UTC timestamp, commit, dirty state, rustc/Cargo/host metadata, exit status, and raw stdout/stderr beneath the ignored `target/perf-results/` directory. Five repeated Q16 foundation captures and paired runtime-candidate captures use explicit OS timer and 100 x 100 sampling.
+Accepted as a reproducibility protocol. `scripts/perf_capture.py`, run through UV, records the exact command, label, UTC timestamp, commit, dirty state, rustc/Cargo/host metadata, exit status, and raw stdout/stderr beneath the ignored `target/perf-results/` directory. It also saves the tracked binary patch, patch SHA-256, and a path/size/SHA-256 manifest for untracked files, producing a working-tree identity even when baseline and candidate share a dirty `HEAD`. Five repeated Q16 foundation captures and paired runtime-candidate captures use explicit OS timer and 100 x 100 sampling.
 
 Decision and fallback:
 
-Replace the uncalibrated 10% rule for this work with paired five-run gates: latency-only changes need at least a 5% win in four of five pairs and no case worse than 3%; work-removal changes must eliminate the claimed work/allocation and keep latency within 3%. Keep compile-only benchmark CI as the portable fallback and retain raw local captures for audit rather than committing machine-specific output.
+Replace the uncalibrated 10% rule for this work with paired five-run gates: latency-only changes need at least a 5% win in four of five pairs and no case worse than 3%; work-removal changes must eliminate the claimed work/allocation and keep median latency within 3%. `scripts/perf_summarize.py` now reports per-run pair count, wins, worst paired regression, and pass/fail; use `--required-wins 0` for work-removal/control cases whose gate is the median regression ceiling plus separately proven work removal. Keep compile-only benchmark CI as the portable fallback and retain raw local captures for audit rather than committing machine-specific output.

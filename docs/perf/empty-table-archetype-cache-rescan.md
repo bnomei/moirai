@@ -45,7 +45,7 @@ The candidate is disproved if empty table queries are absent from representative
 
 ## Result
 
-Accepted. The cache now stores `Option<Vec<usize>>`, so an initialized empty result is distinct from a miss. Median-of-five warm empty-query latency improved 4.76% with four archetypes and 16.50% with sixteen; the zero-archetype control improved 1.98% and stayed within the neutral/noise band.
+Accepted. The cache now stores `Option<Vec<usize>>`, so an initialized empty result is distinct from a miss. With the corrected harness creating exactly the labeled number of nonmatching archetypes, median-of-five warm empty-query latency improved 8.35% with four archetypes and 18.81% with sixteen; the zero-archetype control improved 5.75%.
 
 ## Decision and fallback
 
