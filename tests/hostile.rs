@@ -330,6 +330,42 @@ fn poisoned_world_rejects_app_update() {
 
 #[test]
 #[cfg(feature = "testkit")]
+fn caught_tick_exhaustion_faults_before_the_next_system() {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    use moirai::ChangeTick;
+
+    static LATER_RUNS: AtomicU32 = AtomicU32::new(0);
+    LATER_RUNS.store(0, Ordering::SeqCst);
+
+    #[derive(Clone, Copy)]
+    struct Counter;
+
+    let mut builder = AppBuilder::new();
+    builder.insert_resource(Counter);
+    builder
+        .add_system(System::new("poison", stage::UPDATE, |world, _dt| {
+            let _ = world.resource_mut::<Counter>();
+        }))
+        .expect("poison system");
+    builder
+        .add_system(System::new("later", stage::UPDATE, |_world, _dt| {
+            LATER_RUNS.fetch_add(1, Ordering::SeqCst);
+        }))
+        .expect("later system");
+    let mut app = builder.build().expect("app");
+    app.world_mut()
+        .set_change_tick_for_test(ChangeTick::from_raw(u64::MAX));
+
+    assert!(matches!(app.update(0.0), Err(AppError::Fault(_))));
+    assert_eq!(LATER_RUNS.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        app.fault().and_then(|fault| fault.system.as_deref()),
+        Some("poison")
+    );
+}
+
+#[test]
+#[cfg(feature = "testkit")]
 fn for_each2_mut_preflight_rejects_insufficient_change_ticks() {
     use moirai::ChangeTick;
 

@@ -109,6 +109,14 @@ fn run_stage_inner(
         let result = (schedule.systems[system_index].body)(world, dt);
         world.end_run();
 
+        if world.is_mutation_poisoned() {
+            return Err(RunOutcome {
+                fault_stage: Some(stage_label.to_string()),
+                fault_system: Some(schedule.systems[system_index].name.clone()),
+                fault_detail: Some(String::from("world mutation is poisoned")),
+            });
+        }
+
         if let Err(detail) = result {
             return Err(RunOutcome {
                 fault_stage: Some(stage_label.to_string()),
@@ -233,13 +241,14 @@ fn emit(observer: &mut Option<Box<dyn Observer>>, event: DiagnosticEvent<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::component::ComponentOptions;
     use crate::operation::StageOperation;
     use crate::schedule::compiled::{CompiledSchedule, CompiledSystem};
     use crate::schedule::owner::{ExecutionLease, ScheduleOwner};
     use crate::schedule::stage::StageDescriptor;
     use crate::schedule::system::{FlushMode, SystemId};
     use crate::schedule::RunContext;
-    use crate::time::FixedAccumulator;
+    use crate::time::{ChangeTick, FixedAccumulator};
     use crate::world::WorldBuilder;
     use alloc::boxed::Box;
     use alloc::string::String;
@@ -321,5 +330,108 @@ mod tests {
             &mut observer,
         )
         .is_err());
+    }
+
+    #[derive(Clone, Copy)]
+    struct PoisonedComponent;
+
+    #[derive(Clone, Copy)]
+    struct PoisonedResource;
+
+    #[test]
+    fn caught_component_tick_exhaustion_faults_after_system() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<PoisonedComponent>(ComponentOptions::sparse())
+            .expect("component");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("entity");
+        world
+            .insert(entity, PoisonedComponent)
+            .expect("seed component");
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX));
+
+        let mut schedule = schedule_with_system(
+            "component",
+            Box::new(move |world, _dt| {
+                let _ = world.get_mut::<PoisonedComponent>(entity);
+                Ok(())
+            }),
+        );
+        let mut context = RunContext::new();
+        let mut observer = None;
+        let outcome = run_stage(
+            &mut schedule,
+            &mut world,
+            0,
+            &mut context,
+            0.0,
+            &mut observer,
+        )
+        .expect_err("poison must fault");
+
+        assert_eq!(outcome.fault_system.as_deref(), Some("component"));
+        assert!(world.is_mutation_poisoned());
+        assert!(world.run_guard_is_idle());
+    }
+
+    #[test]
+    fn caught_resource_tick_exhaustion_faults_after_system() {
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<PoisonedResource>();
+        let mut world = builder.build().expect("world");
+        world
+            .insert_resource(PoisonedResource)
+            .expect("seed resource");
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX));
+
+        let mut schedule = schedule_with_system(
+            "resource",
+            Box::new(|world, _dt| {
+                let _ = world.resource_mut::<PoisonedResource>();
+                Ok(())
+            }),
+        );
+        let mut context = RunContext::new();
+        let mut observer = None;
+        let outcome = run_stage(
+            &mut schedule,
+            &mut world,
+            0,
+            &mut context,
+            0.0,
+            &mut observer,
+        )
+        .expect_err("poison must fault");
+
+        assert_eq!(outcome.fault_system.as_deref(), Some("resource"));
+        assert!(world.is_mutation_poisoned());
+    }
+
+    #[test]
+    fn caught_query_tick_exhaustion_faults_after_system() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX));
+        let mut schedule = schedule_with_system(
+            "query",
+            Box::new(|world, _dt| {
+                let _ = world.issue_change_tick_query();
+                Ok(())
+            }),
+        );
+        let mut context = RunContext::new();
+        let mut observer = None;
+        let outcome = run_stage(
+            &mut schedule,
+            &mut world,
+            0,
+            &mut context,
+            0.0,
+            &mut observer,
+        )
+        .expect_err("poison must fault");
+
+        assert_eq!(outcome.fault_system.as_deref(), Some("query"));
+        assert!(world.is_mutation_poisoned());
     }
 }

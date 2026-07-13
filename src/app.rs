@@ -187,7 +187,7 @@ impl App {
         }
 
         self.run_final_flush()?;
-        let observed = observe(&self.world);
+        let observed = self.observe_with_cleanup(StageOperation::Update, observe);
         self.schedule
             .clear_frame_events(&mut self.world, StageOperation::Update);
         emit(&mut self.observer, DiagnosticEvent::UpdateFinish);
@@ -215,18 +215,29 @@ impl App {
             let world = &mut self.world;
             let observer = &mut self.observer;
             let context = &mut self.run_context;
+            let faulted = &mut self.faulted;
+            let fault = &mut self.fault;
             catch_schedule_panic(|| {
-                schedule.run_operation(
+                with_terminal_unwind_cleanup(
                     world,
-                    StageOperation::Render,
                     context,
-                    delta_seconds,
-                    observer,
+                    faulted,
+                    fault,
+                    StageOperation::Render,
+                    |world, context| {
+                        schedule.run_operation(
+                            world,
+                            StageOperation::Render,
+                            context,
+                            delta_seconds,
+                            observer,
+                        )
+                    },
                 )
             })
         };
         handle_guarded_run(self, run_result)?;
-        let observed = observe(&self.world);
+        let observed = self.observe_with_cleanup(StageOperation::Render, observe);
         self.schedule
             .clear_frame_events(&mut self.world, StageOperation::Render);
         emit(&mut self.observer, DiagnosticEvent::RenderFinish);
@@ -252,9 +263,44 @@ impl App {
             let world = &mut self.world;
             let observer = &mut self.observer;
             let context = &mut self.run_context;
-            catch_schedule_panic(|| schedule.run_stage(world, stage_index, context, dt, observer))
+            let faulted = &mut self.faulted;
+            let fault = &mut self.fault;
+            catch_schedule_panic(|| {
+                with_terminal_unwind_cleanup(
+                    world,
+                    context,
+                    faulted,
+                    fault,
+                    StageOperation::Update,
+                    |world, context| schedule.run_stage(world, stage_index, context, dt, observer),
+                )
+            })
         };
         handle_guarded_run(self, run_result)
+    }
+
+    fn observe_with_cleanup<R>(
+        &mut self,
+        operation: StageOperation,
+        observe: impl FnOnce(&World) -> R,
+    ) -> R {
+        let run_result = {
+            let world = &mut self.world;
+            let context = &mut self.run_context;
+            let faulted = &mut self.faulted;
+            let fault = &mut self.fault;
+            catch_schedule_panic(|| {
+                with_terminal_unwind_cleanup(
+                    world,
+                    context,
+                    faulted,
+                    fault,
+                    operation,
+                    |world, _context| observe(world),
+                )
+            })
+        };
+        handle_guarded_value(self, run_result)
     }
 
     fn fault_tick_exhaustion(&mut self) -> AppError {
@@ -277,6 +323,7 @@ impl App {
             });
         }
         self.world.set_fixed_step(None);
+        self.run_context.fixed_step = None;
         let _ = self.world.discard_commands();
         self.world.end_run();
         emit(
@@ -293,7 +340,19 @@ impl App {
             let schedule = &mut self.schedule;
             let world = &mut self.world;
             let observer = &mut self.observer;
-            catch_schedule_panic(|| schedule.run_final_update_flush(world, observer))
+            let context = &mut self.run_context;
+            let faulted = &mut self.faulted;
+            let fault = &mut self.fault;
+            catch_schedule_panic(|| {
+                with_terminal_unwind_cleanup(
+                    world,
+                    context,
+                    faulted,
+                    fault,
+                    StageOperation::Update,
+                    |world, _context| schedule.run_final_update_flush(world, observer),
+                )
+            })
         };
         handle_guarded_run(self, run_result)
     }
@@ -318,6 +377,7 @@ impl App {
         }
         let _ = self.world.discard_commands();
         self.world.set_fixed_step(None);
+        self.run_context.fixed_step = None;
         self.world.end_run();
         emit(
             &mut self.observer,
@@ -339,6 +399,9 @@ impl App {
             });
         }
         let _ = self.world.discard_commands();
+        self.world.set_fixed_step(None);
+        self.run_context.fixed_step = None;
+        self.world.end_run();
         emit(
             &mut self.observer,
             DiagnosticEvent::Fault {
@@ -479,6 +542,58 @@ enum GuardedRun<T> {
     Panicked(alloc::boxed::Box<dyn core::any::Any + Send>),
 }
 
+struct TerminalUnwindGuard<'a> {
+    world: &'a mut World,
+    run_context: &'a mut RunContext,
+    faulted: &'a mut bool,
+    fault: &'a mut Option<AppFault>,
+    operation: StageOperation,
+    armed: bool,
+}
+
+impl Drop for TerminalUnwindGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        *self.faulted = true;
+        if self.fault.is_none() {
+            *self.fault = Some(AppFault {
+                stage: None,
+                system: None,
+                detail: Some(String::from("panic during execution")),
+            });
+        }
+        self.run_context.fixed_step = None;
+        self.world.set_fixed_step(None);
+        self.world.end_run();
+        let _ = self.world.discard_commands();
+        self.world.clear_frame_events(self.operation);
+    }
+}
+
+fn with_terminal_unwind_cleanup<R>(
+    world: &mut World,
+    run_context: &mut RunContext,
+    faulted: &mut bool,
+    fault: &mut Option<AppFault>,
+    operation: StageOperation,
+    run: impl FnOnce(&mut World, &mut RunContext) -> R,
+) -> R {
+    let mut guard = TerminalUnwindGuard {
+        world,
+        run_context,
+        faulted,
+        fault,
+        operation,
+        armed: true,
+    };
+    let result = run(&mut *guard.world, &mut *guard.run_context);
+    guard.armed = false;
+    result
+}
+
 fn catch_schedule_panic<R>(f: impl FnOnce() -> R) -> GuardedRun<R> {
     #[cfg(feature = "std")]
     {
@@ -504,6 +619,17 @@ fn handle_guarded_run<T>(
         GuardedRun::Panicked(payload) => {
             app.world.end_run();
             app.record_panic_fault();
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+fn handle_guarded_value<T>(_app: &mut App, run: GuardedRun<T>) -> T {
+    match run {
+        GuardedRun::Completed(value) => value,
+        #[cfg(feature = "std")]
+        GuardedRun::Panicked(payload) => {
+            _app.record_panic_fault();
             std::panic::resume_unwind(payload);
         }
     }
@@ -554,5 +680,35 @@ mod tests {
         let mut app = App::from_parts(world, schedule).expect("app");
         assert!(matches!(app.update(1.0), Err(AppError::FixedStepExhausted)));
         assert!(app.is_faulted());
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn fixed_system_panic_clears_world_and_run_context_steps() {
+        let fixed = FixedConfig::new(Duration::from_millis(16)).expect("fixed");
+        let mut builder = AppBuilder::new();
+        builder.fixed(fixed);
+        builder
+            .add_system(System::new("panic", stage::FIXED_UPDATE, |world, _dt| {
+                assert!(world.fixed_step().is_some());
+                world
+                    .commands()
+                    .expect("commands")
+                    .spawn()
+                    .expect("reserve");
+                panic!("fixed panic");
+            }))
+            .expect("system");
+        let mut app = builder.build().expect("app");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = app.update(0.016);
+        }));
+
+        assert!(result.is_err());
+        assert!(app.world.fixed_step().is_none());
+        assert!(app.run_context.fixed_step.is_none());
+        assert!(app.world.run_guard_is_idle());
+        assert!(!app.world.has_pending_commands());
     }
 }

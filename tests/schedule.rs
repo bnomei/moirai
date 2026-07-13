@@ -1472,9 +1472,13 @@ fn dropped_schedule_releases_resource_locks() {
 }
 
 #[test]
-#[cfg(feature = "std")]
 fn panic_clears_running_and_faults_app() {
-    let mut app = build_app(System::new("panic", stage::UPDATE, |_world, _dt| {
+    let mut app = build_app(System::new("panic", stage::UPDATE, |world, _dt| {
+        world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve entity");
         panic!("expected test panic");
     }));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1483,6 +1487,8 @@ fn panic_clears_running_and_faults_app() {
     assert!(result.is_err());
     assert!(app.is_faulted());
     assert!(app.world().run_guard_is_idle());
+    assert!(!app.world().has_pending_commands());
+    assert!(app.world().fixed_step().is_none());
     assert!(matches!(
         app.update(1.0 / 60.0),
         Err(AppError::TerminalFault)
