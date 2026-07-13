@@ -1,6 +1,6 @@
 use moirai::component::ComponentOptions;
 use moirai::world::{DynamicBundle, WorldBuilder, WorldError};
-use moirai::{State, StateError};
+use moirai::{EntityScratch, EntityScratchError, State, StateError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TableA(i32);
@@ -13,6 +13,161 @@ enum Phase {
     Menu,
     Playing,
     Paused,
+}
+
+#[test]
+fn entity_scratch_round_trips_live_values_and_reports_absence() {
+    let mut world = WorldBuilder::new().build().expect("build");
+    let entity = world.spawn().expect("spawn");
+    let missing = world.spawn().expect("spawn missing");
+    let mut scratch = EntityScratch::new(&world);
+
+    assert!(scratch.is_empty());
+    assert_eq!(scratch.get(&world, entity).expect("live missing"), None);
+    assert_eq!(scratch.insert(&world, entity, 10).expect("insert"), None);
+    assert_eq!(scratch.len(), 1);
+    assert_eq!(scratch.get(&world, entity).expect("get"), Some(&10));
+    *scratch
+        .get_mut(&world, entity)
+        .expect("get mut")
+        .expect("present") = 12;
+    assert_eq!(
+        scratch.insert(&world, entity, 20).expect("replace"),
+        Some(12)
+    );
+    assert_eq!(scratch.get(&world, missing).expect("other live"), None);
+    assert_eq!(scratch.remove(&world, entity).expect("remove"), Some(20));
+    assert!(scratch.is_empty());
+}
+
+#[test]
+fn entity_scratch_rejects_wrong_world_before_entity_validation() {
+    let mut world_a = WorldBuilder::new().build().expect("world a");
+    let world_b = WorldBuilder::new().build().expect("world b");
+    let entity = world_a.spawn().expect("spawn");
+    let mut scratch = EntityScratch::new(&world_a);
+    scratch.insert(&world_a, entity, 1).expect("insert");
+
+    assert_eq!(
+        scratch.get(&world_b, entity),
+        Err(EntityScratchError::WrongWorld)
+    );
+    assert_eq!(
+        scratch.retain_live(&world_b),
+        Err(EntityScratchError::WrongWorld)
+    );
+    assert_eq!(
+        scratch.get(&world_a, entity).expect("still present"),
+        Some(&1)
+    );
+}
+
+#[test]
+fn entity_scratch_rejects_reserved_stale_and_reused_generations() {
+    let mut world = WorldBuilder::new().build().expect("build");
+    let reserved = world
+        .commands()
+        .expect("commands")
+        .spawn()
+        .expect("reserve");
+    let mut scratch = EntityScratch::new(&world);
+    assert_eq!(
+        scratch.insert(&world, reserved, 1),
+        Err(EntityScratchError::EntityNotLive { entity: reserved })
+    );
+    world.flush().expect("make reservation live");
+    scratch.insert(&world, reserved, 2).expect("insert live");
+    world.despawn(reserved).expect("despawn");
+
+    assert_eq!(
+        scratch.get(&world, reserved),
+        Err(EntityScratchError::StaleEntity { entity: reserved })
+    );
+    assert_eq!(
+        scratch.get_mut(&world, reserved),
+        Err(EntityScratchError::StaleEntity { entity: reserved })
+    );
+    assert_eq!(
+        scratch.remove(&world, reserved),
+        Err(EntityScratchError::StaleEntity { entity: reserved })
+    );
+
+    let replacement = world.spawn().expect("reuse slot");
+    assert_ne!(reserved, replacement);
+    assert_eq!(
+        scratch.get(&world, replacement).expect("new generation"),
+        None
+    );
+    assert_eq!(
+        scratch.len(),
+        1,
+        "stale value remains until explicit cleanup"
+    );
+}
+
+#[test]
+fn entity_scratch_retain_live_removes_stale_and_preserves_live_values() {
+    let mut world = WorldBuilder::new().build().expect("build");
+    let stale = world.spawn().expect("stale");
+    let live = world.spawn().expect("live");
+    let mut scratch = EntityScratch::new(&world);
+    scratch.insert(&world, stale, 1).expect("insert stale");
+    scratch.insert(&world, live, 2).expect("insert live");
+    world.despawn(stale).expect("despawn");
+
+    assert_eq!(scratch.retain_live(&world).expect("retain"), 1);
+    assert_eq!(scratch.len(), 1);
+    assert_eq!(scratch.get(&world, live).expect("live remains"), Some(&2));
+}
+
+#[test]
+fn entity_scratch_values_drop_exactly_once_across_all_ownership_paths() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct DropValue(Rc<Cell<usize>>);
+
+    impl Drop for DropValue {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    let mut world = WorldBuilder::new().build().expect("build");
+    let entity = world.spawn().expect("spawn");
+    let drops = Rc::new(Cell::new(0));
+    let mut scratch = EntityScratch::new(&world);
+
+    scratch
+        .insert(&world, entity, DropValue(drops.clone()))
+        .expect("insert");
+    let replaced = scratch
+        .insert(&world, entity, DropValue(drops.clone()))
+        .expect("replace")
+        .expect("old value");
+    assert_eq!(drops.get(), 0);
+    drop(replaced);
+    assert_eq!(drops.get(), 1);
+
+    let removed = scratch
+        .remove(&world, entity)
+        .expect("remove")
+        .expect("stored value");
+    assert_eq!(drops.get(), 1);
+    drop(removed);
+    assert_eq!(drops.get(), 2);
+
+    scratch
+        .insert(&world, entity, DropValue(drops.clone()))
+        .expect("insert for clear");
+    scratch.clear();
+    assert_eq!(drops.get(), 3);
+
+    scratch
+        .insert(&world, entity, DropValue(drops.clone()))
+        .expect("insert for scratch drop");
+    drop(scratch);
+    assert_eq!(drops.get(), 4);
 }
 
 #[test]

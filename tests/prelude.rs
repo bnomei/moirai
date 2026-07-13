@@ -10,5 +10,7 @@ fn prelude_exports_system_authoring_vocabulary() {
     let _ = core::mem::size_of::<QueryIds<'_, '_>>();
     let _ = core::mem::size_of::<QueryEntities<'_, '_>>();
     let _ = core::mem::size_of::<EntityRef<'_>>();
+    let _ = core::mem::size_of::<EntityScratch<u8>>();
+    let _ = core::mem::size_of::<EntityScratchError>();
     let _ = WorldTick::ZERO;
 }

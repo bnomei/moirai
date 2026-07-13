@@ -14,6 +14,7 @@ mod resources;
 mod spawn;
 
 pub use crate::command::Commands;
+pub use access::{EntityScratch, EntityScratchError};
 pub use builder::WorldBuilder;
 pub use bundle::{Bundle, BundleWriter, DynamicBundle};
 pub use error::{EventReadError, FlushError, FlushReport, WorldAllocatorError, WorldError};

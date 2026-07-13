@@ -4,7 +4,7 @@ use moirai::query::{QueryError, QueryParams, QuerySpec};
 use moirai::schedule::{stage, BuildError, ScheduleBuilder, System};
 use moirai::world::WorldBuilder;
 use moirai::world::WorldError;
-use moirai::{AppBuilder, AppError};
+use moirai::{AppBuilder, AppError, EntityScratch, EntityScratchError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Damage(u32);
@@ -13,6 +13,7 @@ struct Damage(u32);
 struct Position(#[allow(dead_code)] i32);
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct Velocity(#[allow(dead_code)] i32);
 
 fn sparse_world() -> moirai::world::World {
@@ -23,6 +24,7 @@ fn sparse_world() -> moirai::world::World {
     builder.build().expect("build")
 }
 
+#[allow(dead_code)]
 fn sparse_pair_world() -> moirai::world::World {
     let mut builder = WorldBuilder::new();
     builder
@@ -32,6 +34,26 @@ fn sparse_pair_world() -> moirai::world::World {
         .register_component::<Velocity>(ComponentOptions::sparse())
         .expect("register velocity");
     builder.build().expect("build")
+}
+
+#[test]
+fn entity_scratch_never_falls_through_to_a_foreign_entity_handle() {
+    let mut world_a = sparse_world();
+    let mut world_b = sparse_world();
+    let entity_a = world_a.spawn().expect("spawn a");
+    let entity_b = world_b.spawn().expect("spawn b");
+    let mut scratch = EntityScratch::new(&world_a);
+    scratch.insert(&world_a, entity_a, 7).expect("insert");
+
+    assert_eq!(
+        scratch.get(&world_a, entity_b),
+        Err(EntityScratchError::StaleEntity { entity: entity_b })
+    );
+    assert_eq!(
+        scratch.get(&world_b, entity_a),
+        Err(EntityScratchError::WrongWorld)
+    );
+    assert_eq!(scratch.get(&world_a, entity_a).expect("origin"), Some(&7));
 }
 
 #[test]

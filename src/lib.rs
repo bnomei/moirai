@@ -81,4 +81,6 @@ pub use schedule::{
 };
 pub use state::{apply, State, StateError};
 pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
-pub use world::{Commands, DynamicBundle, World, WorldBuilder, WorldError};
+pub use world::{
+    Commands, DynamicBundle, EntityScratch, EntityScratchError, World, WorldBuilder, WorldError,
+};

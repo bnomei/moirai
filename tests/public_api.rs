@@ -89,6 +89,19 @@ fn entity_query_root_paths_compile() {
 }
 
 #[test]
+fn entity_scratch_root_and_world_paths_compile() {
+    use moirai::world::{
+        EntityScratch as WorldEntityScratch, EntityScratchError as WorldScratchError,
+    };
+    use moirai::{EntityScratch, EntityScratchError};
+
+    let _ = core::mem::size_of::<EntityScratch<u8>>();
+    let _ = core::mem::size_of::<EntityScratchError>();
+    let _ = core::mem::size_of::<WorldEntityScratch<u8>>();
+    let _ = core::mem::size_of::<WorldScratchError>();
+}
+
+#[test]
 fn phase_3_event_namespace_paths_compile() {
     use moirai::event::{ComponentAdded, EventId, EventOptions, EventReader, EventReaderStart};
     let _ = EventOptions::manual();
@@ -142,6 +155,12 @@ fn std_error_types_expose_display_and_source() {
 
     let world: &dyn Error = &moirai::world::WorldError::ChangeTickExhausted;
     assert_eq!(world.to_string(), "change tick exhausted");
+
+    let scratch: &dyn Error = &moirai::EntityScratchError::WrongWorld;
+    assert_eq!(
+        scratch.to_string(),
+        "entity scratch used with the wrong world"
+    );
 }
 
 #[cfg(feature = "std")]
