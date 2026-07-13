@@ -122,7 +122,7 @@ impl EventRegistry {
         self.entries.len()
     }
 
-    pub fn register<E: 'static>(
+    pub fn register<E: Clone + 'static>(
         &mut self,
         owner: &WorldOwner,
         options: EventOptions,
@@ -166,7 +166,7 @@ impl EventRegistry {
         Ok(EventId::new(owner.clone(), index))
     }
 
-    pub(crate) fn register_lifecycle<E: 'static>(
+    pub(crate) fn register_lifecycle<E: Clone + 'static>(
         &mut self,
         owner: &WorldOwner,
         component_index: usize,
@@ -194,7 +194,7 @@ impl EventRegistry {
         self.entries.get(id.index()).map(|entry| entry.type_id)
     }
 
-    pub fn id_of<E: 'static>(&self, owner: &WorldOwner) -> Option<EventId> {
+    pub fn id_of<E: Clone + 'static>(&self, owner: &WorldOwner) -> Option<EventId> {
         let type_id = TypeId::of::<E>();
         self.entries
             .iter()

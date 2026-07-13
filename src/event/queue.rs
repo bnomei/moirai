@@ -32,7 +32,7 @@ pub enum EventReaderStart {
     FromNow,
 }
 
-/// Independent typed event reader with explicit cursor ownership.
+/// Independent typed event reader whose reads own cloned payloads.
 pub struct EventReader<E> {
     owner: WorldOwner,
     pub(crate) event_id: EventId,
@@ -56,7 +56,11 @@ impl EventStorage {
         self.channels[index].retention = retention;
     }
 
-    pub fn send<E: 'static>(&mut self, event_id: &EventId, event: E) -> Result<(), WorldError> {
+    pub fn send<E: Clone + 'static>(
+        &mut self,
+        event_id: &EventId,
+        event: E,
+    ) -> Result<(), WorldError> {
         let channel = self.channels.get_mut(event_id.index()).ok_or_else(|| {
             WorldError::UnregisteredEvent {
                 name: alloc::format!("event {}", event_id.index()),
@@ -65,7 +69,7 @@ impl EventStorage {
         if channel.closed {
             return Err(WorldError::EventChannelClosed);
         }
-        channel.compact();
+        channel.prune_readers();
         let sequence = match channel.next_sequence.checked_add(1) {
             Some(sequence) => sequence,
             None => {
@@ -100,12 +104,10 @@ impl EventStorage {
                 name: alloc::format!("event {}", reader.event_id.index()),
             })?;
         let cursor = reader.cursor.get();
-        if let Some(&first) = channel.sequences.first() {
-            if cursor < first.saturating_sub(1) {
-                let dropped = first - cursor - 1;
-                reader.cursor.set(first.saturating_sub(1));
-                return Err(EventReadError::Lagged { dropped });
-            }
+        if cursor < channel.oldest_retained {
+            let dropped = channel.oldest_retained - cursor;
+            reader.cursor.set(channel.oldest_retained);
+            return Err(EventReadError::Lagged { dropped });
         }
         let position = channel
             .sequences
@@ -124,19 +126,28 @@ impl EventStorage {
                 name: alloc::format!("event {}", reader.event_id.index()),
             })?
             .clone();
-        if let Some(previous) = reader.last_payload.take() {
-            channel.recycle_payload(previous);
-        }
-        reader.last_payload = Some(Box::new(event));
+        reader.last_payload = Some(match reader.last_payload.take() {
+            Some(mut payload) => match payload.downcast_mut::<E>() {
+                Some(slot) => {
+                    *slot = event;
+                    payload
+                }
+                None => {
+                    channel.recycle_payload(payload);
+                    Box::new(event)
+                }
+            },
+            None => Box::new(event),
+        });
         reader.cursor.set(sequence);
-        channel.compact();
+        channel.prune_readers();
         Ok(reader
             .last_payload
             .as_ref()
             .and_then(|payload| payload.downcast_ref::<E>()))
     }
 
-    pub fn create_reader<E: 'static>(
+    pub fn create_reader<E: Clone + 'static>(
         &mut self,
         owner: WorldOwner,
         event_id: EventId,
@@ -155,12 +166,12 @@ impl EventStorage {
                 .sequences
                 .first()
                 .map(|sequence| sequence.saturating_sub(1))
-                .unwrap_or(0),
+                .unwrap_or(channel.oldest_retained),
             EventReaderStart::FromNow => channel.next_sequence,
         };
         let cursor = Rc::new(Cell::new(cursor_value));
         channel.cursors.push(Rc::downgrade(&cursor));
-        channel.compact();
+        channel.prune_readers();
         Ok(EventReader {
             owner,
             event_id,
@@ -170,7 +181,7 @@ impl EventStorage {
         })
     }
 
-    pub fn fork_reader<E: 'static>(
+    pub fn fork_reader<E: Clone + 'static>(
         &mut self,
         owner: &WorldOwner,
         reader: &EventReader<E>,
@@ -223,7 +234,7 @@ impl EventStorage {
                 channel.recycle_payloads();
                 channel.sequences.clear();
                 channel.oldest_retained = channel.next_sequence;
-                channel.compact();
+                channel.prune_readers();
             }
         }
     }
@@ -276,7 +287,7 @@ impl EventChannel {
         self.free_payloads.append(&mut self.payloads);
     }
 
-    fn compact(&mut self) {
+    fn prune_readers(&mut self) {
         let mut index = 0;
         while index < self.cursors.len() {
             if self.cursors[index].strong_count() == 0 {
@@ -285,33 +296,6 @@ impl EventChannel {
                 index += 1;
             }
         }
-        if self.cursors.is_empty() {
-            if matches!(self.retention, EventRetention::Frame(_)) && !self.payloads.is_empty() {
-                self.oldest_retained = self.next_sequence;
-                self.recycle_payloads();
-                self.sequences.clear();
-            }
-            return;
-        }
-        if !matches!(self.retention, EventRetention::Frame(_)) {
-            return;
-        }
-        let min_cursor = self
-            .cursors
-            .iter()
-            .filter_map(|weak| weak.upgrade())
-            .map(|cursor| cursor.get())
-            .min()
-            .unwrap_or(self.next_sequence);
-        while let Some(first) = self.sequences.first().copied() {
-            if first > min_cursor {
-                break;
-            }
-            self.sequences.remove(0);
-            let payload = self.payloads.remove(0);
-            self.recycle_payload(payload);
-        }
-        self.refresh_oldest_retained();
     }
 
     fn refresh_oldest_retained(&mut self) {
@@ -323,7 +307,7 @@ impl EventChannel {
     }
 }
 
-impl<E: 'static> EventReader<E> {
+impl<E: Clone + 'static> EventReader<E> {
     pub fn fork(&mut self, world: &mut crate::world::World) -> Result<Self, WorldError> {
         world.fork_event_reader(self)
     }
@@ -451,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_recycles_payloads_when_last_reader_drops() {
+    fn dropping_last_reader_does_not_clear_frame_payloads() {
         let mut builder = WorldBuilder::new();
         let event_id = builder
             .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
@@ -474,17 +458,19 @@ mod tests {
         }
         storage
             .send(&event_id, Damage(2))
-            .expect("send after compact");
+            .expect("send after reader drop");
         let mut reader = storage
             .create_reader::<Damage>(owner.clone(), event_id, EventReaderStart::OldestRetained)
             .expect("late");
-        assert_eq!(
-            storage
-                .read_next(&owner, &mut reader)
-                .expect("read")
-                .map(|d| d.0),
-            Some(2)
-        );
+        for expected in [1, 2] {
+            assert_eq!(
+                storage
+                    .read_next(&owner, &mut reader)
+                    .expect("read")
+                    .map(|d| d.0),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -593,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_removes_sequences_at_or_before_min_cursor() {
+    fn reader_progress_does_not_clear_frame_payloads() {
         let mut builder = WorldBuilder::new();
         let event_id = builder
             .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
@@ -619,13 +605,15 @@ mod tests {
         let mut reader = storage
             .create_reader::<Damage>(owner.clone(), event_id, EventReaderStart::OldestRetained)
             .expect("fresh");
-        assert_eq!(
-            storage
-                .read_next(&owner, &mut reader)
-                .expect("read")
-                .map(|d| d.0),
-            Some(4)
-        );
+        for expected in [1, 2, 3, 4] {
+            assert_eq!(
+                storage
+                    .read_next(&owner, &mut reader)
+                    .expect("read")
+                    .map(|d| d.0),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -816,7 +804,56 @@ mod tests {
     }
 
     #[test]
-    fn compact_drops_sequences_behind_slow_reader() {
+    fn frame_clear_reports_lag_and_resets_oldest_reader_start() {
+        let mut builder = WorldBuilder::new();
+        let event_id = builder
+            .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+            .expect("register");
+        let owner = builder.owner_for_test();
+        let mut storage = EventStorage::new(1);
+        storage.ensure_channel(
+            event_id.index(),
+            EventRetention::Frame(StageOperation::Update),
+        );
+        let mut existing = storage
+            .create_reader::<Damage>(owner.clone(), event_id.clone(), EventReaderStart::FromNow)
+            .expect("existing");
+        storage.send(&event_id, Damage(1)).expect("one");
+        storage.send(&event_id, Damage(2)).expect("two");
+        storage.clear_frame(StageOperation::Update);
+
+        assert!(matches!(
+            storage.read_next(&owner, &mut existing),
+            Err(EventReadError::Lagged { dropped: 2 })
+        ));
+        assert!(storage
+            .read_next(&owner, &mut existing)
+            .expect("caught up")
+            .is_none());
+
+        let mut late = storage
+            .create_reader::<Damage>(
+                owner.clone(),
+                event_id.clone(),
+                EventReaderStart::OldestRetained,
+            )
+            .expect("late");
+        assert!(storage
+            .read_next(&owner, &mut late)
+            .expect("starts at boundary")
+            .is_none());
+        storage.send(&event_id, Damage(3)).expect("three");
+        assert_eq!(
+            storage
+                .read_next(&owner, &mut late)
+                .expect("new frame")
+                .map(|event| event.0),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn from_now_reader_skips_manual_history() {
         let mut builder = WorldBuilder::new();
         let event_id = builder
             .add_event::<Damage>(EventOptions::manual())

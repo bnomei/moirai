@@ -251,7 +251,7 @@ fn command_buffer_reuses_capacity_after_warmup() {
 fn event_send_read_steady_state_is_allocation_free() {
     let mut builder = WorldBuilder::new();
     builder
-        .add_event::<Damage>(EventOptions::manual())
+        .add_event::<Damage>(EventOptions::bounded(1).expect("bounded"))
         .expect("register");
     let mut world = builder.build().expect("build");
     let mut reader = world
@@ -295,7 +295,7 @@ fn event_compact_steady_state_is_allocation_free() {
 fn event_pool_reuses_payload_after_warmup() {
     let mut builder = WorldBuilder::new();
     builder
-        .add_event::<Damage>(EventOptions::manual())
+        .add_event::<Damage>(EventOptions::bounded(1).expect("bounded"))
         .expect("register");
     let mut world = builder.build().expect("build");
     let mut reader = world
@@ -381,7 +381,7 @@ fn event_dispatch_steady_state_is_allocation_free() {
     let mut builder = AppBuilder::new();
     builder
         .world_builder()
-        .add_event::<Damage>(EventOptions::manual())
+        .add_event::<Damage>(EventOptions::bounded(1).expect("bounded"))
         .expect("register");
     builder
         .add_system(System::new("send", stage::UPDATE, |world, _dt| {

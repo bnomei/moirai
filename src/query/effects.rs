@@ -119,7 +119,7 @@ impl<'w> QueryEffects<'w> {
         })
     }
 
-    pub fn send<E: 'static>(&mut self, event: E) -> Result<(), QueryError> {
+    pub fn send<E: Clone + 'static>(&mut self, event: E) -> Result<(), QueryError> {
         let event_id = self
             .events
             .registry

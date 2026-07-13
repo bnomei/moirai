@@ -108,7 +108,7 @@ impl WorldBuilder {
         }));
     }
 
-    pub fn add_event<E: 'static>(
+    pub fn add_event<E: Clone + 'static>(
         &mut self,
         options: EventOptions,
     ) -> Result<EventId, EventRegistrationError> {

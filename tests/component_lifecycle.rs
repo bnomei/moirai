@@ -99,3 +99,37 @@ fn deferred_remove_of_absent_sparse_component_emits_nothing() {
         .expect("read")
         .is_none());
 }
+
+#[test]
+fn late_lifecycle_reader_observes_all_additions_in_order() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<Health>(ComponentOptions::sparse())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+
+    let first = world.spawn().expect("first spawn");
+    world.insert(first, Health(1)).expect("first insert");
+    let second = world.spawn().expect("second spawn");
+    world.insert(second, Health(2)).expect("second insert");
+
+    let mut reader = world
+        .on_add_reader::<Health>(EventReaderStart::OldestRetained)
+        .expect("late reader");
+    assert_eq!(
+        world
+            .read_event(&mut reader)
+            .expect("first read")
+            .expect("first event")
+            .entity,
+        first
+    );
+    assert_eq!(
+        world
+            .read_event(&mut reader)
+            .expect("second read")
+            .expect("second event")
+            .entity,
+        second
+    );
+}

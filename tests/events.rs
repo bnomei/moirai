@@ -1,5 +1,7 @@
 use moirai::event::{EventOptions, EventReaderStart};
 use moirai::world::{EventReadError, WorldBuilder};
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Damage {
@@ -177,7 +179,7 @@ fn event_payload_pool_reuses_recycled_boxes() {
 }
 
 #[test]
-fn dropping_all_readers_compacts_frame_channel() {
+fn dropping_all_readers_does_not_clear_frame_channel() {
     let mut builder = WorldBuilder::new();
     builder
         .add_event::<Damage>(EventOptions::frame(moirai::StageOperation::Update))
@@ -195,13 +197,211 @@ fn dropping_all_readers_compacts_frame_channel() {
     let mut reader = world
         .event_reader::<Damage>(EventReaderStart::OldestRetained)
         .expect("late reader");
+    for amount in [1, 2] {
+        assert_eq!(
+            world
+                .read_event(&mut reader)
+                .expect("read")
+                .map(|d| d.amount),
+            Some(amount)
+        );
+    }
+}
+
+#[test]
+fn frame_events_sent_before_first_reader_are_broadcast_in_order() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .add_event::<Damage>(EventOptions::frame(moirai::StageOperation::Update))
+        .expect("register");
+    let mut world = builder.build().expect("build");
+    world.send(Damage { amount: 1 }).expect("one");
+    world.send(Damage { amount: 2 }).expect("two");
+
+    let mut reader_a = world
+        .event_reader::<Damage>(EventReaderStart::OldestRetained)
+        .expect("reader a");
+    let mut reader_b = world
+        .event_reader::<Damage>(EventReaderStart::OldestRetained)
+        .expect("reader b");
+
+    for reader in [&mut reader_a, &mut reader_b] {
+        for amount in [1, 2] {
+            assert_eq!(
+                world
+                    .read_event(reader)
+                    .expect("read")
+                    .map(|event| event.amount),
+                Some(amount)
+            );
+        }
+    }
+}
+
+#[test]
+fn late_frame_reader_observes_events_consumed_by_an_earlier_reader() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .add_event::<Damage>(EventOptions::frame(moirai::StageOperation::Update))
+        .expect("register");
+    let mut world = builder.build().expect("build");
+    world.send(Damage { amount: 1 }).expect("one");
+    world.send(Damage { amount: 2 }).expect("two");
+
+    let mut early = world
+        .event_reader::<Damage>(EventReaderStart::OldestRetained)
+        .expect("early");
+    for amount in [1, 2] {
+        assert_eq!(
+            world
+                .read_event(&mut early)
+                .expect("early read")
+                .map(|event| event.amount),
+            Some(amount)
+        );
+    }
+
+    let mut late = world
+        .event_reader::<Damage>(EventReaderStart::OldestRetained)
+        .expect("late");
+    for amount in [1, 2] {
+        assert_eq!(
+            world
+                .read_event(&mut late)
+                .expect("late read")
+                .map(|event| event.amount),
+            Some(amount)
+        );
+    }
+}
+
+#[test]
+fn update_and_render_boundaries_clear_only_their_owned_frame_channels() {
+    #[derive(Clone, Debug, PartialEq)]
+    struct UpdateEvent(u8);
+    #[derive(Clone, Debug, PartialEq)]
+    struct RenderEvent(u8);
+
+    let mut builder = moirai::AppBuilder::new();
+    builder
+        .world_builder()
+        .add_event::<UpdateEvent>(EventOptions::frame(moirai::StageOperation::Update))
+        .expect("update event");
+    builder
+        .world_builder()
+        .add_event::<RenderEvent>(EventOptions::frame(moirai::StageOperation::Render))
+        .expect("render event");
+    let mut app = builder.build().expect("app");
+
+    app.world_mut().send(UpdateEvent(1)).expect("update one");
+    app.world_mut().send(RenderEvent(1)).expect("render one");
+    app.render(0.0).expect("render boundary");
+
+    let mut update_reader = app
+        .world_mut()
+        .event_reader::<UpdateEvent>(EventReaderStart::OldestRetained)
+        .expect("update reader");
+    let mut render_reader = app
+        .world_mut()
+        .event_reader::<RenderEvent>(EventReaderStart::OldestRetained)
+        .expect("render reader");
     assert_eq!(
-        world
-            .read_event(&mut reader)
-            .expect("read")
-            .map(|d| d.amount),
-        Some(2)
+        app.world_mut()
+            .read_event(&mut update_reader)
+            .expect("update retained")
+            .cloned(),
+        Some(UpdateEvent(1))
     );
+    assert!(app
+        .world_mut()
+        .read_event(&mut render_reader)
+        .expect("render cleared")
+        .is_none());
+
+    app.world_mut().send(UpdateEvent(2)).expect("update two");
+    app.world_mut().send(RenderEvent(2)).expect("render two");
+    app.update(0.0).expect("update boundary");
+
+    let mut late_update = app
+        .world_mut()
+        .event_reader::<UpdateEvent>(EventReaderStart::OldestRetained)
+        .expect("late update");
+    let mut late_render = app
+        .world_mut()
+        .event_reader::<RenderEvent>(EventReaderStart::OldestRetained)
+        .expect("late render");
+    assert!(app
+        .world_mut()
+        .read_event(&mut late_update)
+        .expect("update cleared")
+        .is_none());
+    assert_eq!(
+        app.world_mut()
+            .read_event(&mut late_render)
+            .expect("render retained")
+            .cloned(),
+        Some(RenderEvent(2))
+    );
+}
+
+#[test]
+fn independent_reader_payload_clones_drop_exactly_once() {
+    #[derive(Debug)]
+    struct Tracked {
+        clones: Rc<Cell<usize>>,
+        drops: Rc<Cell<usize>>,
+    }
+
+    impl Clone for Tracked {
+        fn clone(&self) -> Self {
+            self.clones.set(self.clones.get() + 1);
+            Self {
+                clones: Rc::clone(&self.clones),
+                drops: Rc::clone(&self.drops),
+            }
+        }
+    }
+
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+
+    let clones = Rc::new(Cell::new(0));
+    let drops = Rc::new(Cell::new(0));
+    {
+        let mut builder = WorldBuilder::new();
+        builder
+            .add_event::<Tracked>(EventOptions::manual())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+        world
+            .send(Tracked {
+                clones: Rc::clone(&clones),
+                drops: Rc::clone(&drops),
+            })
+            .expect("send one");
+        world
+            .send(Tracked {
+                clones: Rc::clone(&clones),
+                drops: Rc::clone(&drops),
+            })
+            .expect("send two");
+        let mut reader_a = world
+            .event_reader::<Tracked>(EventReaderStart::OldestRetained)
+            .expect("reader a");
+        let mut reader_b = world
+            .event_reader::<Tracked>(EventReaderStart::OldestRetained)
+            .expect("reader b");
+        for reader in [&mut reader_a, &mut reader_b] {
+            assert!(world.read_event(reader).expect("first read").is_some());
+            assert!(world.read_event(reader).expect("second read").is_some());
+        }
+        assert_eq!(clones.get(), 4);
+        assert_eq!(drops.get(), 2);
+    }
+    assert_eq!(drops.get(), 6);
 }
 
 #[test]

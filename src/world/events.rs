@@ -4,7 +4,7 @@ use crate::event::{ComponentAdded, ComponentRemoved, EventReader, EventReaderSta
 use crate::world::{EventReadError, World, WorldError};
 
 impl World {
-    pub fn send<E: 'static>(&mut self, event: E) -> Result<(), WorldError> {
+    pub fn send<E: Clone + 'static>(&mut self, event: E) -> Result<(), WorldError> {
         let event_id = self
             .events
             .registry
@@ -15,7 +15,7 @@ impl World {
         self.events.storage.send(&event_id, event)
     }
 
-    pub fn event_reader<E: 'static>(
+    pub fn event_reader<E: Clone + 'static>(
         &mut self,
         start: EventReaderStart,
     ) -> Result<EventReader<E>, WorldError> {
@@ -72,7 +72,7 @@ impl World {
             .create_reader(self.owner.clone(), event_id, start)
     }
 
-    pub(crate) fn fork_event_reader<E: 'static>(
+    pub(crate) fn fork_event_reader<E: Clone + 'static>(
         &mut self,
         reader: &EventReader<E>,
     ) -> Result<EventReader<E>, WorldError> {
