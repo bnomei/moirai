@@ -10,7 +10,7 @@ pub struct QueryCursor {
 }
 
 impl QueryCursor {
-    pub fn from_spec_start<T: Clone + 'static>(
+    pub fn from_spec_start<T: 'static>(
         world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
     ) -> Result<Self, QueryError> {
@@ -18,7 +18,7 @@ impl QueryCursor {
         Ok(Self::from_start(world, fingerprint))
     }
 
-    pub fn from_spec_now<T: Clone + 'static>(
+    pub fn from_spec_now<T: 'static>(
         world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
     ) -> Result<Self, QueryError> {

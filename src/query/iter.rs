@@ -5,7 +5,7 @@ use crate::entity::EntityId;
 use crate::world::query::cached_source::QueryCachedSource;
 
 /// Immutable single-component query iterator.
-pub struct Query1<'w, 'c, T: Clone + 'static> {
+pub struct Query1<'w, 'c, T: 'static> {
     pub(crate) world: &'w crate::world::World,
     pub(crate) plan: Rc<crate::world::query::plan::ResolvedPlan>,
     pub(crate) params_fingerprint: u64,
@@ -16,7 +16,7 @@ pub struct Query1<'w, 'c, T: Clone + 'static> {
     pub(crate) state: Query1State<'w, T>,
 }
 
-pub(crate) enum Query1State<'w, T: Clone + 'static> {
+pub(crate) enum Query1State<'w, T: 'static> {
     Sparse {
         store: &'w crate::storage::TypedSparseStorage<T>,
         index: usize,
@@ -38,14 +38,14 @@ pub(crate) enum Query1State<'w, T: Clone + 'static> {
 }
 
 /// Immutable two-component query iterator.
-pub struct Query2<'w, 'c, A: Clone + 'static, B: Clone + 'static> {
+pub struct Query2<'w, 'c, A: 'static, B: 'static> {
     pub(crate) inner: Query1<'w, 'c, A>,
     pub(crate) second_index: usize,
     pub(crate) second_is_table: bool,
     pub(crate) _marker: core::marker::PhantomData<fn() -> B>,
 }
 
-impl<'w, 'c, T: Clone + 'static> Query1<'w, 'c, T> {
+impl<'w, 'c, T: 'static> Query1<'w, 'c, T> {
     pub(crate) fn new(
         world: &'w crate::world::World,
         plan: Rc<crate::world::query::plan::ResolvedPlan>,
@@ -81,7 +81,7 @@ impl<'w, 'c, T: Clone + 'static> Query1<'w, 'c, T> {
     }
 }
 
-impl<'w, 'c, T: Clone + 'static> Iterator for Query1<'w, 'c, T> {
+impl<'w, 'c, T: 'static> Iterator for Query1<'w, 'c, T> {
     type Item = (EntityId, &'w T);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -187,7 +187,7 @@ impl<'w, 'c, T: Clone + 'static> Iterator for Query1<'w, 'c, T> {
     }
 }
 
-impl<'w, 'c, T: Clone + 'static> Drop for Query1<'w, 'c, T> {
+impl<'w, 'c, T: 'static> Drop for Query1<'w, 'c, T> {
     fn drop(&mut self) {
         if matches!(self.state, Query1State::Done) {
             self.commit_cursor_if_needed();
@@ -195,7 +195,7 @@ impl<'w, 'c, T: Clone + 'static> Drop for Query1<'w, 'c, T> {
     }
 }
 
-impl<'w, 'c, A: Clone + 'static, B: Clone + 'static> Query2<'w, 'c, A, B> {
+impl<'w, 'c, A: 'static, B: 'static> Query2<'w, 'c, A, B> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         world: &'w crate::world::World,
@@ -225,7 +225,7 @@ impl<'w, 'c, A: Clone + 'static, B: Clone + 'static> Query2<'w, 'c, A, B> {
     }
 }
 
-impl<'w, 'c, A: Clone + 'static, B: Clone + 'static> Iterator for Query2<'w, 'c, A, B> {
+impl<'w, 'c, A: 'static, B: 'static> Iterator for Query2<'w, 'c, A, B> {
     type Item = (EntityId, &'w A, &'w B);
 
     fn next(&mut self) -> Option<Self::Item> {

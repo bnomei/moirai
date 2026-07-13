@@ -19,7 +19,7 @@ impl World {
         mut f: impl FnMut(EntityId, &mut T) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        T: Clone + 'static,
+        T: 'static,
     {
         self.for_each_mut_inner(spec, params, |entity, value, _| f(entity, value))
     }
@@ -31,7 +31,7 @@ impl World {
         f: impl FnMut(EntityId, &mut T, &mut QueryEffects<'_>) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        T: Clone + 'static,
+        T: 'static,
     {
         self.for_each_mut_inner(spec, params, f)
     }
@@ -43,8 +43,8 @@ impl World {
         mut f: impl FnMut(EntityId, &mut A, &mut B) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        A: Clone + 'static,
-        B: Clone + 'static,
+        A: 'static,
+        B: 'static,
     {
         self.for_each2_mut_inner(spec, params, |entity, a, b, _| f(entity, a, b))
     }
@@ -56,8 +56,8 @@ impl World {
         f: impl FnMut(EntityId, &mut A, &mut B, &mut QueryEffects<'_>) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        A: Clone + 'static,
-        B: Clone + 'static,
+        A: 'static,
+        B: 'static,
     {
         self.for_each2_mut_inner(spec, params, f)
     }
@@ -69,7 +69,7 @@ impl World {
         mut f: impl FnMut(EntityId, &mut T, &mut QueryEffects<'_>) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        T: Clone + 'static,
+        T: 'static,
     {
         let mut params = params;
         let plan = self.resolve_query1_plan::<T>(spec)?;
@@ -109,8 +109,8 @@ impl World {
         mut f: impl FnMut(EntityId, &mut A, &mut B, &mut QueryEffects<'_>) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        A: Clone + 'static,
-        B: Clone + 'static,
+        A: 'static,
+        B: 'static,
     {
         let mut params = params;
         let (plan, second_index, second_is_table) = self.resolve_query2_plan::<A, B>(spec)?;
@@ -238,7 +238,7 @@ impl World {
         mut f: impl FnMut(&mut T, &mut QueryEffects<'_>) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        T: Clone + 'static,
+        T: 'static,
     {
         let run_guard = self.run_guard_state();
         let owner = self.owner_token();
@@ -272,7 +272,7 @@ impl World {
         mut f: impl FnMut(&mut T, &mut QueryEffects<'_>) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        T: Clone + 'static,
+        T: 'static,
     {
         let run_guard = self.run_guard_state();
         let owner = self.owner_token();
@@ -303,8 +303,8 @@ impl World {
         mut f: impl FnMut(&mut A, &mut B, &mut QueryEffects<'_>) -> Result<(), QueryError>,
     ) -> Result<(), QueryError>
     where
-        A: Clone + 'static,
-        B: Clone + 'static,
+        A: 'static,
+        B: 'static,
     {
         let run_guard = self.run_guard_state();
         let owner = self.owner_token();

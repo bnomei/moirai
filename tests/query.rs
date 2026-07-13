@@ -17,6 +17,10 @@ struct Player;
 #[derive(Clone, Copy)]
 struct Enemy;
 
+struct NonCloneSparse(i32);
+
+struct NonCloneTable(i32);
+
 fn sparse_world() -> World {
     let mut builder = WorldBuilder::new();
     builder
@@ -108,6 +112,144 @@ fn query2_returns_intersection() {
         .map(|(_, p, v)| (p.0, v.0))
         .collect();
     assert_eq!(matches, vec![(1, 10)]);
+}
+
+#[test]
+fn non_clone_components_cover_query_cursor_cache_and_mutation_surfaces() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<NonCloneSparse>(ComponentOptions::sparse())
+        .expect("sparse");
+    builder
+        .register_component::<NonCloneTable>(ComponentOptions::table())
+        .expect("table");
+    let mut world = builder.build().expect("build");
+    let entity = world.spawn().expect("spawn");
+    world
+        .insert(entity, NonCloneSparse(1))
+        .expect("insert sparse");
+    world
+        .insert(entity, NonCloneTable(2))
+        .expect("insert table");
+
+    let spec = QuerySpec::new();
+    let membership = world
+        .build_query_cache::<NonCloneSparse>(spec.clone())
+        .expect("membership");
+    let result = world
+        .build_query_result_cache::<NonCloneSparse>(spec.clone())
+        .expect("result");
+    let pair_membership = world
+        .build_query2_cache::<NonCloneSparse, NonCloneTable>(spec.clone())
+        .expect("pair membership");
+    let pair_result = world
+        .build_query2_result_cache::<NonCloneSparse, NonCloneTable>(spec.clone())
+        .expect("pair result");
+
+    assert_eq!(
+        world
+            .query::<NonCloneSparse>(&spec, QueryParams::new().membership_cache(&membership))
+            .expect("membership query")
+            .map(|(_, value)| value.0)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert_eq!(
+        world
+            .query::<NonCloneSparse>(&spec, QueryParams::new().result_cache(&result))
+            .expect("result query")
+            .count(),
+        1
+    );
+    assert_eq!(
+        world
+            .query2::<NonCloneSparse, NonCloneTable>(
+                &spec,
+                QueryParams::new().membership_cache(&pair_membership),
+            )
+            .expect("pair membership query")
+            .count(),
+        1
+    );
+    assert_eq!(
+        world
+            .query2::<NonCloneSparse, NonCloneTable>(
+                &spec,
+                QueryParams::new().result_cache(&pair_result),
+            )
+            .expect("pair result query")
+            .count(),
+        1
+    );
+
+    world
+        .for_each_mut::<NonCloneSparse>(
+            &spec,
+            QueryParams::new().membership_cache(&membership),
+            |_, value| {
+                value.0 += 10;
+                Ok(())
+            },
+        )
+        .expect("mutate sparse");
+    world
+        .for_each2_mut::<NonCloneSparse, NonCloneTable>(
+            &spec,
+            QueryParams::new().result_cache(&pair_result),
+            |_, sparse, table| {
+                sparse.0 += table.0;
+                table.0 += 1;
+                Ok(())
+            },
+        )
+        .expect("mutate pair");
+
+    assert_eq!(
+        world
+            .get::<NonCloneSparse>(entity)
+            .expect("get")
+            .expect("present")
+            .0,
+        13
+    );
+    assert_eq!(
+        world
+            .get::<NonCloneTable>(entity)
+            .expect("get")
+            .expect("present")
+            .0,
+        3
+    );
+
+    let mut cursor_builder = WorldBuilder::new();
+    cursor_builder
+        .register_component::<NonCloneSparse>(ComponentOptions::sparse())
+        .expect("cursor component");
+    let mut cursor_world = cursor_builder.build().expect("cursor world");
+    let cursor_entity = cursor_world.spawn().expect("cursor entity");
+    cursor_world
+        .insert(cursor_entity, NonCloneSparse(5))
+        .expect("cursor value");
+    let added_spec = QuerySpec::new().added::<NonCloneSparse>();
+    let mut start_cursor =
+        QueryCursor::from_spec_start::<NonCloneSparse>(&mut cursor_world, &added_spec)
+            .expect("start");
+    assert_eq!(
+        cursor_world
+            .query::<NonCloneSparse>(&added_spec, QueryParams::new().cursor(&mut start_cursor),)
+            .expect("query")
+            .count(),
+        1
+    );
+    let mut now_cursor =
+        QueryCursor::from_spec_now::<NonCloneSparse>(&mut cursor_world, &added_spec).expect("now");
+    assert_eq!(
+        cursor_world
+            .query::<NonCloneSparse>(&added_spec, QueryParams::new().cursor(&mut now_cursor))
+            .expect("query")
+            .count(),
+        0
+    );
 }
 
 #[test]

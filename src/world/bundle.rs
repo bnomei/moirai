@@ -27,7 +27,7 @@ impl DynamicBundle {
         }
     }
 
-    pub fn push<T: Clone + 'static>(&mut self, world: &World, value: T) -> Result<(), WorldError> {
+    pub fn push<T: 'static>(&mut self, world: &World, value: T) -> Result<(), WorldError> {
         let component_id = world.component_id::<T>()?;
         if world.is_tag_component(&component_id) {
             return Err(WorldError::WrongStorageKind {
@@ -116,7 +116,7 @@ impl<'w> BundleWriter<'w> {
         }
     }
 
-    pub fn insert<T: Clone + 'static>(&mut self, value: T) -> Result<(), WorldError> {
+    pub fn insert<T: 'static>(&mut self, value: T) -> Result<(), WorldError> {
         if self.deferred {
             self.world.ensure_mutable()?;
             self.world.ensure_command_target(self.entity)?;
@@ -189,7 +189,7 @@ impl<'w> BundleWriter<'w> {
 macro_rules! impl_bundle_tuple {
     ($($name:ident),+) => {
         #[allow(non_snake_case)]
-        impl<$($name: Clone + 'static),+> Bundle for ($($name,)+) {
+        impl<$($name: 'static),+> Bundle for ($($name,)+) {
             fn write(self, writer: &mut BundleWriter<'_>) -> Result<(), WorldError> {
                 let ($($name,)+) = self;
                 $(writer.insert($name)?;)+

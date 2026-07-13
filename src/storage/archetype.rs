@@ -1,6 +1,6 @@
 use crate::component::{ComponentId, ComponentRegistry, StorageKind};
 use crate::entity::EntityId;
-use crate::storage::table::{ErasedTableColumn, TypedTableColumn};
+use crate::storage::table::{ErasedTableColumn, ErasedTableRow, TypedTableColumn};
 use crate::time::ChangeTick;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -63,7 +63,7 @@ impl ArchetypeStorage {
         }
     }
 
-    pub fn insert_table<T: Clone + 'static>(
+    pub fn insert_table<T: 'static>(
         &mut self,
         entity: EntityId,
         component_index: u32,
@@ -82,7 +82,7 @@ impl ArchetypeStorage {
         }
 
         let destination = current.with_added(component_index);
-        let row = self.place_entity(entity, &destination, tick) as usize;
+        let row = self.place_entity(entity, &destination) as usize;
         let archetype = self.location(entity).expect("placed").archetype as usize;
         let column = self.column_position(archetype, component_index);
         if self.columns[archetype][column].len() <= row {
@@ -94,7 +94,7 @@ impl ArchetypeStorage {
     }
 
     #[cfg(test)]
-    pub(crate) fn write_migration_column_for_test<T: Clone + 'static>(
+    pub(crate) fn write_migration_column_for_test<T: 'static>(
         &mut self,
         archetype: usize,
         component_index: u32,
@@ -110,11 +110,7 @@ impl ArchetypeStorage {
         }
     }
 
-    pub fn get_table<T: Clone + 'static>(
-        &self,
-        entity: EntityId,
-        component_index: u32,
-    ) -> Option<&T> {
+    pub fn get_table<T: 'static>(&self, entity: EntityId, component_index: u32) -> Option<&T> {
         let location = self.location(entity)?;
         let archetype = location.archetype as usize;
         if !self.signatures[archetype].contains(component_index) {
@@ -127,7 +123,7 @@ impl ArchetypeStorage {
             .downcast_ref::<T>()
     }
 
-    pub(crate) fn get_two_table_mut<TA: Clone + 'static, TB: Clone + 'static>(
+    pub(crate) fn get_two_table_mut<TA: 'static, TB: 'static>(
         &mut self,
         entity: EntityId,
         index_a: u32,
@@ -161,7 +157,7 @@ impl ArchetypeStorage {
         }
     }
 
-    pub fn get_table_mut<T: Clone + 'static>(
+    pub fn get_table_mut<T: 'static>(
         &mut self,
         entity: EntityId,
         component_index: u32,
@@ -180,39 +176,31 @@ impl ArchetypeStorage {
     }
 
     pub fn remove_table_index(&mut self, entity: EntityId, component_index: u32) -> bool {
-        if !self.signature_for(entity).contains(component_index) {
+        let current = self.signature_for(entity);
+        if !current.contains(component_index) {
             return false;
         }
-        let location = self.location(entity).expect("entity located");
-        let archetype = location.archetype as usize;
-        let row = location.row as usize;
-        let column = self.column_position(archetype, component_index);
-        let _ = self.columns[archetype][column].take_value(row);
-        let destination = self.signature_for(entity).with_removed(component_index);
-        self.rehome_entity(entity, &destination);
+        let destination = current.with_removed(component_index);
+        let _ = self.relocate_entity(entity, &destination, None);
         true
     }
 
-    pub fn remove_table<T: Clone + 'static>(
+    pub fn remove_table<T: 'static>(
         &mut self,
         entity: EntityId,
         component_index: u32,
     ) -> Option<T> {
-        if !self.signature_for(entity).contains(component_index) {
+        let current = self.signature_for(entity);
+        if !current.contains(component_index) {
             return None;
         }
-        let location = self.location(entity)?;
-        let archetype = location.archetype as usize;
-        let row = location.row as usize;
-        let column = self.column_position(archetype, component_index);
-        let removed = self.columns[archetype][column]
-            .take_value(row)?
+        let destination = current.with_removed(component_index);
+        let (_, removed) = self.relocate_entity(entity, &destination, Some(component_index));
+        removed?
+            .into_value()
             .downcast::<T>()
             .ok()
-            .map(|value| *value);
-        let destination = self.signature_for(entity).with_removed(component_index);
-        self.rehome_entity(entity, &destination);
-        removed
+            .map(|value| *value)
     }
 
     pub fn table_component_indices(&self, entity: EntityId) -> Vec<u32> {
@@ -270,18 +258,17 @@ impl ArchetypeStorage {
     }
 
     pub fn remove_entity(&mut self, entity: EntityId) {
-        let Some(location) = self.location(entity) else {
+        if self.location(entity).is_none() {
             self.clear_location(entity);
             return;
-        };
-        self.remove_row(location);
-        self.clear_location(entity);
+        }
+        let _ = self.relocate_entity(entity, &Signature::empty(), None);
     }
 
-    fn place_entity(&mut self, entity: EntityId, signature: &Signature, tick: ChangeTick) -> u32 {
+    fn place_entity(&mut self, entity: EntityId, signature: &Signature) -> u32 {
         if signature.components.is_empty() {
-            if let Some(old) = self.location(entity) {
-                self.remove_row(old);
+            if self.location(entity).is_some() {
+                let _ = self.relocate_entity(entity, signature, None);
             }
             self.clear_location(entity);
             return 0;
@@ -292,7 +279,7 @@ impl ArchetypeStorage {
             if source.archetype == dest {
                 return source.row;
             }
-            return self.migrate_entity(entity, source, dest, tick);
+            return self.relocate_entity(entity, signature, None).0;
         }
 
         let row = self.entity_slots[dest as usize].len() as u32;
@@ -304,49 +291,84 @@ impl ArchetypeStorage {
         row
     }
 
-    fn rehome_entity(&mut self, entity: EntityId, signature: &Signature) {
-        let _ = self.place_entity(entity, signature, ChangeTick::ZERO);
-    }
-
-    fn migrate_entity(
+    fn relocate_entity(
         &mut self,
         entity: EntityId,
-        source: Location,
-        dest_archetype: u32,
-        tick: ChangeTick,
-    ) -> u32 {
+        destination: &Signature,
+        removed_component: Option<u32>,
+    ) -> (u32, Option<ErasedTableRow>) {
+        let dest_archetype = if destination.components.is_empty() {
+            None
+        } else {
+            Some(self.find_or_create_archetype(destination) as usize)
+        };
+        let source = self.location(entity).expect("entity located");
         let source_archetype = source.archetype as usize;
         let source_row = source.row as usize;
-        let dest_archetype = dest_archetype as usize;
-        let dest_row = self.entity_slots[dest_archetype].len() as u32;
-        self.entity_slots[dest_archetype].push(entity.slot());
-
-        let shared: Vec<u32> = self.signatures[source_archetype]
-            .components
+        if let Some(dest_archetype) = dest_archetype {
+            for component_index in &destination.components {
+                if self.signatures[source_archetype].contains(*component_index) {
+                    let source_column = self.column_position(source_archetype, *component_index);
+                    let dest_column = self.column_position(dest_archetype, *component_index);
+                    assert_eq!(
+                        ErasedTableColumn::type_id(
+                            self.columns[source_archetype][source_column].as_ref(),
+                        ),
+                        ErasedTableColumn::type_id(
+                            self.columns[dest_archetype][dest_column].as_ref(),
+                        ),
+                        "table column type mismatch"
+                    );
+                }
+            }
+        }
+        let source_components = self.signatures[source_archetype].components.clone();
+        let rows = source_components
             .iter()
             .copied()
-            .filter(|index| self.signatures[dest_archetype].contains(*index))
-            .collect();
-        for component_index in shared {
-            let src_col = self.column_position(source_archetype, component_index);
-            let dst_col = self.column_position(dest_archetype, component_index);
-            append_row_between(
-                &mut self.columns,
-                source_archetype,
-                src_col,
-                source_row,
-                dest_archetype,
-                dst_col,
-            );
+            .zip(
+                self.columns[source_archetype]
+                    .iter_mut()
+                    .map(|column| column.take_row(source_row)),
+            )
+            .collect::<Vec<_>>();
+
+        self.entity_slots[source_archetype].swap_remove(source_row);
+        if source_row < self.entity_slots[source_archetype].len() {
+            let repaired_slot = self.entity_slots[source_archetype][source_row];
+            self.locations[repaired_slot as usize] = Some(Location {
+                archetype: source.archetype,
+                row: source.row,
+            });
         }
 
-        self.remove_row(source);
-        *self.ensure_location_slot(entity) = Some(Location {
-            archetype: dest_archetype as u32,
-            row: dest_row,
-        });
-        let _ = tick;
-        dest_row
+        let mut removed = None;
+        for (component_index, row) in rows {
+            if let Some(dest_archetype) = dest_archetype {
+                if destination.contains(component_index) {
+                    let dest_column = self.column_position(dest_archetype, component_index);
+                    self.columns[dest_archetype][dest_column].append_row(row);
+                    continue;
+                }
+            }
+            if removed_component == Some(component_index) {
+                removed = Some(row);
+            }
+        }
+
+        let dest_row = if let Some(dest_archetype) = dest_archetype {
+            let dest_row = self.entity_slots[dest_archetype].len() as u32;
+            self.entity_slots[dest_archetype].push(entity.slot());
+            *self.ensure_location_slot(entity) = Some(Location {
+                archetype: dest_archetype as u32,
+                row: dest_row,
+            });
+            dest_row
+        } else {
+            self.clear_location(entity);
+            0
+        };
+        (dest_row, removed)
     }
 
     fn find_or_create_archetype(&mut self, signature: &Signature) -> u32 {
@@ -370,23 +392,6 @@ impl ArchetypeStorage {
         self.columns.push(columns);
         self.entity_slots.push(Vec::new());
         index
-    }
-
-    fn remove_row(&mut self, location: Location) {
-        let archetype = location.archetype as usize;
-        let row = location.row as usize;
-        let moved_slot = self.entity_slots[archetype].swap_remove(row);
-        for column in &mut self.columns[archetype] {
-            column.swap_remove_row(row);
-        }
-        if row < self.entity_slots[archetype].len() {
-            let repaired_slot = self.entity_slots[archetype][row];
-            self.locations[repaired_slot as usize] = Some(Location {
-                archetype: location.archetype,
-                row: row as u32,
-            });
-        }
-        let _ = moved_slot;
     }
 
     fn column_position(&self, archetype: usize, component_index: u32) -> usize {
@@ -424,30 +429,11 @@ impl ArchetypeStorage {
     }
 }
 
-pub(crate) fn table_column_factory<T: Clone + 'static>() -> TableColumnFactory {
-    fn factory<T: Clone + 'static>() -> Box<dyn ErasedTableColumn> {
+pub(crate) fn table_column_factory<T: 'static>() -> TableColumnFactory {
+    fn factory<T: 'static>() -> Box<dyn ErasedTableColumn> {
         Box::new(TypedTableColumn::<T>::new())
     }
     factory::<T>
-}
-
-fn append_row_between(
-    columns: &mut [Vec<Box<dyn ErasedTableColumn>>],
-    source_archetype: usize,
-    source_column: usize,
-    source_row: usize,
-    dest_archetype: usize,
-    dest_column: usize,
-) {
-    if source_archetype < dest_archetype {
-        let (left, right) = columns.split_at_mut(dest_archetype);
-        left[source_archetype][source_column]
-            .append_row_from(source_row, right[0][dest_column].as_mut());
-    } else {
-        let (left, right) = columns.split_at_mut(source_archetype);
-        right[0][source_column]
-            .append_row_from(source_row, left[dest_archetype][dest_column].as_mut());
-    }
 }
 
 impl ComponentRegistry {
@@ -615,7 +601,7 @@ mod tests {
         storage.insert_table(entity(7), 0, Health(1), tick);
         let location = storage.location(entity(7)).expect("location");
         let signature = storage.signature_for(entity(7));
-        let row = storage.place_entity(entity(7), &signature, tick);
+        let row = storage.place_entity(entity(7), &signature);
         assert_eq!(row, location.row);
     }
 }

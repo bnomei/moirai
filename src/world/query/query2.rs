@@ -7,7 +7,7 @@ use super::filter::validate_exact_ids;
 use super::plan::TraversalSource;
 
 impl World {
-    pub fn query2<'w, 'c, A: Clone + 'static, B: Clone + 'static>(
+    pub fn query2<'w, 'c, A: 'static, B: 'static>(
         &'w mut self,
         spec: &QuerySpec,
         params: QueryParams<'c>,
@@ -52,7 +52,7 @@ impl World {
         )
     }
 
-    pub(crate) fn query2_second<B: Clone + 'static>(
+    pub(crate) fn query2_second<B: 'static>(
         &self,
         entity: EntityId,
         second_index: usize,

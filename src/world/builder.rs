@@ -56,14 +56,14 @@ impl WorldBuilder {
         }
     }
 
-    pub fn register_component<T: Clone + 'static>(
+    pub fn register_component<T: 'static>(
         &mut self,
         options: ComponentOptions,
     ) -> Result<ComponentId, RegistrationError> {
         self.register_component_named::<T>(None, options)
     }
 
-    pub fn register_component_named<T: Clone + 'static>(
+    pub fn register_component_named<T: 'static>(
         &mut self,
         name: Option<&str>,
         options: ComponentOptions,

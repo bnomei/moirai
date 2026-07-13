@@ -4,12 +4,11 @@ use core::any::{Any, TypeId};
 use crate::time::ChangeTick;
 
 pub(crate) trait ErasedTableColumn: Any {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn len(&self) -> usize;
     #[allow(dead_code)]
     fn type_id(&self) -> TypeId;
-    fn swap_remove_row(&mut self, row: usize);
-    fn append_row_from(&self, src_row: usize, dest: &mut dyn ErasedTableColumn);
+    fn take_row(&mut self, row: usize) -> ErasedTableRow;
+    fn append_row(&mut self, row: ErasedTableRow);
     fn append_value(&mut self, value: Box<dyn Any>, tick: ChangeTick) -> usize;
     fn replace_value(
         &mut self,
@@ -19,18 +18,29 @@ pub(crate) trait ErasedTableColumn: Any {
     ) -> Option<Box<dyn Any>>;
     fn get_value(&self, row: usize) -> Option<&dyn Any>;
     fn get_value_mut(&mut self, row: usize, tick: ChangeTick) -> Option<&mut dyn Any>;
-    fn take_value(&mut self, row: usize) -> Option<Box<dyn Any>>;
     fn added_tick(&self, row: usize) -> Option<ChangeTick>;
     fn changed_tick(&self, row: usize) -> Option<ChangeTick>;
 }
 
-pub(crate) struct TypedTableColumn<T: Clone + 'static> {
+pub(crate) struct ErasedTableRow {
+    value: Box<dyn Any>,
+    added: ChangeTick,
+    changed: ChangeTick,
+}
+
+impl ErasedTableRow {
+    pub(crate) fn into_value(self) -> Box<dyn Any> {
+        self.value
+    }
+}
+
+pub(crate) struct TypedTableColumn<T: 'static> {
     data: alloc::vec::Vec<T>,
     added: alloc::vec::Vec<u64>,
     changed: alloc::vec::Vec<u64>,
 }
 
-impl<T: Clone + 'static> TypedTableColumn<T> {
+impl<T: 'static> TypedTableColumn<T> {
     pub fn new() -> Self {
         Self {
             data: alloc::vec::Vec::new(),
@@ -48,11 +58,7 @@ impl<T: Clone + 'static> TypedTableColumn<T> {
     }
 }
 
-impl<T: Clone + 'static> ErasedTableColumn for TypedTableColumn<T> {
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
+impl<T: 'static> ErasedTableColumn for TypedTableColumn<T> {
     fn len(&self) -> usize {
         self.data.len()
     }
@@ -61,26 +67,22 @@ impl<T: Clone + 'static> ErasedTableColumn for TypedTableColumn<T> {
         TypeId::of::<T>()
     }
 
-    fn swap_remove_row(&mut self, row: usize) {
-        let last = self.data.len() - 1;
-        if row != last {
-            self.data.swap(row, last);
-            self.added.swap(row, last);
-            self.changed.swap(row, last);
+    fn take_row(&mut self, row: usize) -> ErasedTableRow {
+        ErasedTableRow {
+            value: Box::new(self.data.swap_remove(row)),
+            added: ChangeTick::from_raw(self.added.swap_remove(row)),
+            changed: ChangeTick::from_raw(self.changed.swap_remove(row)),
         }
-        self.data.pop();
-        self.added.pop();
-        self.changed.pop();
     }
 
-    fn append_row_from(&self, src_row: usize, dest: &mut dyn ErasedTableColumn) {
-        let dest = dest
-            .as_any_mut()
-            .downcast_mut::<TypedTableColumn<T>>()
+    fn append_row(&mut self, row: ErasedTableRow) {
+        let value = *row
+            .value
+            .downcast::<T>()
             .expect("table column type mismatch");
-        dest.data.push(self.data[src_row].clone());
-        dest.added.push(self.added[src_row]);
-        dest.changed.push(self.changed[src_row]);
+        self.data.push(value);
+        self.added.push(row.added.raw());
+        self.changed.push(row.changed.raw());
     }
 
     fn append_value(&mut self, value: Box<dyn Any>, tick: ChangeTick) -> usize {
@@ -118,12 +120,6 @@ impl<T: Clone + 'static> ErasedTableColumn for TypedTableColumn<T> {
         let value = self.data.get_mut(row)?;
         self.changed[row] = tick.raw();
         Some(value as &mut dyn Any)
-    }
-
-    fn take_value(&mut self, row: usize) -> Option<Box<dyn Any>> {
-        self.data
-            .get(row)
-            .map(|value| Box::new(value.clone()) as Box<dyn Any>)
     }
 
     fn added_tick(&self, row: usize) -> Option<ChangeTick> {

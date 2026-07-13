@@ -32,7 +32,7 @@ impl ResultCacheSlot {
 }
 
 impl World {
-    pub fn build_query_result_cache<T: Clone + 'static>(
+    pub fn build_query_result_cache<T: 'static>(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
@@ -53,7 +53,7 @@ impl World {
         })
     }
 
-    pub fn build_query2_result_cache<A: Clone + 'static, B: Clone + 'static>(
+    pub fn build_query2_result_cache<A: 'static, B: 'static>(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {

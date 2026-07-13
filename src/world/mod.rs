@@ -229,7 +229,7 @@ impl World {
         Ok(())
     }
 
-    pub fn insert<T: Clone + 'static>(
+    pub fn insert<T: 'static>(
         &mut self,
         entity: EntityId,
         value: T,
@@ -311,7 +311,7 @@ impl World {
         Ok(self.tag_store(tag.index()).contains(entity))
     }
 
-    pub fn get<T: Clone + 'static>(&self, entity: EntityId) -> Result<Option<&T>, WorldError> {
+    pub fn get<T: 'static>(&self, entity: EntityId) -> Result<Option<&T>, WorldError> {
         self.ensure_live_access(entity)?;
         let component_id = self.component_id::<T>()?;
         component_id.validate_owner(&self.owner)?;
@@ -326,10 +326,7 @@ impl World {
         Ok(self.sparse_store::<T>(component_id)?.get(entity))
     }
 
-    pub fn get_mut<T: Clone + 'static>(
-        &mut self,
-        entity: EntityId,
-    ) -> Result<Option<&mut T>, WorldError> {
+    pub fn get_mut<T: 'static>(&mut self, entity: EntityId) -> Result<Option<&mut T>, WorldError> {
         self.ensure_mutable()?;
         self.ensure_live_access(entity)?;
         let component_id = self.component_id::<T>()?;
@@ -378,10 +375,7 @@ impl World {
             .get_mut_with_tick(entity, tick))
     }
 
-    pub fn remove<T: Clone + 'static>(
-        &mut self,
-        entity: EntityId,
-    ) -> Result<Option<T>, WorldError> {
+    pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<Option<T>, WorldError> {
         self.ensure_idle_structural()?;
         self.ensure_mutable()?;
         self.ensure_live_access(entity)?;
@@ -611,7 +605,7 @@ impl World {
             .map_err(|error| self.map_allocator_error(entity, error))
     }
 
-    pub(crate) fn commit_insert_erased<T: Clone + 'static>(
+    pub(crate) fn commit_insert_erased<T: 'static>(
         &mut self,
         entity: EntityId,
         component_index: u32,

@@ -9,14 +9,11 @@ use super::filter::{entity_matches, validate_exact_ids};
 use super::plan::{ResolvedPlan, TraversalSource};
 
 impl World {
-    pub fn query_fingerprint<T: Clone + 'static>(
-        &mut self,
-        spec: &QuerySpec,
-    ) -> Result<u64, QueryError> {
+    pub fn query_fingerprint<T: 'static>(&mut self, spec: &QuerySpec) -> Result<u64, QueryError> {
         Ok(self.resolve_query1_plan::<T>(spec)?.fingerprint)
     }
 
-    pub fn query<'w, 'c, T: Clone + 'static>(
+    pub fn query<'w, 'c, T: 'static>(
         &'w mut self,
         spec: &QuerySpec,
         params: QueryParams<'c>,
@@ -59,7 +56,7 @@ impl World {
         )
     }
 
-    pub(crate) fn query1_state<'w, T: Clone + 'static>(
+    pub(crate) fn query1_state<'w, T: 'static>(
         &'w self,
         plan: &ResolvedPlan,
         cached: Option<QueryCachedSource>,
@@ -103,7 +100,7 @@ impl World {
         store.get(entity)
     }
 
-    pub(crate) fn query1_match_table<T: Clone + 'static>(
+    pub(crate) fn query1_match_table<T: 'static>(
         &self,
         entity: EntityId,
         plan: &ResolvedPlan,
@@ -116,7 +113,7 @@ impl World {
         self.archetypes.get_table(entity, plan.primary_index as u32)
     }
 
-    pub(crate) fn query1_match_cached<T: Clone + 'static>(
+    pub(crate) fn query1_match_cached<T: 'static>(
         &self,
         entity: EntityId,
         plan: &ResolvedPlan,
@@ -130,7 +127,7 @@ impl World {
         }
     }
 
-    pub(crate) fn query1_match_any_storage<T: Clone + 'static>(
+    pub(crate) fn query1_match_any_storage<T: 'static>(
         &self,
         entity: EntityId,
         plan: &ResolvedPlan,

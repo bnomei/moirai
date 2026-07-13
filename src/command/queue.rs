@@ -35,7 +35,7 @@ pub(crate) enum CommandOp {
 
 pub(crate) trait ErasedComponentValue: Any {
     fn apply_insert(
-        &self,
+        self: Box<Self>,
         world: &mut World,
         entity: EntityId,
         component_index: u32,
@@ -43,15 +43,15 @@ pub(crate) trait ErasedComponentValue: Any {
     ) -> Result<(), WorldError>;
 }
 
-impl<T: Clone + 'static> ErasedComponentValue for T {
+impl<T: 'static> ErasedComponentValue for T {
     fn apply_insert(
-        &self,
+        self: Box<Self>,
         world: &mut World,
         entity: EntityId,
         component_index: u32,
         tick: ChangeTick,
     ) -> Result<(), WorldError> {
-        world.commit_insert_erased(entity, component_index, self.clone(), tick)
+        world.commit_insert_erased(entity, component_index, *self, tick)
     }
 }
 
@@ -275,11 +275,7 @@ impl<'w> Commands<'w> {
         Ok(())
     }
 
-    pub fn insert<T: Clone + 'static>(
-        &mut self,
-        entity: EntityId,
-        value: T,
-    ) -> Result<(), WorldError> {
+    pub fn insert<T: 'static>(&mut self, entity: EntityId, value: T) -> Result<(), WorldError> {
         self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
         let component_index = self.world.component_index::<T>()? as u32;
@@ -291,7 +287,7 @@ impl<'w> Commands<'w> {
         Ok(())
     }
 
-    pub fn remove<T: Clone + 'static>(&mut self, entity: EntityId) -> Result<(), WorldError> {
+    pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<(), WorldError> {
         self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
         let component_index = self.world.component_index::<T>()? as u32;

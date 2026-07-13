@@ -1,8 +1,21 @@
 use moirai::component::ComponentOptions;
 use moirai::world::{WorldBuilder, WorldError};
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Health(i32);
+
+struct OwnedHealth {
+    value: i32,
+    drops: Rc<Cell<usize>>,
+}
+
+impl Drop for OwnedHealth {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+    }
+}
 
 #[test]
 fn deferred_spawn_is_not_alive_until_flush() {
@@ -119,4 +132,96 @@ fn deferred_remove_component_via_commands() {
         .expect("queue");
     world.flush().expect("flush");
     assert!(world.get::<Health>(entity).expect("get").is_none());
+}
+
+#[test]
+fn deferred_insert_moves_a_non_clone_value_and_drops_it_once() {
+    let drops = Rc::new(Cell::new(0));
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<OwnedHealth>(ComponentOptions::table())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+    let entity = world.spawn().expect("spawn");
+
+    world
+        .commands()
+        .expect("commands")
+        .insert(
+            entity,
+            OwnedHealth {
+                value: 7,
+                drops: Rc::clone(&drops),
+            },
+        )
+        .expect("queue");
+    assert_eq!(drops.get(), 0);
+    world.flush().expect("flush");
+    assert_eq!(
+        world
+            .get::<OwnedHealth>(entity)
+            .expect("get")
+            .expect("present")
+            .value,
+        7
+    );
+    assert_eq!(drops.get(), 0);
+
+    world
+        .commands()
+        .expect("commands")
+        .remove::<OwnedHealth>(entity)
+        .expect("queue remove");
+    world.flush().expect("flush remove");
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn deferred_non_clone_values_drop_once_on_discard_and_failed_preflight() {
+    let drops = Rc::new(Cell::new(0));
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<OwnedHealth>(ComponentOptions::sparse())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+    let live = world.spawn().expect("live");
+
+    world
+        .commands()
+        .expect("commands")
+        .insert(
+            live,
+            OwnedHealth {
+                value: 1,
+                drops: Rc::clone(&drops),
+            },
+        )
+        .expect("queue");
+    world.discard_commands().expect("discard");
+    assert_eq!(drops.get(), 1);
+
+    world
+        .commands()
+        .expect("commands")
+        .insert(
+            live,
+            OwnedHealth {
+                value: 2,
+                drops: Rc::clone(&drops),
+            },
+        )
+        .expect("queue");
+    world
+        .commands()
+        .expect("commands")
+        .despawn(live)
+        .expect("first despawn");
+    world
+        .commands()
+        .expect("commands")
+        .despawn(live)
+        .expect("duplicate despawn");
+    assert!(matches!(world.flush(), Err(WorldError::Flush(_))));
+    assert_eq!(drops.get(), 2);
+    assert!(!world.has_pending_commands());
 }

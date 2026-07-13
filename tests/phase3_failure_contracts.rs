@@ -3,6 +3,8 @@ use moirai::event::EventOptions;
 use moirai::world::{Bundle, BundleWriter, WorldBuilder, WorldError};
 #[cfg(feature = "testkit")]
 use moirai::ChangeTick;
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -15,6 +17,29 @@ impl Bundle for FailingBundle {
         writer.insert(Health(1))?;
         Err(WorldError::WrongStorageKind {
             name: String::from("bundle failed"),
+        })
+    }
+}
+
+struct DropTracked {
+    drops: Rc<Cell<usize>>,
+}
+
+impl Drop for DropTracked {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+    }
+}
+
+struct FailingOwnedBundle {
+    drops: Rc<Cell<usize>>,
+}
+
+impl Bundle for FailingOwnedBundle {
+    fn write(self, writer: &mut BundleWriter<'_>) -> Result<(), WorldError> {
+        writer.insert(DropTracked { drops: self.drops })?;
+        Err(WorldError::WrongStorageKind {
+            name: String::from("owned bundle failed"),
         })
     }
 }
@@ -52,6 +77,37 @@ fn immediate_spawn_bundle_rolls_back_on_bundle_error() {
         world.spawn_bundle(FailingBundle),
         Err(WorldError::WrongStorageKind { .. })
     ));
+    assert!(!world.has_pending_commands());
+}
+
+#[test]
+fn failing_bundle_rollbacks_drop_non_clone_table_values_once() {
+    let immediate_drops = Rc::new(Cell::new(0));
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<DropTracked>(ComponentOptions::table())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+
+    assert!(matches!(
+        world.spawn_bundle(FailingOwnedBundle {
+            drops: Rc::clone(&immediate_drops),
+        }),
+        Err(WorldError::WrongStorageKind { .. })
+    ));
+    assert_eq!(immediate_drops.get(), 1);
+
+    let deferred_drops = Rc::new(Cell::new(0));
+    assert!(matches!(
+        world
+            .commands()
+            .expect("commands")
+            .spawn_bundle(FailingOwnedBundle {
+                drops: Rc::clone(&deferred_drops),
+            }),
+        Err(WorldError::WrongStorageKind { .. })
+    ));
+    assert_eq!(deferred_drops.get(), 1);
     assert!(!world.has_pending_commands());
 }
 
