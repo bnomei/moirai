@@ -23,8 +23,8 @@ fn phase_2_root_and_namespace_paths_compile() {
 #[test]
 fn phase_4_schedule_and_app_paths_compile() {
     use moirai::{
-        stage, App, AppBuilder, Condition, FlushMode, Schedule, ScheduleBuilder, State, System,
-        SystemSet, WorldTick,
+        stage, App, AppBuilder, Condition, FlushMode, Schedule, ScheduleBuilder, State, StateError,
+        System, SystemSet, WorldTick,
     };
     let _ = stage::UPDATE;
     let _ = FlushMode::Final;
@@ -35,6 +35,7 @@ fn phase_4_schedule_and_app_paths_compile() {
     let _ = core::mem::size_of::<App>();
     let _ = core::mem::size_of::<AppBuilder>();
     let _ = core::mem::size_of::<State<u8>>();
+    let _ = core::mem::size_of::<StateError>();
     let _ = WorldTick::ZERO;
     let condition = Condition::from_world(|_world| true);
     let set = SystemSet::new("set");
@@ -43,6 +44,7 @@ fn phase_4_schedule_and_app_paths_compile() {
         .after_set(&set)
         .run_if(condition);
     let mut app_builder = AppBuilder::new();
+    app_builder.insert_resource(1u8).insert_state(2u16);
     app_builder
         .set_stage_flush_mode(stage::UPDATE, FlushMode::Stage)
         .expect("public stage flush authoring");

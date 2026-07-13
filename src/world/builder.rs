@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::any::TypeId;
 
 use crate::component::{
     ComponentId, ComponentOptions, ComponentRegistry, RegistrationError, StorageKind,
@@ -9,10 +10,17 @@ use crate::event::{
     EventStorage,
 };
 use crate::resource::ResourceStore;
+use crate::state::State;
 use crate::storage::{table_column_factory, ArchetypeStorage, SparseStore, TableColumnFactory};
 use crate::world::{World, WorldError, WorldEvents, WorldOwner};
 
 type ResourceRegistrar = Box<dyn FnOnce(&mut ResourceStore)>;
+type ResourceSeeder = Box<dyn FnOnce(&mut World) -> Result<(), WorldError>>;
+
+struct ResourceSeed {
+    type_id: TypeId,
+    seed: ResourceSeeder,
+}
 
 fn map_lifecycle_registration_error(error: EventRegistrationError) -> RegistrationError {
     match error {
@@ -39,6 +47,7 @@ pub struct WorldBuilder {
     sparse_factories: Vec<Option<Box<dyn FnOnce() -> SparseStore>>>,
     table_factories: Vec<Option<TableColumnFactory>>,
     resource_registrars: Vec<ResourceRegistrar>,
+    resource_seeds: Vec<ResourceSeed>,
     event_registry: EventRegistry,
     lifecycle_registry: ComponentLifecycleRegistry,
 }
@@ -51,6 +60,7 @@ impl WorldBuilder {
             sparse_factories: Vec::new(),
             table_factories: Vec::new(),
             resource_registrars: Vec::new(),
+            resource_seeds: Vec::new(),
             event_registry: EventRegistry::new(),
             lifecycle_registry: ComponentLifecycleRegistry::new(),
         }
@@ -108,6 +118,30 @@ impl WorldBuilder {
         }));
     }
 
+    /// Registers `R` and installs `value` when the world is built.
+    ///
+    /// Repeated seeds for the same resource type are last-call-wins.
+    pub fn insert_resource<R: 'static>(&mut self, value: R) -> &mut Self {
+        self.register_resource::<R>();
+        self.replace_resource_seed::<R>(Box::new(move |world| {
+            world.insert_resource(value)?;
+            Ok(())
+        }));
+        self
+    }
+
+    /// Registers `State<S>` and installs its initial value when the world is built.
+    ///
+    /// Repeated seeds for the same state type are last-call-wins.
+    pub fn insert_state<S: Eq + 'static>(&mut self, initial: S) -> &mut Self {
+        self.register_state::<S>();
+        self.replace_resource_seed::<State<S>>(Box::new(move |world| {
+            world.insert_resource(State::new(initial))?;
+            Ok(())
+        }));
+        self
+    }
+
     pub fn add_event<E: Clone + 'static>(
         &mut self,
         options: EventOptions,
@@ -146,14 +180,18 @@ impl WorldBuilder {
             &events.registry,
             &self.owner,
         );
-        Ok(World::from_parts(
+        let mut world = World::from_parts(
             self.owner,
             self.registry,
             sparse_stores,
             archetypes,
             resources,
             events,
-        ))
+        );
+        for seed in self.resource_seeds {
+            (seed.seed)(&mut world)?;
+        }
+        Ok(world)
     }
 
     fn register_component_lifecycle(
@@ -169,6 +207,19 @@ impl WorldBuilder {
         while self.sparse_factories.len() <= index {
             self.sparse_factories.push(None);
             self.table_factories.push(None);
+        }
+    }
+
+    fn replace_resource_seed<R: 'static>(&mut self, seed: ResourceSeeder) {
+        let type_id = TypeId::of::<R>();
+        if let Some(existing) = self
+            .resource_seeds
+            .iter_mut()
+            .find(|existing| existing.type_id == type_id)
+        {
+            existing.seed = seed;
+        } else {
+            self.resource_seeds.push(ResourceSeed { type_id, seed });
         }
     }
 }

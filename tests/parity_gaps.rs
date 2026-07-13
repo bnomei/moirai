@@ -110,14 +110,11 @@ fn resource_added_tick_updates() {
 #[test]
 fn state_set_updates_current_and_previous() {
     let mut builder = AppBuilder::new();
-    builder.world_builder().register_state::<u8>();
+    builder.insert_state(1u8);
     builder
         .add_system(apply::<u8>("apply", stage::UPDATE))
         .expect("apply");
     let mut app = builder.build().expect("build");
-    app.world_mut()
-        .insert_resource(State::new(1u8))
-        .expect("state");
     app.world_mut()
         .resource_mut::<State<u8>>()
         .expect("mut")

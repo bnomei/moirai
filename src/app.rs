@@ -96,6 +96,11 @@ impl App {
         self.faulted
     }
 
+    /// Returns the first terminal fault retained by this application.
+    pub fn fault(&self) -> Option<&AppFault> {
+        self.fault.as_ref()
+    }
+
     pub fn set_system_enabled(
         &mut self,
         id: &SystemId,
@@ -264,11 +269,13 @@ impl App {
 
     fn record_exhaustion_fault(&mut self, detail: &str) {
         self.faulted = true;
-        self.fault = Some(AppFault {
-            stage: None,
-            system: None,
-            detail: Some(String::from(detail)),
-        });
+        if self.fault.is_none() {
+            self.fault = Some(AppFault {
+                stage: None,
+                system: None,
+                detail: Some(String::from(detail)),
+            });
+        }
         self.world.set_fixed_step(None);
         let _ = self.world.discard_commands();
         self.world.end_run();
@@ -302,11 +309,13 @@ impl App {
 
     fn record_fault(&mut self, outcome: &RunOutcome) {
         self.faulted = true;
-        self.fault = Some(AppFault {
-            stage: outcome.fault_stage.clone(),
-            system: outcome.fault_system.clone(),
-            detail: outcome.fault_detail.clone(),
-        });
+        if self.fault.is_none() {
+            self.fault = Some(AppFault {
+                stage: outcome.fault_stage.clone(),
+                system: outcome.fault_system.clone(),
+                detail: outcome.fault_detail.clone(),
+            });
+        }
         let _ = self.world.discard_commands();
         self.world.set_fixed_step(None);
         self.world.end_run();
@@ -322,11 +331,13 @@ impl App {
     #[cfg(feature = "std")]
     fn record_panic_fault(&mut self) {
         self.faulted = true;
-        self.fault = Some(AppFault {
-            stage: None,
-            system: None,
-            detail: Some(String::from("panic during execution")),
-        });
+        if self.fault.is_none() {
+            self.fault = Some(AppFault {
+                stage: None,
+                system: None,
+                detail: Some(String::from("panic during execution")),
+            });
+        }
         let _ = self.world.discard_commands();
         emit(
             &mut self.observer,
@@ -358,6 +369,18 @@ impl AppBuilder {
     pub fn add_system(&mut self, system: System) -> Result<&mut Self, BuildError> {
         self.schedule_builder.add_system(system)?;
         Ok(self)
+    }
+
+    /// Registers and seeds a resource before schedule validation.
+    pub fn insert_resource<R: 'static>(&mut self, value: R) -> &mut Self {
+        self.world_builder.insert_resource(value);
+        self
+    }
+
+    /// Registers and seeds state before schedule validation.
+    pub fn insert_state<S: Eq + 'static>(&mut self, initial: S) -> &mut Self {
+        self.world_builder.insert_state(initial);
+        self
     }
 
     pub fn fixed(&mut self, config: FixedConfig) -> &mut Self {

@@ -729,6 +729,10 @@ fn fallible_system_faults_app_and_leaves_world_idle() {
         app.update(1.0 / 60.0),
         Err(AppError::TerminalFault)
     ));
+    assert_eq!(
+        app.fault().and_then(|fault| fault.detail.as_deref()),
+        Some("expected")
+    );
 }
 
 #[test]
@@ -780,7 +784,7 @@ fn in_state_gates_execution() {
     static RAN: AtomicU32 = AtomicU32::new(0);
 
     let mut builder = AppBuilder::new();
-    builder.world_builder().register_state::<u8>();
+    builder.insert_state(1u8);
     builder
         .add_system(
             System::new("gate", stage::UPDATE, |_world, _dt| {
@@ -790,9 +794,6 @@ fn in_state_gates_execution() {
         )
         .expect("add");
     let mut app = builder.build().expect("build");
-    app.world_mut()
-        .insert_resource(State::new(1u8))
-        .expect("state");
     app.update(1.0 / 60.0).expect("update");
     assert_eq!(RAN.load(Ordering::SeqCst), 0);
 }
@@ -802,7 +803,7 @@ fn state_changed_runs_after_explicit_apply() {
     static RAN: AtomicU32 = AtomicU32::new(0);
 
     let mut builder = AppBuilder::new();
-    builder.world_builder().register_state::<u8>();
+    builder.insert_state(1u8);
     builder
         .add_system(apply::<u8>("apply", stage::UPDATE))
         .expect("apply");
@@ -816,9 +817,6 @@ fn state_changed_runs_after_explicit_apply() {
         )
         .expect("watch");
     let mut app = builder.build().expect("build");
-    app.world_mut()
-        .insert_resource(State::new(1u8))
-        .expect("state");
     app.world_mut()
         .resource_mut::<State<u8>>()
         .expect("state")
@@ -1170,8 +1168,54 @@ fn apply_state_system_errors_when_resource_missing() {
     builder
         .add_system(apply::<Menu>("apply", stage::UPDATE))
         .expect("apply");
-    let mut app = builder.build().expect("build");
-    assert!(matches!(app.update(1.0 / 60.0), Err(AppError::Fault(_))));
+    assert!(matches!(
+        builder.build(),
+        Err(BuildError::MissingRequiredResource { .. })
+    ));
+}
+
+#[test]
+fn app_builder_seeds_state_before_schedule_validation_regardless_of_call_order() {
+    #[derive(Clone, Eq, PartialEq)]
+    struct Menu;
+
+    let mut builder = AppBuilder::new();
+    builder
+        .add_system(apply::<Menu>("apply", stage::UPDATE))
+        .expect("apply");
+    builder.insert_state(Menu);
+    let app = builder.build().expect("seed satisfies requirement");
+    assert!(app.world().contains_resource::<State<Menu>>());
+}
+
+#[test]
+fn app_builder_resource_seed_satisfies_requirements_and_has_one_initial_change() {
+    static RAN: AtomicU32 = AtomicU32::new(0);
+    RAN.store(0, Ordering::SeqCst);
+    #[derive(Debug, PartialEq)]
+    struct SeededScore(u32);
+
+    let mut builder = AppBuilder::new();
+    builder
+        .add_system(
+            System::new("seeded", stage::UPDATE, |_world, _dt| {
+                RAN.fetch_add(1, Ordering::SeqCst);
+            })
+            .requires_resource::<SeededScore>()
+            .run_if(Condition::resource_changed::<SeededScore>()),
+        )
+        .expect("system before seed");
+    builder.insert_resource(SeededScore(1));
+    builder.insert_resource(SeededScore(2));
+
+    let mut app = builder.build().expect("seed satisfies requirement");
+    assert_eq!(
+        app.world().resource::<SeededScore>().expect("score"),
+        Some(&SeededScore(2))
+    );
+    app.update(1.0 / 60.0).expect("first update");
+    app.update(1.0 / 60.0).expect("second update");
+    assert_eq!(RAN.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -1441,6 +1485,10 @@ fn panic_clears_running_and_faults_app() {
         app.update(1.0 / 60.0),
         Err(AppError::TerminalFault)
     ));
+    assert_eq!(
+        app.fault().and_then(|fault| fault.detail.as_deref()),
+        Some("panic during execution")
+    );
 }
 
 #[test]
@@ -1645,6 +1693,10 @@ fn world_tick_exhaustion_faults_app() {
         Err(AppError::WorldTickExhausted)
     ));
     assert!(app.is_faulted());
+    assert_eq!(
+        app.fault().and_then(|fault| fault.detail.as_deref()),
+        Some("world tick exhausted")
+    );
 }
 
 #[test]

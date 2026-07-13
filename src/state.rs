@@ -1,7 +1,13 @@
 use alloc::string::String;
 
 use crate::time::ChangeTick;
-use crate::world::WorldError;
+
+/// Failure to queue a state transition.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StateError {
+    ConflictingTransition,
+}
 
 /// Generic host-owned state resource with explicit transition boundaries.
 pub struct State<S: Eq + 'static> {
@@ -37,14 +43,15 @@ impl<S: Eq + 'static> State<S> {
         self.transition_tick
     }
 
-    pub fn request(&mut self, next: S) -> Result<(), WorldError> {
+    pub fn request(&mut self, next: S) -> Result<(), StateError> {
         if let Some(pending) = &self.pending {
             if *pending == next {
                 return Ok(());
             }
-            return Err(WorldError::WrongStorageKind {
-                name: String::from("conflicting state transition request"),
-            });
+            return Err(StateError::ConflictingTransition);
+        }
+        if self.current == next {
+            return Ok(());
         }
         self.pending = Some(next);
         Ok(())
@@ -82,7 +89,20 @@ pub fn apply<S: Eq + 'static>(
             Ok(())
         },
     )
+    .requires_resource::<State<S>>()
 }
+
+#[cfg(feature = "std")]
+impl core::fmt::Display for StateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ConflictingTransition => f.write_str("conflicting state transition request"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for StateError {}
 
 #[cfg(test)]
 mod tests {
@@ -103,7 +123,7 @@ mod tests {
         state.request(Phase::B).expect("repeat");
         assert!(matches!(
             state.request(Phase::C),
-            Err(WorldError::WrongStorageKind { .. })
+            Err(StateError::ConflictingTransition)
         ));
         assert_eq!(state.pending(), Some(&Phase::B));
     }

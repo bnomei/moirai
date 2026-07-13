@@ -1,11 +1,63 @@
 use moirai::component::ComponentOptions;
 use moirai::world::{DynamicBundle, WorldBuilder, WorldError};
+use moirai::{State, StateError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TableA(i32);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TableB(i32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Phase {
+    Menu,
+    Playing,
+    Paused,
+}
+
+#[test]
+fn state_builder_seed_is_last_call_wins() {
+    let mut builder = WorldBuilder::new();
+    builder.insert_state(Phase::Menu);
+    builder.insert_state(Phase::Playing);
+    let world = builder.build().expect("build");
+    let state = world
+        .resource::<State<Phase>>()
+        .expect("state resource")
+        .expect("seeded state");
+
+    assert_eq!(state.current(), &Phase::Playing);
+    assert_eq!(
+        world
+            .resource_added_tick::<State<Phase>>()
+            .expect("added tick"),
+        Some(moirai::ChangeTick::from_raw(1))
+    );
+}
+
+#[test]
+fn state_transition_request_truth_table_is_idempotent_and_conflict_specific() {
+    let mut state = State::new(Phase::Menu);
+
+    state.request(Phase::Menu).expect("current is a no-op");
+    assert_eq!(state.pending(), None);
+
+    state.request(Phase::Playing).expect("queue transition");
+    state
+        .request(Phase::Playing)
+        .expect("duplicate pending is a no-op");
+    assert_eq!(state.pending(), Some(&Phase::Playing));
+
+    assert_eq!(
+        state.request(Phase::Paused),
+        Err(StateError::ConflictingTransition)
+    );
+    assert_eq!(
+        state.request(Phase::Menu),
+        Err(StateError::ConflictingTransition)
+    );
+    assert_eq!(state.pending(), Some(&Phase::Playing));
+}
 
 #[test]
 fn archetype_move_preserves_retained_component() {

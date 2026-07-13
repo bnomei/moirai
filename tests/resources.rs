@@ -29,6 +29,45 @@ fn resource_insert_get_remove_round_trip() {
 }
 
 #[test]
+fn builder_seed_registers_resource_at_the_initial_tick() {
+    let mut builder = WorldBuilder::new();
+    builder.insert_resource(Score(10));
+    let world = builder.build().expect("build");
+
+    assert_eq!(world.resource::<Score>().expect("get"), Some(&Score(10)));
+    assert_eq!(
+        world.resource_added_tick::<Score>().expect("added tick"),
+        Some(ChangeTick::from_raw(1))
+    );
+    assert_eq!(
+        world
+            .resource_changed_tick::<Score>()
+            .expect("changed tick"),
+        Some(ChangeTick::from_raw(1))
+    );
+}
+
+#[test]
+fn duplicate_builder_seed_is_last_call_wins_with_one_initial_tick() {
+    let mut builder = WorldBuilder::new();
+    builder.insert_resource(Score(10));
+    builder.insert_resource(Score(20));
+    let world = builder.build().expect("build");
+
+    assert_eq!(world.resource::<Score>().expect("get"), Some(&Score(20)));
+    assert_eq!(
+        world.resource_added_tick::<Score>().expect("added tick"),
+        Some(ChangeTick::from_raw(1))
+    );
+    assert_eq!(
+        world
+            .resource_changed_tick::<Score>()
+            .expect("changed tick"),
+        Some(ChangeTick::from_raw(1))
+    );
+}
+
+#[test]
 fn resource_scope_reports_missing_without_mutation() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();

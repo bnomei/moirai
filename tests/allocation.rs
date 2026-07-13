@@ -328,14 +328,11 @@ fn stage_flush_steady_state_is_allocation_free() {
 #[cfg_attr(debug_assertions, ignore = "allocation contracts require --release")]
 fn state_transition_steady_state_is_allocation_free() {
     let mut builder = AppBuilder::new();
-    builder.world_builder().register_state::<u8>();
+    builder.insert_state(1u8);
     builder
         .add_system(apply::<u8>("apply", stage::UPDATE))
         .expect("apply");
     let mut app = builder.build().expect("app");
-    app.world_mut()
-        .insert_resource(State::new(1u8))
-        .expect("state");
     for next in 2u8..=6 {
         app.world_mut()
             .resource_mut::<State<u8>>()

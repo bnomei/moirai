@@ -11,6 +11,7 @@ use moirai::query::QueryError;
 use moirai::schedule::{BuildError, ScheduleError};
 use moirai::world::WorldBuilder;
 use moirai::world::{EventReadError, FlushError, WorldAllocatorError, WorldError};
+use moirai::StateError;
 
 fn assert_display<T: core::fmt::Display>(value: &T, expected: impl AsRef<str>) {
     assert_eq!(value.to_string(), expected.as_ref());
@@ -23,6 +24,14 @@ fn q16_error_display_variants() {
     assert_display(&Q16Error::DivisionByZero, "Q16 division by zero");
     assert_display(&Q16Error::NotFinite, "Q16 input is not finite");
     assert_display(&Q16Error::OutOfRange, "Q16 input is out of range");
+}
+
+#[test]
+fn state_error_display_variants() {
+    assert_display(
+        &StateError::ConflictingTransition,
+        "conflicting state transition request",
+    );
 }
 
 #[test]

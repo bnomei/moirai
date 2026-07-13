@@ -79,6 +79,6 @@ pub use schedule::stage;
 pub use schedule::{
     Condition, FlushMode, Schedule, ScheduleBuilder, ScheduleError, System, SystemId, SystemSet,
 };
-pub use state::{apply, State};
+pub use state::{apply, State, StateError};
 pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
 pub use world::{Commands, DynamicBundle, World, WorldBuilder, WorldError};
