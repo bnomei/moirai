@@ -58,6 +58,232 @@ fn tag_world() -> World {
 }
 
 #[test]
+fn entity_queries_cover_empty_specs_incomplete_entities_and_optional_reads() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("position");
+    builder
+        .register_component::<TablePos>(ComponentOptions::table())
+        .expect("table");
+    builder
+        .register_component::<Player>(ComponentOptions::tag())
+        .expect("player");
+    let mut world = builder.build().expect("build");
+    let empty = world.spawn().expect("empty");
+    let sparse = world.spawn().expect("sparse");
+    let table = world.spawn().expect("table");
+    world.insert(sparse, Position(7)).expect("position");
+    world.insert(table, TablePos(9)).expect("table position");
+    world.insert(table, Player).expect("tag");
+
+    assert_eq!(
+        world
+            .query_ids(&QuerySpec::new(), QueryParams::new())
+            .expect("ids")
+            .collect::<Vec<_>>(),
+        vec![empty, sparse, table]
+    );
+    let refs: Vec<_> = world
+        .query_entities(&QuerySpec::new().with_tag::<Player>(), QueryParams::new())
+        .expect("tag-only")
+        .collect();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].id(), table);
+    assert!(refs[0].has::<Player>().expect("tag membership"));
+    assert_eq!(refs[0].get::<Position>().expect("optional sparse"), None);
+    assert_eq!(
+        refs[0]
+            .get::<TablePos>()
+            .expect("optional table")
+            .map(|v| v.0),
+        Some(9)
+    );
+}
+
+#[test]
+fn dynamic_component_ids_are_checked_with_or_windows() {
+    let mut builder = WorldBuilder::new();
+    let position = builder
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("position");
+    let player = builder
+        .register_component::<Player>(ComponentOptions::tag())
+        .expect("player");
+    let mut world = builder.build().expect("build");
+    let tagged = world.spawn().expect("tagged");
+    let plain = world.spawn().expect("plain");
+    world.insert(tagged, Position(1)).expect("position");
+    world.insert(tagged, Player).expect("player");
+    world.insert(plain, Position(2)).expect("position");
+
+    let structural = QuerySpec::new()
+        .with_id(position.clone())
+        .with_tag_id(player.clone());
+    assert_eq!(
+        world
+            .query_ids(&structural, QueryParams::new())
+            .expect("dynamic")
+            .collect::<Vec<_>>(),
+        vec![tagged]
+    );
+    assert!(matches!(
+        world.query_ids(
+            &QuerySpec::new()
+                .with_id(position.clone())
+                .without_id(position.clone()),
+            QueryParams::new()
+        ),
+        Err(QueryError::ConflictingFilters { .. })
+    ));
+    assert!(matches!(
+        world.query_ids(
+            &QuerySpec::new().with_tag_id(position.clone()),
+            QueryParams::new()
+        ),
+        Err(QueryError::WrongStorageKind { .. })
+    ));
+    assert_eq!(
+        world
+            .query_ids(
+                &QuerySpec::new().added_id(position.clone()).added_id(player),
+                QueryParams::new()
+            )
+            .expect("added OR")
+            .collect::<Vec<_>>(),
+        vec![tagged, plain]
+    );
+    let since = world.change_tick();
+    world
+        .get_mut::<Position>(plain)
+        .expect("access")
+        .expect("present")
+        .0 = 3;
+    assert_eq!(
+        world
+            .query_ids(
+                &QuerySpec::new().changed_id(position),
+                QueryParams::new().since(since)
+            )
+            .expect("changed")
+            .collect::<Vec<_>>(),
+        vec![plain]
+    );
+
+    let mut other_builder = WorldBuilder::new();
+    let foreign = other_builder
+        .register_component::<Position>(ComponentOptions::sparse())
+        .expect("foreign");
+    let _other = other_builder.build().expect("other");
+    assert!(matches!(
+        world.query_ids(&QuerySpec::new().with_id(foreign), QueryParams::new()),
+        Err(QueryError::WrongOwner)
+    ));
+}
+
+#[test]
+fn repeated_typed_temporal_filters_are_or_groups() {
+    let mut world = sparse_world();
+    let position = world.spawn().expect("position");
+    let velocity = world.spawn().expect("velocity");
+    world.insert(position, Position(1)).expect("position");
+    world.insert(velocity, Velocity(2)).expect("velocity");
+    assert_eq!(
+        world
+            .query_ids(
+                &QuerySpec::new().added::<Position>().added::<Velocity>(),
+                QueryParams::new()
+            )
+            .expect("added OR")
+            .collect::<Vec<_>>(),
+        vec![position, velocity]
+    );
+    assert!(matches!(
+        world.query_ids(
+            &QuerySpec::new().added::<Position>().changed::<Velocity>(),
+            QueryParams::new()
+        ),
+        Err(QueryError::ConflictingFilters { .. })
+    ));
+}
+
+#[test]
+fn exact_entity_queries_preserve_order_reject_stale_and_reject_foreign_collisions() {
+    let mut world = sparse_world();
+    let first = world.spawn().expect("first");
+    let second = world.spawn().expect("second");
+    let stale = world.spawn().expect("stale");
+    world.despawn(stale).expect("despawn");
+    assert_eq!(
+        world
+            .query_ids(
+                &QuerySpec::new().exact_ids(vec![second, first], ExactIdPolicy::ErrorOnUnavailable),
+                QueryParams::new()
+            )
+            .expect("ordered")
+            .collect::<Vec<_>>(),
+        vec![second, first]
+    );
+    assert!(matches!(
+        world.query_ids(
+            &QuerySpec::new().exact_ids(vec![stale], ExactIdPolicy::ErrorOnUnavailable),
+            QueryParams::new()
+        ),
+        Err(QueryError::MissingExactId { entity }) if entity == stale
+    ));
+
+    let mut foreign = sparse_world();
+    let colliding_position = foreign.spawn().expect("same allocator position");
+    assert_ne!(first, colliding_position);
+    assert!(matches!(
+        world.query_ids(
+            &QuerySpec::new().exact_ids(vec![colliding_position], ExactIdPolicy::SkipUnavailable),
+            QueryParams::new()
+        ),
+        Err(QueryError::WrongOwner)
+    ));
+    assert!(matches!(
+        world.get::<Position>(colliding_position),
+        Err(moirai::WorldError::EntityOwnerMismatch { .. })
+    ));
+}
+
+#[test]
+fn entity_cursor_forks_and_commits_only_after_observed_exhaustion() {
+    let mut world = sparse_world();
+    let first = world.spawn().expect("first");
+    let second = world.spawn().expect("second");
+    world.insert(first, Position(1)).expect("first");
+    world.insert(second, Position(2)).expect("second");
+    let spec = QuerySpec::new().added::<Position>();
+    let mut cursor = QueryCursor::for_entities_from_start(&mut world, &spec).expect("cursor");
+    let before = cursor.since();
+    {
+        let mut query = world
+            .query_ids(&spec, QueryParams::new().cursor(&mut cursor))
+            .expect("partial");
+        assert_eq!(query.next(), Some(first));
+    }
+    assert_eq!(cursor.since(), before);
+    world
+        .query_ids(&spec, QueryParams::new().cursor(&mut cursor))
+        .expect("complete")
+        .for_each(drop);
+    let mut fork = cursor.fork();
+    let third = world.spawn().expect("third");
+    world.insert(third, Position(3)).expect("third");
+    for active in [&mut cursor, &mut fork] {
+        assert_eq!(
+            world
+                .query_ids(&spec, QueryParams::new().cursor(active))
+                .expect("forked")
+                .collect::<Vec<_>>(),
+            vec![third]
+        );
+    }
+}
+
+#[test]
 fn query1_returns_all_entities_with_component() {
     let mut world = sparse_world();
     let a = world.spawn().expect("spawn a");

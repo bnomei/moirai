@@ -27,6 +27,7 @@ pub enum FlushError {
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorldError {
+    EntityOwnerMismatch { entity: EntityId },
     StaleEntity { entity: EntityId },
     EntityNotLive { entity: EntityId },
     UnregisteredComponent { name: String },
@@ -116,6 +117,14 @@ impl std::error::Error for FlushError {}
 impl core::fmt::Display for WorldError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::EntityOwnerMismatch { entity } => {
+                write!(
+                    f,
+                    "entity {:?}:{:?} belongs to another world",
+                    entity.slot(),
+                    entity.generation()
+                )
+            }
             Self::StaleEntity { entity } => {
                 write!(
                     f,

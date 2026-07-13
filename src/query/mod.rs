@@ -58,6 +58,7 @@
 mod cache;
 mod cursor;
 mod effects;
+mod entity;
 mod error;
 mod exact_id;
 mod iter;
@@ -67,6 +68,7 @@ mod spec;
 pub use cache::{QueryCache, QueryResultCache};
 pub use cursor::QueryCursor;
 pub use effects::{QueryCommands, QueryEffects};
+pub use entity::{EntityRef, QueryEntities, QueryIds};
 pub use error::QueryError;
 pub use exact_id::ExactIdPolicy;
 pub(crate) use iter::Query1State;

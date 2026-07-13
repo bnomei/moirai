@@ -72,8 +72,8 @@ pub use event::{
 pub use math::Q16;
 pub use operation::StageOperation;
 pub use query::{
-    ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
-    QueryError, QueryParams, QueryResultCache, QuerySpec,
+    EntityRef, ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
+    QueryEntities, QueryError, QueryIds, QueryParams, QueryResultCache, QuerySpec,
 };
 pub use schedule::stage;
 pub use schedule::{

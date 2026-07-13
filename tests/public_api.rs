@@ -60,20 +60,32 @@ fn phase_4_prelude_paths_compile() {
 #[test]
 fn phase_5_query_namespace_paths_compile() {
     use moirai::query::{
-        ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
-        QueryError, QueryParams, QueryResultCache, QuerySpec,
+        EntityRef, ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor,
+        QueryEffects, QueryEntities, QueryError, QueryIds, QueryParams, QueryResultCache,
+        QuerySpec,
     };
     let _ = core::mem::size_of::<ExactIdPolicy>();
     let _ = core::mem::size_of::<QuerySpec>();
     let _ = core::mem::size_of::<QueryParams<'_>>();
     let _ = core::mem::size_of::<Query1<'_, '_, ()>>();
     let _ = core::mem::size_of::<Query2<'_, '_, (), ()>>();
+    let _ = core::mem::size_of::<QueryIds<'_, '_>>();
+    let _ = core::mem::size_of::<QueryEntities<'_, '_>>();
+    let _ = core::mem::size_of::<EntityRef<'_>>();
     let _ = core::mem::size_of::<QueryCache>();
     let _ = core::mem::size_of::<QueryResultCache>();
     let _ = core::mem::size_of::<QueryCursor>();
     let _ = core::mem::size_of::<QueryError>();
     let _ = core::mem::size_of::<QueryEffects<'_>>();
     let _ = core::mem::size_of::<QueryCommands<'_>>();
+}
+
+#[test]
+fn entity_query_root_paths_compile() {
+    use moirai::{EntityRef, QueryEntities, QueryIds};
+    let _ = core::mem::size_of::<QueryIds<'_, '_>>();
+    let _ = core::mem::size_of::<QueryEntities<'_, '_>>();
+    let _ = core::mem::size_of::<EntityRef<'_>>();
 }
 
 #[test]

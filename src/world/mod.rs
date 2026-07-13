@@ -87,10 +87,11 @@ impl World {
                 )
             })
             .collect();
+        let owner_token = owner.token();
         Self {
             command_queue: CommandQueue::configured(owner.clone(), command_components),
             owner,
-            allocator: EntityAllocator::new(),
+            allocator: EntityAllocator::with_owner(owner_token),
             registry,
             sparse_stores,
             archetypes,
@@ -234,6 +235,10 @@ impl World {
 
     pub fn is_alive(&self, entity: EntityId) -> bool {
         self.allocator.is_alive(entity)
+    }
+
+    pub(crate) fn owns_entity(&self, entity: EntityId) -> bool {
+        self.allocator.owns(entity)
     }
 
     pub fn spawn(&mut self) -> Result<EntityId, WorldError> {
@@ -461,6 +466,10 @@ impl World {
         self.registry.component_name(component_id)
     }
 
+    pub(crate) fn registry_contains(&self, component_id: &ComponentId) -> bool {
+        self.registry.storage_kind(component_id).is_some()
+    }
+
     pub(crate) fn entity_has_component(&self, entity: EntityId, index: usize) -> bool {
         if self.registry.entry_is_tag(index) {
             return self.entity_has_tag(entity, index);
@@ -553,6 +562,9 @@ impl World {
     }
 
     pub(crate) fn ensure_command_target(&self, entity: EntityId) -> Result<(), WorldError> {
+        if !self.owns_entity(entity) {
+            return Err(WorldError::EntityOwnerMismatch { entity });
+        }
         if self.allocator.is_alive(entity) || self.allocator.is_reserved(entity) {
             Ok(())
         } else {
@@ -616,7 +628,9 @@ impl World {
         let _ = tick;
         self.allocator
             .commit_reserved(entity)
-            .map_err(|error| self.map_allocator_error(entity, error))
+            .map_err(|error| self.map_allocator_error(entity, error))?;
+        self.bump_query_topology();
+        Ok(())
     }
 
     pub(crate) fn commit_despawn(&mut self, entity: EntityId) -> Result<(), WorldError> {
@@ -629,7 +643,9 @@ impl World {
         self.remove_all_components(entity)?;
         self.allocator
             .free(entity)
-            .map_err(|error| self.map_allocator_error(entity, error))
+            .map_err(|error| self.map_allocator_error(entity, error))?;
+        self.bump_query_topology();
+        Ok(())
     }
 
     pub(crate) fn commit_insert_erased<T: 'static>(
@@ -854,7 +870,7 @@ impl World {
             if generation == 0 {
                 continue;
             }
-            let id = EntityId::from_parts(slot as u32, generation);
+            let id = EntityId::from_owned_parts(self.owner.token(), slot as u32, generation);
             if self.allocator.is_alive(id) || self.allocator.is_reserved(id) {
                 out.push(id);
             }
@@ -874,6 +890,9 @@ impl World {
     }
 
     fn ensure_live_access(&self, entity: EntityId) -> Result<(), WorldError> {
+        if !self.owns_entity(entity) {
+            return Err(WorldError::EntityOwnerMismatch { entity });
+        }
         if self.allocator.is_alive(entity) {
             Ok(())
         } else if self.allocator.is_reserved(entity) {
@@ -1264,7 +1283,7 @@ mod tests {
         world
             .allocator_mut()
             .set_generation_for_test(entity, u32::MAX);
-        let exhausted = EntityId::from_parts(entity.slot(), u32::MAX);
+        let exhausted = entity.with_generation(u32::MAX);
         assert!(matches!(
             world.despawn(exhausted),
             Err(WorldError::Allocator(
@@ -1284,7 +1303,7 @@ mod tests {
         world
             .allocator_mut()
             .set_generation_for_test(entity, u32::MAX);
-        let exhausted = EntityId::from_parts(entity.slot(), u32::MAX);
+        let exhausted = entity.with_generation(u32::MAX);
         assert_eq!(
             world.allocator_mut().release_reserved(exhausted),
             Err(AllocatorError::GenerationOverflow)

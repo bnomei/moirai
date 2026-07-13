@@ -16,6 +16,7 @@ enum SlotState {
 /// Generational entity allocator with explicit occupancy states.
 #[allow(dead_code)]
 pub(crate) struct EntityAllocator {
+    owner: u32,
     generations: Vec<u32>,
     states: Vec<SlotState>,
     free: Vec<u32>,
@@ -46,7 +47,12 @@ pub(crate) struct AllocatorCounts {
 #[allow(dead_code)]
 impl EntityAllocator {
     pub fn new() -> Self {
+        Self::with_owner(0)
+    }
+
+    pub(crate) fn with_owner(owner: u32) -> Self {
         Self {
+            owner,
             generations: Vec::new(),
             states: Vec::new(),
             free: Vec::new(),
@@ -78,10 +84,11 @@ impl EntityAllocator {
     pub fn reserve(&mut self) -> Result<EntityId, AllocatorError> {
         let (slot, generation) = self.acquire_slot(SlotState::Reserved)?;
         self.reserved_count += 1;
-        Ok(EntityId::from_parts(slot, generation))
+        Ok(EntityId::from_owned_parts(self.owner, slot, generation))
     }
 
     pub fn commit_reserved(&mut self, id: EntityId) -> Result<(), AllocatorError> {
+        self.ensure_owner(id)?;
         let slot = id.slot() as usize;
         self.ensure_state(slot, SlotState::Reserved, id.generation())?;
         self.states[slot] = SlotState::Live;
@@ -91,6 +98,7 @@ impl EntityAllocator {
     }
 
     pub fn release_reserved(&mut self, id: EntityId) -> Result<(), AllocatorError> {
+        self.ensure_owner(id)?;
         let slot = id.slot() as usize;
         self.ensure_state(slot, SlotState::Reserved, id.generation())?;
         self.reserved_count -= 1;
@@ -98,6 +106,9 @@ impl EntityAllocator {
     }
 
     pub fn is_alive(&self, id: EntityId) -> bool {
+        if id.owner() != self.owner {
+            return false;
+        }
         let slot = id.slot() as usize;
         matches!(
             self.slot_state(slot),
@@ -106,6 +117,9 @@ impl EntityAllocator {
     }
 
     pub fn is_reserved(&self, id: EntityId) -> bool {
+        if id.owner() != self.owner {
+            return false;
+        }
         let slot = id.slot() as usize;
         matches!(
             self.slot_state(slot),
@@ -114,6 +128,7 @@ impl EntityAllocator {
     }
 
     pub fn free(&mut self, id: EntityId) -> Result<(), AllocatorError> {
+        self.ensure_owner(id)?;
         let slot = id.slot() as usize;
         self.ensure_state(slot, SlotState::Live, id.generation())?;
         self.live_count -= 1;
@@ -125,7 +140,7 @@ impl EntityAllocator {
             .acquire_slot(SlotState::Live)
             .expect("live allocation cannot fail");
         self.live_count += 1;
-        EntityId::from_parts(slot, generation)
+        EntityId::from_owned_parts(self.owner, slot, generation)
     }
 
     fn acquire_slot(&mut self, state: SlotState) -> Result<(u32, u32), AllocatorError> {
@@ -177,6 +192,18 @@ impl EntityAllocator {
             Some(_) => Err(AllocatorError::NotLive),
             None => Err(AllocatorError::StaleEntity),
         }
+    }
+
+    fn ensure_owner(&self, id: EntityId) -> Result<(), AllocatorError> {
+        if id.owner() == self.owner {
+            Ok(())
+        } else {
+            Err(AllocatorError::StaleEntity)
+        }
+    }
+
+    pub(crate) fn owns(&self, id: EntityId) -> bool {
+        id.owner() == self.owner
     }
 
     fn slot_state(&self, slot: usize) -> Option<(SlotState, u32)> {

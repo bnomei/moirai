@@ -32,11 +32,40 @@ impl ResultCacheSlot {
 }
 
 impl World {
+    pub fn build_entity_query_result_cache(
+        &mut self,
+        spec: QuerySpec,
+    ) -> Result<QueryResultCache, QueryError> {
+        if !spec.added.is_empty()
+            || !spec.added_ids.is_empty()
+            || !spec.changed.is_empty()
+            || !spec.changed_ids.is_empty()
+        {
+            return Err(QueryError::MovingChangeWindow);
+        }
+        if spec.exact_ids.is_some() {
+            return Err(QueryError::ExactIdOrderConflict);
+        }
+        let plan = self.resolve_entity_plan(&spec)?;
+        let captured_now = self.change_tick();
+        let ids = collect_query1_entities(self, &plan, crate::time::ChangeTick::ZERO, captured_now);
+        let slot = self.allocate_result_cache_slot(plan.fingerprint, ids)?;
+        Ok(QueryResultCache {
+            owner: self.owner_token(),
+            slot: slot as u32,
+            generation: self.result_cache_slot(slot).generation,
+        })
+    }
+
     pub fn build_query_result_cache<T: 'static>(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
-        if spec.added.is_some() || spec.changed.is_some() {
+        if !spec.added.is_empty()
+            || !spec.added_ids.is_empty()
+            || !spec.changed.is_empty()
+            || !spec.changed_ids.is_empty()
+        {
             return Err(QueryError::MovingChangeWindow);
         }
         if spec.exact_ids.is_some() {
@@ -57,7 +86,11 @@ impl World {
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
-        if spec.added.is_some() || spec.changed.is_some() {
+        if !spec.added.is_empty()
+            || !spec.added_ids.is_empty()
+            || !spec.changed.is_empty()
+            || !spec.changed_ids.is_empty()
+        {
             return Err(QueryError::MovingChangeWindow);
         }
         if spec.exact_ids.is_some() {

@@ -46,6 +46,64 @@ fn result_cache_cold_and_hot_hit() {
 }
 
 #[test]
+fn entity_result_cache_refreshes_after_deferred_empty_spawn_and_despawn() {
+    let mut world = world();
+    let initial = world.spawn().expect("initial");
+    let spec = QuerySpec::new();
+    let cache = world
+        .build_entity_query_result_cache(spec.clone())
+        .expect("cache");
+
+    let added = world.commands().expect("commands").spawn().expect("spawn");
+    world.flush().expect("spawn flush");
+    assert_eq!(
+        world
+            .query_ids(&spec, QueryParams::new().result_cache(&cache))
+            .expect("after spawn")
+            .collect::<Vec<_>>(),
+        vec![initial, added]
+    );
+
+    world
+        .commands()
+        .expect("commands")
+        .despawn(initial)
+        .expect("despawn");
+    world.flush().expect("despawn flush");
+    assert_eq!(
+        world
+            .query_ids(&spec, QueryParams::new().result_cache(&cache))
+            .expect("after despawn")
+            .collect::<Vec<_>>(),
+        vec![added]
+    );
+}
+
+#[test]
+fn entity_result_cache_rejects_moving_exact_and_foreign_uses() {
+    let mut a = world();
+    let mut b = world();
+    assert!(matches!(
+        a.build_entity_query_result_cache(QuerySpec::new().changed::<Position>()),
+        Err(QueryError::MovingChangeWindow)
+    ));
+    let entity = a.spawn().expect("entity");
+    assert!(matches!(
+        a.build_entity_query_result_cache(
+            QuerySpec::new().exact_ids(vec![entity], moirai::query::ExactIdPolicy::SkipUnavailable)
+        ),
+        Err(QueryError::ExactIdOrderConflict)
+    ));
+    let cache = a
+        .build_entity_query_result_cache(QuerySpec::new())
+        .expect("cache");
+    assert!(matches!(
+        b.query_ids(&QuerySpec::new(), QueryParams::new().result_cache(&cache)),
+        Err(QueryError::WrongOwner)
+    ));
+}
+
+#[test]
 fn result_cache_updates_on_topology_change() {
     let mut world = world();
     let a = world.spawn().expect("spawn");

@@ -49,28 +49,37 @@ pub(crate) fn entity_matches(
     if !entity_matches_structural(world, entity, plan) {
         return false;
     }
-    if let Some(index) = plan.added_index {
-        if !tick_in_window(
-            world.component_added_tick(entity, index),
-            since,
-            captured_now,
-        ) {
-            return false;
-        }
+    if !plan.added_indices.is_empty()
+        && !plan.added_indices.iter().any(|&index| {
+            tick_in_window(
+                world.component_added_tick(entity, index),
+                since,
+                captured_now,
+            )
+        })
+    {
+        return false;
     }
-    if let Some(index) = plan.changed_index {
-        if !tick_in_window(
-            world.component_changed_tick(entity, index),
-            since,
-            captured_now,
-        ) {
-            return false;
-        }
+    if !plan.changed_indices.is_empty()
+        && !plan.changed_indices.iter().any(|&index| {
+            tick_in_window(
+                world.component_changed_tick(entity, index),
+                since,
+                captured_now,
+            )
+        })
+    {
+        return false;
     }
     true
 }
 
 pub(crate) fn validate_exact_ids(world: &World, plan: &ResolvedPlan) -> Result<(), QueryError> {
+    if let TraversalSource::Exact { ids } = &plan.traversal {
+        if ids.iter().any(|&entity| !world.owns_entity(entity)) {
+            return Err(QueryError::WrongOwner);
+        }
+    }
     if plan.exact_id_policy != Some(ExactIdPolicy::ErrorOnUnavailable) {
         return Ok(());
     }
@@ -118,8 +127,8 @@ mod tests {
             without_indices: alloc::vec![],
             with_tag_indices: alloc::vec![],
             without_tag_indices: alloc::vec![],
-            added_index: None,
-            changed_index: None,
+            added_indices: alloc::vec![],
+            changed_indices: alloc::vec![],
             exact_id_policy: None,
         }
     }
@@ -148,8 +157,7 @@ mod tests {
             .expect("marker");
         let mut world = builder.build().expect("build");
         let live = world.spawn().expect("live");
-        let stale =
-            crate::entity::EntityId::from_parts(live.slot(), live.generation().wrapping_add(1));
+        let stale = live.with_generation(live.generation().wrapping_add(1));
         let plan = sparse_plan(0);
         assert!(!world.is_alive(stale));
         assert!(!entity_matches_structural(&world, stale, &plan));
@@ -193,13 +201,13 @@ mod tests {
             .0 = 2;
 
         let mut plan = sparse_plan(0);
-        plan.changed_index = Some(0);
+        plan.changed_indices = alloc::vec![0];
         let since = ChangeTick::from_raw(10);
         let captured_now = ChangeTick::from_raw(20);
         assert!(!entity_matches(&world, entity, &plan, since, captured_now));
 
-        plan.added_index = Some(0);
-        plan.changed_index = None;
+        plan.added_indices = alloc::vec![0];
+        plan.changed_indices.clear();
         assert!(!entity_matches(
             &world,
             entity,

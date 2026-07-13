@@ -91,6 +91,20 @@ fn deterministic_initial_allocation_order() {
 }
 
 #[rstest]
+fn owner_token_rejects_identical_slot_generation_from_another_allocator() {
+    let mut a = EntityAllocator::with_owner(11);
+    let mut b = EntityAllocator::with_owner(12);
+    let local = a.alloc();
+    let foreign = b.alloc();
+    assert_eq!(local.slot(), foreign.slot());
+    assert_eq!(local.generation(), foreign.generation());
+    assert_ne!(local, foreign);
+    assert!(a.is_alive(local));
+    assert!(!a.is_alive(foreign));
+    assert_eq!(a.free(foreign), Err(AllocatorError::StaleEntity));
+}
+
+#[rstest]
 fn reuse_bumps_generation() {
     let mut alloc = EntityAllocator::new();
     let a = alloc.alloc();

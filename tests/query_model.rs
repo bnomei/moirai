@@ -73,6 +73,10 @@ impl Model {
             .collect()
     }
 
+    fn query_entities(&self) -> Vec<usize> {
+        self.entities.keys().copied().collect()
+    }
+
     fn query_pos_vel(&self) -> Vec<usize> {
         self.entities
             .iter()
@@ -150,6 +154,18 @@ fn compare_query1(world: &mut World, model: &Model, ids: &BTreeMap<usize, Entity
     assert_eq!(actual_slots, model.query_pos());
 }
 
+fn compare_entity_query(world: &mut World, model: &Model, ids: &BTreeMap<usize, EntityId>) {
+    let actual: Vec<usize> = world
+        .query_ids(&QuerySpec::new(), QueryParams::new())
+        .expect("entities")
+        .filter_map(|entity| {
+            ids.iter()
+                .find_map(|(slot, id)| (*id == entity).then_some(*slot))
+        })
+        .collect();
+    assert_eq!(actual, model.query_entities());
+}
+
 fn compare_cached(
     world: &mut World,
     model: &Model,
@@ -190,6 +206,7 @@ fn randomized_query_matches_reference_model() {
     for op in trace {
         apply_op(&mut world, &mut ids, &mut model, op);
         compare_query1(&mut world, &model, &ids);
+        compare_entity_query(&mut world, &model, &ids);
 
         if cache.is_none() {
             cache = Some(

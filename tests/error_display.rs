@@ -63,6 +63,10 @@ fn world_error_display_variants() {
     let mut world = WorldBuilder::new().build().expect("world");
     let entity = world.spawn().expect("spawn");
     world.despawn(entity).expect("despawn");
+    assert_display(
+        &WorldError::EntityOwnerMismatch { entity },
+        "entity 0:1 belongs to another world",
+    );
     assert_display(&WorldError::StaleEntity { entity }, "stale entity 0:1");
     assert_display(
         &WorldError::EntityNotLive { entity },

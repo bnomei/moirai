@@ -13,6 +13,10 @@ pub(crate) fn collect_query1_structural_members(
 ) -> Vec<EntityId> {
     let mut out = Vec::new();
     match &plan.traversal {
+        TraversalSource::All => {
+            world.collect_live_entities(&mut out);
+            out.retain(|&entity| entity_matches_structural(world, entity, plan));
+        }
         TraversalSource::Sparse { component_index } => {
             if let Some(slots) = world.sparse_dense_slots(*component_index) {
                 for &slot in slots {
@@ -55,6 +59,10 @@ pub(crate) fn collect_query1_entities(
 ) -> Vec<EntityId> {
     let mut out = Vec::new();
     match &plan.traversal {
+        TraversalSource::All => {
+            world.collect_live_entities(&mut out);
+            out.retain(|&entity| entity_matches(world, entity, plan, since, captured_now));
+        }
         TraversalSource::Sparse { component_index } => {
             if let Some(slots) = world.sparse_dense_slots(*component_index) {
                 for &slot in slots {
@@ -150,8 +158,8 @@ mod tests {
             without_indices: Vec::new(),
             with_tag_indices: Vec::new(),
             without_tag_indices: Vec::new(),
-            added_index: None,
-            changed_index: None,
+            added_indices: Vec::new(),
+            changed_indices: Vec::new(),
             exact_id_policy: None,
         };
         assert!(collect_query1_structural_members(&world, &plan).is_empty());
@@ -238,8 +246,8 @@ mod tests {
             without_indices: Vec::new(),
             with_tag_indices: Vec::new(),
             without_tag_indices: Vec::new(),
-            added_index: None,
-            changed_index: None,
+            added_indices: Vec::new(),
+            changed_indices: Vec::new(),
             exact_id_policy: None,
         };
         assert!(

@@ -5,7 +5,7 @@ use crate::query::{QueryError, QuerySpec};
 use crate::world::World;
 
 use super::plan::ResolvedPlan;
-use super::spec::{resolve_query1, resolve_query2};
+use super::spec::{resolve_entities, resolve_query1, resolve_query2};
 
 #[derive(Default)]
 pub(crate) struct QueryResolveScratch {
@@ -16,6 +16,25 @@ pub(crate) struct QueryResolveScratch {
 }
 
 impl World {
+    pub(crate) fn resolve_entity_plan(
+        &mut self,
+        spec: &QuerySpec,
+    ) -> Result<Rc<ResolvedPlan>, QueryError> {
+        let fingerprint = {
+            let mut scratch = self.query_resolve_scratch.borrow_mut();
+            super::spec::peek_entities_fingerprint(self, spec, &mut scratch)?
+        };
+        if let Some(plan) = self.resolved_plan_cache.get(&fingerprint) {
+            return Ok(plan.clone());
+        }
+        let plan = {
+            let mut scratch = self.query_resolve_scratch.borrow_mut();
+            Rc::new(resolve_entities(self, spec, &mut scratch)?)
+        };
+        self.resolved_plan_cache.insert(fingerprint, plan.clone());
+        Ok(plan)
+    }
+
     pub(crate) fn resolve_query1_plan<T: 'static>(
         &mut self,
         spec: &QuerySpec,

@@ -164,8 +164,8 @@ impl<'w, 'c, T: 'static> Iterator for Query1<'w, 'c, T> {
                     while *index < ids.len() {
                         let entity = ids[*index];
                         *index += 1;
-                        let value = if self.plan.added_index.is_some()
-                            || self.plan.changed_index.is_some()
+                        let value = if !self.plan.added_indices.is_empty()
+                            || !self.plan.changed_indices.is_empty()
                         {
                             self.world.query1_match_any_storage::<T>(
                                 entity,
@@ -314,8 +314,8 @@ mod tests {
             without_indices: alloc::vec![],
             with_tag_indices: alloc::vec![],
             without_tag_indices: alloc::vec![],
-            added_index: None,
-            changed_index: None,
+            added_indices: alloc::vec![],
+            changed_indices: alloc::vec![],
             exact_id_policy: None,
         });
         assert!(matches!(
@@ -351,8 +351,8 @@ mod tests {
             without_indices: alloc::vec![],
             with_tag_indices: alloc::vec![],
             without_tag_indices: alloc::vec![],
-            added_index: None,
-            changed_index: None,
+            added_indices: alloc::vec![],
+            changed_indices: alloc::vec![],
             exact_id_policy: None,
         });
         let mut iter = Query2::<Pos, Vel>::new(

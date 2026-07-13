@@ -1,6 +1,7 @@
 pub(crate) mod cache;
 pub(crate) mod cached_source;
 mod collect;
+mod entities;
 mod filter;
 mod ids;
 pub(crate) mod mutate;

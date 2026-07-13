@@ -26,7 +26,31 @@ impl QueryCursor {
         Self::from_now(world, fingerprint)
     }
 
-    pub fn from_start(world: &crate::world::World, fingerprint: u64) -> Self {
+    pub fn for_entities_from_start(
+        world: &mut crate::world::World,
+        spec: &crate::query::QuerySpec,
+    ) -> Result<Self, QueryError> {
+        let fingerprint = world.entity_query_fingerprint(spec)?;
+        Ok(Self::from_start(world, fingerprint))
+    }
+
+    pub fn for_entities_from_now(
+        world: &mut crate::world::World,
+        spec: &crate::query::QuerySpec,
+    ) -> Result<Self, QueryError> {
+        let fingerprint = world.entity_query_fingerprint(spec)?;
+        Self::from_now(world, fingerprint)
+    }
+
+    pub fn fork(&self) -> Self {
+        Self {
+            owner: self.owner.clone(),
+            fingerprint: self.fingerprint,
+            last_observed: self.last_observed,
+        }
+    }
+
+    pub(crate) fn from_start(world: &crate::world::World, fingerprint: u64) -> Self {
         Self {
             owner: world.owner_token(),
             fingerprint,
@@ -34,7 +58,10 @@ impl QueryCursor {
         }
     }
 
-    pub fn from_now(world: &crate::world::World, fingerprint: u64) -> Result<Self, QueryError> {
+    pub(crate) fn from_now(
+        world: &crate::world::World,
+        fingerprint: u64,
+    ) -> Result<Self, QueryError> {
         Ok(Self {
             owner: world.owner_token(),
             fingerprint,

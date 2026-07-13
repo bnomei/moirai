@@ -32,6 +32,24 @@ impl MembershipCacheSlot {
 }
 
 impl World {
+    pub fn build_entity_query_cache(&mut self, spec: QuerySpec) -> Result<QueryCache, QueryError> {
+        if spec.exact_ids.is_some() {
+            return Err(QueryError::UnsupportedCachePolicy {
+                detail: alloc::string::String::from(
+                    "membership cache does not support exact-id specs",
+                ),
+            });
+        }
+        let plan = self.resolve_entity_plan(&spec)?;
+        let members = collect_query1_structural_members(self, &plan);
+        let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
+        Ok(QueryCache {
+            owner: self.owner_token(),
+            slot: slot as u32,
+            generation: self.membership_cache_slot(slot).generation,
+        })
+    }
+
     pub fn build_query_cache<T: 'static>(
         &mut self,
         spec: QuerySpec,
@@ -186,7 +204,7 @@ impl World {
             });
         }
         if let Some(cache) = params.result_cache {
-            if plan.added_index.is_some() || plan.changed_index.is_some() {
+            if !plan.added_indices.is_empty() || !plan.changed_indices.is_empty() {
                 return Err(QueryError::MovingChangeWindow);
             }
             if matches!(plan.traversal, super::plan::TraversalSource::Exact { .. }) {

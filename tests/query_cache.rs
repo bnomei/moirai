@@ -49,6 +49,45 @@ fn query_cache_cold_and_hot_hit() {
 }
 
 #[test]
+fn entity_membership_cache_refreshes_after_deferred_empty_spawn() {
+    let mut world = world();
+    let spec = QuerySpec::new();
+    let cache = world
+        .build_entity_query_cache(spec.clone())
+        .expect("entity cache");
+    let entity = world.commands().expect("commands").spawn().expect("spawn");
+    world.flush().expect("flush");
+    assert_eq!(
+        world
+            .query_ids(&spec, QueryParams::new().membership_cache(&cache))
+            .expect("refreshed")
+            .collect::<Vec<_>>(),
+        vec![entity]
+    );
+}
+
+#[test]
+fn entity_membership_cache_is_owner_and_spec_scoped() {
+    let mut a = world();
+    let mut b = world();
+    let cache = a.build_entity_query_cache(QuerySpec::new()).expect("cache");
+    assert!(matches!(
+        b.query_ids(
+            &QuerySpec::new(),
+            QueryParams::new().membership_cache(&cache)
+        ),
+        Err(QueryError::WrongOwner)
+    ));
+    assert!(matches!(
+        a.query_ids(
+            &QuerySpec::new().with::<Position>(),
+            QueryParams::new().membership_cache(&cache)
+        ),
+        Err(QueryError::WrongQuery { .. })
+    ));
+}
+
+#[test]
 fn query_result_cache_rejects_added_or_changed() {
     let mut world = world();
     let spec = QuerySpec::new().added::<Position>();

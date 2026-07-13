@@ -66,6 +66,9 @@ impl World {
             return Ok(crate::query::Query1State::Cached { source, index: 0 });
         }
         match &plan.traversal {
+            TraversalSource::All => Err(QueryError::WrongQuery {
+                detail: alloc::string::String::from("entity-only plan cannot back a typed query"),
+            }),
             TraversalSource::Sparse { component_index } => {
                 let store = self.sparse_store_by_index::<T>(*component_index)?;
                 Ok(crate::query::Query1State::Sparse { store, index: 0 })
@@ -148,7 +151,7 @@ impl World {
 
     pub(crate) fn entity_from_slot(&self, slot: u32) -> EntityId {
         let generation = self.allocator.generation_for_slot(slot as usize);
-        EntityId::from_parts(slot, generation)
+        EntityId::from_owned_parts(self.owner_token().token(), slot, generation)
     }
 
     pub(crate) fn archetype_entity_slots(&self, archetype: usize) -> &[u32] {
