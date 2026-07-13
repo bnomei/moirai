@@ -1,6 +1,55 @@
 use crate::time::ChangeTick;
 use crate::world::{World, WorldError};
 
+struct ResourceScopeGuard<'world, R: 'static> {
+    world: &'world mut World,
+    resource: Option<R>,
+    tick: ChangeTick,
+    active: bool,
+}
+
+impl<'world, R: 'static> ResourceScopeGuard<'world, R> {
+    fn new(world: &'world mut World, resource: Option<R>, tick: ChangeTick) -> Self {
+        Self {
+            world,
+            resource,
+            tick,
+            active: true,
+        }
+    }
+
+    fn call<T>(&mut self, f: impl FnOnce(Option<&mut R>, &mut World) -> T) -> T {
+        f(self.resource.as_mut(), self.world)
+    }
+
+    fn restore(&mut self) -> Result<(), WorldError> {
+        if !self.active {
+            return Ok(());
+        }
+        self.active = false;
+
+        let result = if let Some(resource) = self.resource.take() {
+            self.world.resources.restore_scope::<R>(resource, self.tick)
+        } else {
+            self.world.resources.cancel_scope();
+            Ok(())
+        };
+        if result.is_err() {
+            self.world.resources.cancel_scope();
+        }
+        result
+    }
+}
+
+impl<R: 'static> Drop for ResourceScopeGuard<'_, R> {
+    fn drop(&mut self) {
+        // `restore` can only fail if ResourceStore's private scope invariant is
+        // broken. The public callback cannot alter registration or the scope
+        // sentinel, so unwinding remains non-panicking in normal operation.
+        let _ = self.restore();
+    }
+}
+
 impl World {
     pub fn contains_resource<R: 'static>(&self) -> bool {
         self.resources.contains::<R>()
@@ -46,16 +95,10 @@ impl World {
         self.ensure_mutable()?;
         self.resources.prepare_scope::<R>()?;
         let tick = self.issue_change_tick()?;
-        let mut taken = self.resources.take_for_scope::<R>()?;
-        let result = match taken.as_mut() {
-            Some(resource) => f(Some(resource), self),
-            None => f(None, self),
-        };
-        if let Some(resource) = taken {
-            self.resources.restore_scope::<R>(resource, tick)?;
-        } else {
-            self.resources.cancel_scope();
-        }
+        let taken = self.resources.take_for_scope::<R>()?;
+        let mut guard = ResourceScopeGuard::new(self, taken, tick);
+        let result = guard.call(f);
+        guard.restore()?;
         Ok(result)
     }
 
