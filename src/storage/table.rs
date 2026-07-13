@@ -8,7 +8,8 @@ pub(crate) trait ErasedTableColumn: Any {
     #[allow(dead_code)]
     fn type_id(&self) -> TypeId;
     fn take_row(&mut self, row: usize) -> ErasedTableRow;
-    fn append_row(&mut self, row: ErasedTableRow);
+    fn move_row_to(&mut self, row: usize, destination: &mut dyn ErasedTableColumn);
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn append_value(&mut self, value: Box<dyn Any>, tick: ChangeTick) -> usize;
     fn replace_value(
         &mut self,
@@ -24,8 +25,6 @@ pub(crate) trait ErasedTableColumn: Any {
 
 pub(crate) struct ErasedTableRow {
     value: Box<dyn Any>,
-    added: ChangeTick,
-    changed: ChangeTick,
 }
 
 impl ErasedTableRow {
@@ -68,21 +67,24 @@ impl<T: 'static> ErasedTableColumn for TypedTableColumn<T> {
     }
 
     fn take_row(&mut self, row: usize) -> ErasedTableRow {
-        ErasedTableRow {
-            value: Box::new(self.data.swap_remove(row)),
-            added: ChangeTick::from_raw(self.added.swap_remove(row)),
-            changed: ChangeTick::from_raw(self.changed.swap_remove(row)),
-        }
+        let value = Box::new(self.data.swap_remove(row));
+        let _ = self.added.swap_remove(row);
+        let _ = self.changed.swap_remove(row);
+        ErasedTableRow { value }
     }
 
-    fn append_row(&mut self, row: ErasedTableRow) {
-        let value = *row
-            .value
-            .downcast::<T>()
+    fn move_row_to(&mut self, row: usize, destination: &mut dyn ErasedTableColumn) {
+        let destination = destination
+            .as_any_mut()
+            .downcast_mut::<TypedTableColumn<T>>()
             .expect("table column type mismatch");
-        self.data.push(value);
-        self.added.push(row.added.raw());
-        self.changed.push(row.changed.raw());
+        destination.data.push(self.data.swap_remove(row));
+        destination.added.push(self.added.swap_remove(row));
+        destination.changed.push(self.changed.swap_remove(row));
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
     fn append_value(&mut self, value: Box<dyn Any>, tick: ChangeTick) -> usize {

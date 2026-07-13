@@ -248,6 +248,39 @@ fn command_buffer_reuses_capacity_after_warmup() {
 
 #[test]
 #[cfg_attr(debug_assertions, ignore = "allocation contracts require --release")]
+fn successful_command_flush_reuses_capacity_after_warmup() {
+    let mut world = warmed_sparse_world(2);
+    for _ in 0..32 {
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        world
+            .commands()
+            .expect("commands")
+            .despawn(reserved)
+            .expect("despawn");
+        world.flush().expect("flush");
+    }
+    assert_no_repeated_steady_state_growth(4, || {
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        world
+            .commands()
+            .expect("commands")
+            .despawn(reserved)
+            .expect("despawn");
+        let report = world.flush().expect("flush");
+        assert_eq!(report.commands_applied, 2);
+    });
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "allocation contracts require --release")]
 fn event_send_read_steady_state_is_allocation_free() {
     let mut builder = WorldBuilder::new();
     builder
@@ -370,6 +403,28 @@ fn run_if_and_set_steady_state_is_allocation_free() {
     for _ in 0..6 {
         app.update(1.0 / 60.0).expect("warmup");
     }
+    assert_no_repeated_steady_state_growth(4, || {
+        app.update(1.0 / 60.0).expect("update");
+    });
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "allocation contracts require --release")]
+fn composite_conditions_are_allocation_free_after_construction() {
+    let mut condition = Condition::always();
+    for _ in 0..64 {
+        condition = condition.and(Condition::always());
+    }
+
+    let mut builder = AppBuilder::new();
+    builder
+        .add_system(System::new("conditional", stage::UPDATE, |_world, _dt| {}).run_if(condition))
+        .expect("system");
+    let mut app = builder.build().expect("app");
+    for _ in 0..4 {
+        app.update(1.0 / 60.0).expect("warmup");
+    }
+
     assert_no_repeated_steady_state_growth(4, || {
         app.update(1.0 / 60.0).expect("update");
     });

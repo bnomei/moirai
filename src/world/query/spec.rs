@@ -21,6 +21,18 @@ struct PreparedQuery1 {
     exact_id_policy: Option<ExactIdPolicy>,
 }
 
+struct PreparedQuery2 {
+    fingerprint: u64,
+    primary_index: usize,
+    primary_is_table: bool,
+    second_index: usize,
+    second_is_table: bool,
+    traversal: TraversalSource,
+    added_indices: Vec<usize>,
+    changed_indices: Vec<usize>,
+    exact_id_policy: Option<ExactIdPolicy>,
+}
+
 pub(crate) fn peek_query1_fingerprint<T: 'static>(
     world: &World,
     spec: &QuerySpec,
@@ -106,6 +118,42 @@ pub(crate) fn resolve_query2<A: 'static, B: 'static>(
     spec: &QuerySpec,
     scratch: &mut QueryResolveScratch,
 ) -> Result<(ResolvedPlan, usize, bool), QueryError> {
+    let prepared = prepare_query2::<A, B>(world, spec, scratch)?;
+    let plan = ResolvedPlan {
+        fingerprint: prepared.fingerprint,
+        primary_index: prepared.primary_index,
+        primary_is_table: prepared.primary_is_table,
+        traversal: prepared.traversal,
+        required_indices: scratch.required.clone(),
+        without_indices: scratch.without.clone(),
+        with_tag_indices: scratch.with_tags.clone(),
+        without_tag_indices: scratch.without_tags.clone(),
+        added_indices: prepared.added_indices,
+        changed_indices: prepared.changed_indices,
+        exact_id_policy: prepared.exact_id_policy,
+    };
+
+    Ok((plan, prepared.second_index, prepared.second_is_table))
+}
+
+pub(crate) fn peek_query2_fingerprint<A: 'static, B: 'static>(
+    world: &World,
+    spec: &QuerySpec,
+    scratch: &mut QueryResolveScratch,
+) -> Result<(u64, usize, bool), QueryError> {
+    let prepared = prepare_query2::<A, B>(world, spec, scratch)?;
+    Ok((
+        prepared.fingerprint,
+        prepared.second_index,
+        prepared.second_is_table,
+    ))
+}
+
+fn prepare_query2<A: 'static, B: 'static>(
+    world: &World,
+    spec: &QuerySpec,
+    scratch: &mut QueryResolveScratch,
+) -> Result<PreparedQuery2, QueryError> {
     let primary_a = resolve_component::<A>(world)?;
     let primary_b = resolve_component::<B>(world)?;
     let second_index = primary_b.index();
@@ -147,21 +195,17 @@ pub(crate) fn resolve_query2<A: 'static, B: 'static>(
         spec.exact_id_policy,
     );
 
-    let plan = ResolvedPlan {
+    Ok(PreparedQuery2 {
         fingerprint,
         primary_index,
         primary_is_table,
         traversal,
-        required_indices: scratch.required.clone(),
-        without_indices: scratch.without.clone(),
-        with_tag_indices: scratch.with_tags.clone(),
-        without_tag_indices: scratch.without_tags.clone(),
         added_indices,
         changed_indices,
         exact_id_policy: spec.exact_id_policy,
-    };
-
-    Ok((plan, second_index, second_is_table))
+        second_index,
+        second_is_table,
+    })
 }
 
 pub(crate) fn peek_entities_fingerprint(

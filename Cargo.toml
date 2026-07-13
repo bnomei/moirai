@@ -50,6 +50,16 @@ name = "queries"
 path = "benches/queries.rs"
 harness = false
 
+[[bench]]
+name = "commands"
+path = "benches/commands.rs"
+harness = false
+
+[[bench]]
+name = "events"
+path = "benches/events.rs"
+harness = false
+
 [[test]]
 name = "testkit"
 path = "tests/testkit.rs"

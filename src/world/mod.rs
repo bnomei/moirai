@@ -65,9 +65,11 @@ pub struct World {
     lease_locked_resources: Vec<TypeId>,
     fixed_step: Option<crate::time::FixedStep>,
     query_topology_revision: u64,
+    query_entity_revision: u64,
+    query_component_revisions: Vec<u64>,
     membership_caches: Vec<crate::world::query::cache::MembershipCacheSlot>,
     result_caches: Vec<crate::world::query::result_cache::ResultCacheSlot>,
-    table_archetype_cache: Vec<alloc::vec::Vec<usize>>,
+    table_archetype_cache: Vec<Option<alloc::vec::Vec<usize>>>,
     table_archetype_cache_topology: u64,
     query_resolve_scratch: RefCell<crate::world::query::plan_cache::QueryResolveScratch>,
     resolved_plan_cache: BTreeMap<u64, Rc<crate::world::query::plan::ResolvedPlan>>,
@@ -82,6 +84,7 @@ impl World {
         resources: ResourceStore,
         events: WorldEvents,
     ) -> Self {
+        let component_count = registry.len();
         let command_components = (0..registry.len())
             .map(|index| {
                 (
@@ -109,6 +112,8 @@ impl World {
             lease_locked_resources: Vec::new(),
             fixed_step: None,
             query_topology_revision: 1,
+            query_entity_revision: 1,
+            query_component_revisions: alloc::vec![1; component_count],
             membership_caches: Vec::new(),
             result_caches: Vec::new(),
             table_archetype_cache: Vec::new(),
@@ -122,6 +127,16 @@ impl World {
 
     pub(crate) fn bump_query_topology(&mut self) {
         self.query_topology_revision = self.query_topology_revision.saturating_add(1);
+        self.query_entity_revision = self.query_entity_revision.saturating_add(1);
+        self.table_archetype_cache.clear();
+        self.table_archetype_cache_topology = 0;
+    }
+
+    pub(crate) fn bump_component_query_topology(&mut self, component_index: usize) {
+        self.query_topology_revision = self.query_topology_revision.saturating_add(1);
+        if let Some(revision) = self.query_component_revisions.get_mut(component_index) {
+            *revision = revision.saturating_add(1);
+        }
         self.table_archetype_cache.clear();
         self.table_archetype_cache_topology = 0;
     }
@@ -133,15 +148,16 @@ impl World {
         }
         if self.table_archetype_cache.len() <= component_index {
             self.table_archetype_cache
-                .resize(component_index + 1, Vec::new());
+                .resize_with(component_index + 1, || None);
         }
         let slot = &mut self.table_archetype_cache[component_index];
-        if slot.is_empty() {
-            *slot = self
-                .archetypes
-                .archetypes_with_component(component_index as u32);
+        if slot.is_none() {
+            *slot = Some(
+                self.archetypes
+                    .archetypes_with_component(component_index as u32),
+            );
         }
-        slot.as_slice()
+        slot.as_deref().expect("table archetype cache initialized")
     }
 
     pub(crate) fn run_guard_state(&self) -> guard::RunGuard {
@@ -548,12 +564,21 @@ impl World {
     }
 
     pub(crate) fn commit_command_ops(&mut self, tick: ChangeTick) -> Result<usize, WorldError> {
-        let ops = self.command_queue.take_ops();
+        let mut ops = self.command_queue.take_ops();
         let count = ops.len();
-        for op in ops {
-            op.commit(self, tick)?;
-        }
-        Ok(count)
+        let result = {
+            let mut drained = ops.drain(..);
+            let mut result = Ok(count);
+            for op in drained.by_ref() {
+                if let Err(error) = op.commit(self, tick) {
+                    result = Err(error);
+                    break;
+                }
+            }
+            result
+        };
+        self.command_queue.restore_ops(ops);
+        result
     }
 
     pub(crate) fn allocator_mut(&mut self) -> &mut EntityAllocator {

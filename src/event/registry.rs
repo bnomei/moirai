@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::any::{type_name, TypeId};
@@ -87,7 +88,11 @@ struct EventEntry {
 
 pub(crate) struct EventRegistry {
     entries: Vec<EventEntry>,
+    ordinary_by_type: BTreeMap<TypeId, u32>,
+    ordinary_count: usize,
 }
+
+const LINEAR_TYPE_LOOKUP_PREFIX: usize = 16;
 
 impl EventId {
     pub(crate) fn new(owner: WorldOwner, index: u32) -> Self {
@@ -115,6 +120,8 @@ impl EventRegistry {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            ordinary_by_type: BTreeMap::new(),
+            ordinary_count: 0,
         }
     }
 
@@ -129,11 +136,8 @@ impl EventRegistry {
     ) -> Result<EventId, EventRegistrationError> {
         let name = type_name::<E>().to_string();
         let type_id = TypeId::of::<E>();
-        if let Some(index) = self
-            .entries
-            .iter()
-            .position(|entry| entry.type_id == type_id && entry.lifecycle_component_index.is_none())
-        {
+        if let Some(index) = self.ordinary_index_of_type_id(type_id) {
+            let index = index as usize;
             let entry = &self.entries[index];
             if entry.options == options {
                 return Ok(EventId::new(owner.clone(), index as u32));
@@ -163,6 +167,10 @@ impl EventRegistry {
             options,
             lifecycle_component_index: None,
         });
+        if self.ordinary_count >= LINEAR_TYPE_LOOKUP_PREFIX {
+            self.ordinary_by_type.insert(type_id, index);
+        }
+        self.ordinary_count += 1;
         Ok(EventId::new(owner.clone(), index))
     }
 
@@ -199,10 +207,25 @@ impl EventRegistry {
     }
 
     pub(crate) fn id_of_type_id(&self, owner: &WorldOwner, type_id: TypeId) -> Option<EventId> {
-        self.entries
-            .iter()
-            .position(|entry| entry.type_id == type_id && entry.lifecycle_component_index.is_none())
-            .map(|index| EventId::new(owner.clone(), index as u32))
+        self.ordinary_index_of_type_id(type_id)
+            .map(|index| EventId::new(owner.clone(), index))
+    }
+
+    fn ordinary_index_of_type_id(&self, type_id: TypeId) -> Option<u32> {
+        let mut ordinary_entries = 0;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.lifecycle_component_index.is_some() {
+                continue;
+            }
+            ordinary_entries += 1;
+            if entry.type_id == type_id {
+                return Some(index as u32);
+            }
+            if ordinary_entries == LINEAR_TYPE_LOOKUP_PREFIX {
+                break;
+            }
+        }
+        self.ordinary_by_type.get(&type_id).copied()
     }
 }
 
@@ -241,6 +264,9 @@ mod tests {
 
     #[derive(Clone, Copy)]
     struct Heal(#[allow(dead_code)] u32);
+
+    #[derive(Clone, Copy)]
+    struct Indexed<const N: usize>;
 
     #[test]
     fn external_source_flag_round_trip() {
@@ -300,6 +326,78 @@ mod tests {
             .register::<Damage>(&owner, EventOptions::manual())
             .expect("register");
         assert_eq!(registry.type_id(&id), Some(TypeId::of::<Damage>()));
+    }
+
+    #[test]
+    fn ordinary_type_index_ignores_lifecycle_entries_of_the_same_payload_type() {
+        use crate::event::component::LifecycleKind;
+
+        let owner = WorldOwner::new();
+        let mut registry = EventRegistry::new();
+        let lifecycle = registry
+            .register_lifecycle::<Damage>(
+                &owner,
+                0,
+                LifecycleKind::Added,
+                EventOptions::frame(StageOperation::Update),
+            )
+            .expect("lifecycle");
+        assert!(registry.id_of::<Damage>(&owner).is_none());
+
+        let ordinary = registry
+            .register::<Damage>(&owner, EventOptions::manual())
+            .expect("ordinary");
+        assert_ne!(ordinary, lifecycle);
+        assert_eq!(registry.id_of::<Damage>(&owner), Some(ordinary));
+    }
+
+    #[test]
+    fn adaptive_type_lookup_resolves_prefix_and_tree_entries() {
+        let owner = WorldOwner::new();
+        let mut registry = EventRegistry::new();
+        macro_rules! register {
+            ($index:literal) => {
+                registry
+                    .register::<Indexed<$index>>(&owner, EventOptions::manual())
+                    .expect("register");
+            };
+        }
+        register!(0);
+        register!(1);
+        register!(2);
+        register!(3);
+        register!(4);
+        register!(5);
+        register!(6);
+        register!(7);
+        register!(8);
+        register!(9);
+        register!(10);
+        register!(11);
+        register!(12);
+        register!(13);
+        register!(14);
+        register!(15);
+        register!(16);
+
+        assert_eq!(registry.ordinary_count, 17);
+        assert_eq!(registry.ordinary_by_type.len(), 1);
+
+        assert_eq!(
+            registry.id_of::<Indexed<0>>(&owner).map(|id| id.index()),
+            Some(0)
+        );
+        assert_eq!(
+            registry.id_of::<Indexed<16>>(&owner).map(|id| id.index()),
+            Some(16)
+        );
+        assert_eq!(
+            registry
+                .register::<Indexed<16>>(&owner, EventOptions::manual())
+                .expect("duplicate fallback entry")
+                .index(),
+            16
+        );
     }
 
     fn registry_owner_check(

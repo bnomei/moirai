@@ -42,8 +42,11 @@ impl World {
         if let Some(component_index) = table_component {
             self.ensure_table_archetypes(component_index);
         }
-        let table_archetypes =
-            table_component.map(|index| self.table_archetype_cache[index].as_slice());
+        let table_archetypes = table_component.map(|index| {
+            self.table_archetype_cache[index]
+                .as_deref()
+                .expect("table archetypes prepared")
+        });
 
         Query1::new(
             self,
@@ -53,6 +56,7 @@ impl World {
             params.cursor,
             cached,
             table_archetypes,
+            None,
         )
     }
 
@@ -88,6 +92,25 @@ impl World {
         }
     }
 
+    pub(crate) fn query1_accept_source_covered(
+        &self,
+        entity: EntityId,
+        plan: &ResolvedPlan,
+        since: ChangeTick,
+        captured_now: ChangeTick,
+        additional_covered_required: usize,
+    ) -> bool {
+        let primary = plan.primary_index;
+        super::filter::entity_matches_with_covered(
+            self,
+            entity,
+            plan,
+            since,
+            captured_now,
+            &[primary, additional_covered_required],
+        )
+    }
+
     #[allow(clippy::needless_lifetimes)]
     pub(crate) fn query1_match_sparse<'w, T: 'static>(
         &'w self,
@@ -109,8 +132,14 @@ impl World {
         plan: &ResolvedPlan,
         since: ChangeTick,
         captured_now: ChangeTick,
+        additional_covered_required: Option<usize>,
     ) -> Option<&T> {
-        if !entity_matches(self, entity, plan, since, captured_now) {
+        let matches = if let Some(additional) = additional_covered_required {
+            self.query1_accept_source_covered(entity, plan, since, captured_now, additional)
+        } else {
+            entity_matches(self, entity, plan, since, captured_now)
+        };
+        if !matches {
             return None;
         }
         self.archetypes.get_table(entity, plan.primary_index as u32)

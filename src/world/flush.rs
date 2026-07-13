@@ -27,7 +27,11 @@ impl World {
             });
         }
         self.ensure_mutable()?;
-        if let Err(error) = self.command_queue.preflight(self) {
+        let mut preflight_scratch = self.command_queue.take_preflight_scratch();
+        let preflight = self.command_queue.preflight(self, &mut preflight_scratch);
+        self.command_queue
+            .restore_preflight_scratch(preflight_scratch);
+        if let Err(error) = preflight {
             self.command_queue.discard(&mut self.allocator)?;
             return Err(WorldError::from(error));
         }
@@ -130,5 +134,21 @@ mod tests {
             Err(WorldError::UnregisteredEvent { .. })
         ));
         assert!(!world.has_pending_commands());
+    }
+
+    #[test]
+    fn command_scratch_is_capped_after_a_large_successful_flush() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        {
+            let mut commands = world.commands().expect("commands");
+            for _ in 0..16_384 {
+                let entity = commands.spawn().expect("reserve");
+                commands.despawn(entity).expect("despawn");
+            }
+        }
+
+        let report = world.flush().expect("flush burst");
+        assert_eq!(report.commands_applied, 32_768);
+        assert!(world.command_queue.retained_scratch_bytes_for_test() <= 256 * 1024);
     }
 }

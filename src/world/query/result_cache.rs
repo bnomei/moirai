@@ -4,6 +4,7 @@ use crate::entity::EntityId;
 use crate::query::{QueryError, QueryResultCache, QuerySpec};
 use crate::world::World;
 
+use super::cache::QueryTopologySnapshot;
 use super::collect::collect_query1_entities;
 use super::filter::validate_exact_ids;
 
@@ -13,16 +14,16 @@ const RETIRED_GENERATION: u32 = u32::MAX;
 pub(crate) struct ResultCacheSlot {
     pub generation: u32,
     pub fingerprint: u64,
-    pub topology_revision: u64,
+    pub topology: QueryTopologySnapshot,
     pub ids: Vec<EntityId>,
 }
 
 impl ResultCacheSlot {
-    fn new(fingerprint: u64, topology_revision: u64, ids: Vec<EntityId>) -> Self {
+    fn new(fingerprint: u64, topology: QueryTopologySnapshot, ids: Vec<EntityId>) -> Self {
         Self {
             generation: 1,
             fingerprint,
-            topology_revision,
+            topology,
             ids,
         }
     }
@@ -57,7 +58,8 @@ impl World {
         let plan = self.resolve_entity_plan(&spec)?;
         let captured_now = self.change_tick();
         let ids = collect_query1_entities(self, &plan, crate::time::ChangeTick::ZERO, captured_now);
-        let slot = self.allocate_result_cache_slot(plan.fingerprint, ids)?;
+        let topology = QueryTopologySnapshot::capture(self, &plan);
+        let slot = self.allocate_result_cache_slot(plan.fingerprint, topology, ids)?;
         Ok(QueryResultCache {
             owner: self.owner_token(),
             slot: slot as u32,
@@ -89,7 +91,8 @@ impl World {
         let plan = self.resolve_query1_plan::<T>(&spec)?;
         let captured_now = self.change_tick();
         let ids = collect_query1_entities(self, &plan, crate::time::ChangeTick::ZERO, captured_now);
-        let slot = self.allocate_result_cache_slot(plan.fingerprint, ids)?;
+        let topology = QueryTopologySnapshot::capture(self, &plan);
+        let slot = self.allocate_result_cache_slot(plan.fingerprint, topology, ids)?;
         Ok(QueryResultCache {
             owner: self.owner_token(),
             slot: slot as u32,
@@ -128,7 +131,8 @@ impl World {
             second_index,
             second_is_table,
         );
-        let slot = self.allocate_result_cache_slot(plan.fingerprint, ids)?;
+        let topology = QueryTopologySnapshot::capture(self, &plan);
+        let slot = self.allocate_result_cache_slot(plan.fingerprint, topology, ids)?;
         Ok(QueryResultCache {
             owner: self.owner_token(),
             slot: slot as u32,
@@ -148,14 +152,27 @@ impl World {
         captured_now: crate::time::ChangeTick,
     ) -> Result<&[EntityId], QueryError> {
         let slot = self.validate_result_cache(cache, plan.fingerprint)?;
-        let needs_refresh =
-            self.result_caches[slot].topology_revision != self.query_topology_revision;
+        let global_revision = self.query_topology_revision;
+        let observed_global_revision = self.result_caches[slot].topology.observed_global_revision();
+        let needs_refresh = if observed_global_revision == global_revision {
+            false
+        } else if self.result_caches[slot]
+            .topology
+            .dependencies_are_current(self)
+        {
+            self.result_caches[slot]
+                .topology
+                .observe_global_revision(global_revision);
+            false
+        } else {
+            true
+        };
         if needs_refresh {
             let ids = collect_query1_entities(self, plan, since, captured_now);
-            let revision = self.query_topology_revision;
+            let topology = QueryTopologySnapshot::capture(self, plan);
             let entry = &mut self.result_caches[slot];
             entry.ids = ids;
-            entry.topology_revision = revision;
+            entry.topology = topology;
         }
         Ok(&self.result_caches[slot].ids)
     }
@@ -185,19 +202,16 @@ impl World {
     fn allocate_result_cache_slot(
         &mut self,
         fingerprint: u64,
+        topology: QueryTopologySnapshot,
         ids: Vec<EntityId>,
     ) -> Result<usize, QueryError> {
         if let Some(slot) = self.result_caches.iter().position(|entry| !entry.is_live()) {
-            self.result_caches[slot] =
-                ResultCacheSlot::new(fingerprint, self.query_topology_revision, ids);
+            self.result_caches[slot] = ResultCacheSlot::new(fingerprint, topology, ids);
             return Ok(slot);
         }
         let slot = self.result_caches.len();
-        self.result_caches.push(ResultCacheSlot::new(
-            fingerprint,
-            self.query_topology_revision,
-            ids,
-        ));
+        self.result_caches
+            .push(ResultCacheSlot::new(fingerprint, topology, ids));
         Ok(slot)
     }
 

@@ -6,6 +6,7 @@ use crate::world::World;
 
 use super::collect::collect_query1_structural_members;
 use super::filter::validate_exact_ids;
+use super::plan::{ResolvedPlan, TraversalSource};
 
 const RETIRED_GENERATION: u32 = u32::MAX;
 
@@ -13,22 +14,73 @@ const RETIRED_GENERATION: u32 = u32::MAX;
 pub(crate) struct MembershipCacheSlot {
     pub generation: u32,
     pub fingerprint: u64,
-    pub topology_revision: u64,
+    pub topology: QueryTopologySnapshot,
     pub members: Vec<EntityId>,
 }
 
 impl MembershipCacheSlot {
-    fn new(fingerprint: u64, topology_revision: u64, members: Vec<EntityId>) -> Self {
+    fn new(fingerprint: u64, topology: QueryTopologySnapshot, members: Vec<EntityId>) -> Self {
         Self {
             generation: 1,
             fingerprint,
-            topology_revision,
+            topology,
             members,
         }
     }
 
     fn is_live(&self) -> bool {
         self.generation != 0 && self.generation != RETIRED_GENERATION
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct QueryTopologySnapshot {
+    global_revision: u64,
+    entity_revision: Option<u64>,
+    component_revisions: Vec<(usize, u64)>,
+}
+
+impl QueryTopologySnapshot {
+    pub(crate) fn capture(world: &World, plan: &ResolvedPlan) -> Self {
+        let entity_revision =
+            matches!(plan.traversal, TraversalSource::All).then_some(world.query_entity_revision);
+        let mut components = Vec::new();
+        components.extend_from_slice(&plan.required_indices);
+        components.extend_from_slice(&plan.without_indices);
+        components.extend_from_slice(&plan.with_tag_indices);
+        components.extend_from_slice(&plan.without_tag_indices);
+        if let TraversalSource::Sparse { component_index }
+        | TraversalSource::Table { component_index } = plan.traversal
+        {
+            components.push(component_index);
+        }
+        components.sort_unstable();
+        components.dedup();
+        let component_revisions = components
+            .into_iter()
+            .map(|index| (index, world.query_component_revisions[index]))
+            .collect();
+        Self {
+            global_revision: world.query_topology_revision,
+            entity_revision,
+            component_revisions,
+        }
+    }
+
+    pub(crate) fn observed_global_revision(&self) -> u64 {
+        self.global_revision
+    }
+
+    pub(crate) fn observe_global_revision(&mut self, revision: u64) {
+        self.global_revision = revision;
+    }
+
+    pub(crate) fn dependencies_are_current(&self, world: &World) -> bool {
+        self.entity_revision
+            .map_or(true, |revision| revision == world.query_entity_revision)
+            && self.component_revisions.iter().all(|&(index, revision)| {
+                world.query_component_revisions.get(index).copied() == Some(revision)
+            })
     }
 }
 
@@ -44,7 +96,8 @@ impl World {
             });
         }
         let members = collect_query1_structural_members(self, &plan);
-        let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
+        let topology = QueryTopologySnapshot::capture(self, &plan);
+        let slot = self.allocate_membership_cache_slot(plan.fingerprint, topology, members)?;
         Ok(QueryCache {
             owner: self.owner_token(),
             slot: slot as u32,
@@ -66,7 +119,8 @@ impl World {
             });
         }
         let members = collect_query1_structural_members(self, &plan);
-        let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
+        let topology = QueryTopologySnapshot::capture(self, &plan);
+        let slot = self.allocate_membership_cache_slot(plan.fingerprint, topology, members)?;
         Ok(QueryCache {
             owner: self.owner_token(),
             slot: slot as u32,
@@ -88,7 +142,8 @@ impl World {
             });
         }
         let members = collect_query1_structural_members(self, &plan);
-        let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
+        let topology = QueryTopologySnapshot::capture(self, &plan);
+        let slot = self.allocate_membership_cache_slot(plan.fingerprint, topology, members)?;
         Ok(QueryCache {
             owner: self.owner_token(),
             slot: slot as u32,
@@ -106,14 +161,29 @@ impl World {
         plan: &super::plan::ResolvedPlan,
     ) -> Result<&[EntityId], QueryError> {
         let slot = self.validate_membership_cache(cache, plan.fingerprint)?;
-        let needs_refresh =
-            self.membership_caches[slot].topology_revision != self.query_topology_revision;
+        let global_revision = self.query_topology_revision;
+        let observed_global_revision = self.membership_caches[slot]
+            .topology
+            .observed_global_revision();
+        let needs_refresh = if observed_global_revision == global_revision {
+            false
+        } else if self.membership_caches[slot]
+            .topology
+            .dependencies_are_current(self)
+        {
+            self.membership_caches[slot]
+                .topology
+                .observe_global_revision(global_revision);
+            false
+        } else {
+            true
+        };
         if needs_refresh {
             let members = collect_query1_structural_members(self, plan);
-            let revision = self.query_topology_revision;
+            let topology = QueryTopologySnapshot::capture(self, plan);
             let entry = &mut self.membership_caches[slot];
             entry.members = members;
-            entry.topology_revision = revision;
+            entry.topology = topology;
         }
         Ok(&self.membership_caches[slot].members)
     }
@@ -143,6 +213,7 @@ impl World {
     fn allocate_membership_cache_slot(
         &mut self,
         fingerprint: u64,
+        topology: QueryTopologySnapshot,
         members: Vec<EntityId>,
     ) -> Result<usize, QueryError> {
         if let Some(slot) = self
@@ -150,16 +221,12 @@ impl World {
             .iter()
             .position(|entry| !entry.is_live())
         {
-            self.membership_caches[slot] =
-                MembershipCacheSlot::new(fingerprint, self.query_topology_revision, members);
+            self.membership_caches[slot] = MembershipCacheSlot::new(fingerprint, topology, members);
             return Ok(slot);
         }
         let slot = self.membership_caches.len();
-        self.membership_caches.push(MembershipCacheSlot::new(
-            fingerprint,
-            self.query_topology_revision,
-            members,
-        ));
+        self.membership_caches
+            .push(MembershipCacheSlot::new(fingerprint, topology, members));
         Ok(slot)
     }
 

@@ -13,6 +13,7 @@ pub struct Query1<'w, 'c, T: 'static> {
     pub(crate) since: crate::time::ChangeTick,
     pub(crate) cursor_committed: bool,
     pub(crate) cursor: Option<&'c mut crate::query::QueryCursor>,
+    pub(crate) additional_covered_required: Option<usize>,
     pub(crate) state: Query1State<'w, T>,
 }
 
@@ -46,6 +47,7 @@ pub struct Query2<'w, 'c, A: 'static, B: 'static> {
 }
 
 impl<'w, 'c, T: 'static> Query1<'w, 'c, T> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         world: &'w crate::world::World,
         plan: Rc<crate::world::query::plan::ResolvedPlan>,
@@ -54,6 +56,7 @@ impl<'w, 'c, T: 'static> Query1<'w, 'c, T> {
         cursor: Option<&'c mut crate::query::QueryCursor>,
         cached: Option<QueryCachedSource>,
         table_archetypes: Option<&'w [usize]>,
+        additional_covered_required: Option<usize>,
     ) -> Result<Self, crate::query::QueryError> {
         let state = world.query1_state::<T>(&plan, cached, table_archetypes)?;
         Ok(Self {
@@ -64,6 +67,7 @@ impl<'w, 'c, T: 'static> Query1<'w, 'c, T> {
             since,
             cursor_committed: false,
             cursor,
+            additional_covered_required,
             state,
         })
     }
@@ -94,9 +98,25 @@ impl<'w, 'c, T: 'static> Iterator for Query1<'w, 'c, T> {
                 Query1State::Sparse { store, index } => {
                     let slots = store.dense_slots();
                     while *index < slots.len() {
-                        let slot = slots[*index];
+                        let dense_index = *index;
+                        let slot = slots[dense_index];
                         *index += 1;
                         let entity = self.world.entity_from_slot(slot);
+                        if let Some(additional) = self.additional_covered_required {
+                            if !self.world.query1_accept_source_covered(
+                                entity,
+                                &self.plan,
+                                self.since,
+                                self.captured_now,
+                                additional,
+                            ) {
+                                continue;
+                            }
+                            let value = store
+                                .dense_value(dense_index)
+                                .expect("sparse dense slot and value vectors stay aligned");
+                            return Some((entity, value));
+                        }
                         if let Some(value) = self.world.query1_match_sparse::<T>(
                             entity,
                             &self.plan,
@@ -126,6 +146,7 @@ impl<'w, 'c, T: 'static> Iterator for Query1<'w, 'c, T> {
                                 &self.plan,
                                 self.since,
                                 self.captured_now,
+                                self.additional_covered_required,
                             ) {
                                 return Some((entity, value));
                             }
@@ -217,6 +238,7 @@ impl<'w, 'c, A: 'static, B: 'static> Query2<'w, 'c, A, B> {
                 cursor,
                 cached,
                 table_archetypes,
+                Some(second_index),
             )?,
             second_index,
             second_is_table,
@@ -291,6 +313,7 @@ mod tests {
             since: crate::time::ChangeTick::ZERO,
             cursor_committed: false,
             cursor: None,
+            additional_covered_required: None,
             state: Query1State::Cached {
                 source: QueryCachedSource::Membership(stale),
                 index: 0,

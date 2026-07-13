@@ -88,36 +88,7 @@ impl Condition {
         system_index: usize,
         context: &RunContext,
     ) -> bool {
-        match &self.0 {
-            ConditionKind::Always => true,
-            ConditionKind::Never => false,
-            ConditionKind::ResourceExists(type_id) => world.resource_present(*type_id),
-            ConditionKind::ResourceAdded(type_id) => resource_tick_advanced(
-                world.resource_added_tick_for(*type_id),
-                context.resource_added_cursor(system_index, *type_id),
-            ),
-            ConditionKind::ResourceChanged(type_id) => resource_tick_advanced(
-                world.resource_changed_tick_for(*type_id),
-                context.resource_changed_cursor(system_index, *type_id),
-            ),
-            ConditionKind::StateChanged(type_id) => state_tick_advanced(
-                world.state_transition_tick_for(*type_id),
-                context.state_transition_cursor(system_index, *type_id),
-            ),
-            ConditionKind::And(left, right) => {
-                let left = Condition(left.as_ref().clone());
-                let right = Condition(right.as_ref().clone());
-                left.evaluate(world, system_index, context)
-                    && right.evaluate(world, system_index, context)
-            }
-            ConditionKind::Or(left, right) => {
-                let left = Condition(left.as_ref().clone());
-                let right = Condition(right.as_ref().clone());
-                left.evaluate(world, system_index, context)
-                    || right.evaluate(world, system_index, context)
-            }
-            ConditionKind::Predicate(predicate) => predicate(world),
-        }
+        evaluate_kind(&self.0, world, system_index, context)
     }
 
     pub(crate) fn evaluate_for_set(
@@ -126,36 +97,7 @@ impl Condition {
         set_index: usize,
         context: &RunContext,
     ) -> bool {
-        match &self.0 {
-            ConditionKind::Always => true,
-            ConditionKind::Never => false,
-            ConditionKind::ResourceExists(type_id) => world.resource_present(*type_id),
-            ConditionKind::ResourceAdded(type_id) => resource_tick_advanced(
-                world.resource_added_tick_for(*type_id),
-                context.resource_added_cursor_for_set(set_index, *type_id),
-            ),
-            ConditionKind::ResourceChanged(type_id) => resource_tick_advanced(
-                world.resource_changed_tick_for(*type_id),
-                context.resource_changed_cursor_for_set(set_index, *type_id),
-            ),
-            ConditionKind::StateChanged(type_id) => state_tick_advanced(
-                world.state_transition_tick_for(*type_id),
-                context.state_transition_cursor_for_set(set_index, *type_id),
-            ),
-            ConditionKind::And(left, right) => {
-                let left = Condition(left.as_ref().clone());
-                let right = Condition(right.as_ref().clone());
-                left.evaluate_for_set(world, set_index, context)
-                    && right.evaluate_for_set(world, set_index, context)
-            }
-            ConditionKind::Or(left, right) => {
-                let left = Condition(left.as_ref().clone());
-                let right = Condition(right.as_ref().clone());
-                left.evaluate_for_set(world, set_index, context)
-                    || right.evaluate_for_set(world, set_index, context)
-            }
-            ConditionKind::Predicate(predicate) => predicate(world),
-        }
+        evaluate_kind_for_set(&self.0, world, set_index, context)
     }
 
     pub(crate) fn advance_cursors(
@@ -164,32 +106,7 @@ impl Condition {
         system_index: usize,
         context: &mut RunContext,
     ) {
-        match &self.0 {
-            ConditionKind::ResourceAdded(type_id) => {
-                if let Some(tick) = world.resource_added_tick_for(*type_id) {
-                    context.set_resource_added_cursor(system_index, *type_id, tick);
-                }
-            }
-            ConditionKind::ResourceChanged(type_id) => {
-                if let Some(tick) = world.resource_changed_tick_for(*type_id) {
-                    context.set_resource_changed_cursor(system_index, *type_id, tick);
-                }
-            }
-            ConditionKind::StateChanged(type_id) => {
-                if let Some(tick) = world.state_transition_tick_for(*type_id) {
-                    context.set_state_transition_cursor(system_index, *type_id, tick);
-                }
-            }
-            ConditionKind::And(left, right) => {
-                Condition(left.as_ref().clone()).advance_cursors(world, system_index, context);
-                Condition(right.as_ref().clone()).advance_cursors(world, system_index, context);
-            }
-            ConditionKind::Or(left, right) => {
-                Condition(left.as_ref().clone()).advance_cursors(world, system_index, context);
-                Condition(right.as_ref().clone()).advance_cursors(world, system_index, context);
-            }
-            _ => {}
-        }
+        advance_kind_cursors(&self.0, world, system_index, context);
     }
 
     pub(crate) fn advance_set_cursors(
@@ -198,32 +115,135 @@ impl Condition {
         set_index: usize,
         context: &mut RunContext,
     ) {
-        match &self.0 {
-            ConditionKind::ResourceAdded(type_id) => {
-                if let Some(tick) = world.resource_added_tick_for(*type_id) {
-                    context.set_resource_added_cursor_for_set(set_index, *type_id, tick);
-                }
-            }
-            ConditionKind::ResourceChanged(type_id) => {
-                if let Some(tick) = world.resource_changed_tick_for(*type_id) {
-                    context.set_resource_changed_cursor_for_set(set_index, *type_id, tick);
-                }
-            }
-            ConditionKind::StateChanged(type_id) => {
-                if let Some(tick) = world.state_transition_tick_for(*type_id) {
-                    context.set_state_transition_cursor_for_set(set_index, *type_id, tick);
-                }
-            }
-            ConditionKind::And(left, right) => {
-                Condition(left.as_ref().clone()).advance_set_cursors(world, set_index, context);
-                Condition(right.as_ref().clone()).advance_set_cursors(world, set_index, context);
-            }
-            ConditionKind::Or(left, right) => {
-                Condition(left.as_ref().clone()).advance_set_cursors(world, set_index, context);
-                Condition(right.as_ref().clone()).advance_set_cursors(world, set_index, context);
-            }
-            _ => {}
+        advance_kind_set_cursors(&self.0, world, set_index, context);
+    }
+}
+
+fn evaluate_kind(
+    kind: &ConditionKind,
+    world: &World,
+    system_index: usize,
+    context: &RunContext,
+) -> bool {
+    match kind {
+        ConditionKind::Always => true,
+        ConditionKind::Never => false,
+        ConditionKind::ResourceExists(type_id) => world.resource_present(*type_id),
+        ConditionKind::ResourceAdded(type_id) => resource_tick_advanced(
+            world.resource_added_tick_for(*type_id),
+            context.resource_added_cursor(system_index, *type_id),
+        ),
+        ConditionKind::ResourceChanged(type_id) => resource_tick_advanced(
+            world.resource_changed_tick_for(*type_id),
+            context.resource_changed_cursor(system_index, *type_id),
+        ),
+        ConditionKind::StateChanged(type_id) => state_tick_advanced(
+            world.state_transition_tick_for(*type_id),
+            context.state_transition_cursor(system_index, *type_id),
+        ),
+        ConditionKind::And(left, right) => {
+            evaluate_kind(left, world, system_index, context)
+                && evaluate_kind(right, world, system_index, context)
         }
+        ConditionKind::Or(left, right) => {
+            evaluate_kind(left, world, system_index, context)
+                || evaluate_kind(right, world, system_index, context)
+        }
+        ConditionKind::Predicate(predicate) => predicate(world),
+    }
+}
+
+fn evaluate_kind_for_set(
+    kind: &ConditionKind,
+    world: &World,
+    set_index: usize,
+    context: &RunContext,
+) -> bool {
+    match kind {
+        ConditionKind::Always => true,
+        ConditionKind::Never => false,
+        ConditionKind::ResourceExists(type_id) => world.resource_present(*type_id),
+        ConditionKind::ResourceAdded(type_id) => resource_tick_advanced(
+            world.resource_added_tick_for(*type_id),
+            context.resource_added_cursor_for_set(set_index, *type_id),
+        ),
+        ConditionKind::ResourceChanged(type_id) => resource_tick_advanced(
+            world.resource_changed_tick_for(*type_id),
+            context.resource_changed_cursor_for_set(set_index, *type_id),
+        ),
+        ConditionKind::StateChanged(type_id) => state_tick_advanced(
+            world.state_transition_tick_for(*type_id),
+            context.state_transition_cursor_for_set(set_index, *type_id),
+        ),
+        ConditionKind::And(left, right) => {
+            evaluate_kind_for_set(left, world, set_index, context)
+                && evaluate_kind_for_set(right, world, set_index, context)
+        }
+        ConditionKind::Or(left, right) => {
+            evaluate_kind_for_set(left, world, set_index, context)
+                || evaluate_kind_for_set(right, world, set_index, context)
+        }
+        ConditionKind::Predicate(predicate) => predicate(world),
+    }
+}
+
+fn advance_kind_cursors(
+    kind: &ConditionKind,
+    world: &World,
+    system_index: usize,
+    context: &mut RunContext,
+) {
+    match kind {
+        ConditionKind::ResourceAdded(type_id) => {
+            if let Some(tick) = world.resource_added_tick_for(*type_id) {
+                context.set_resource_added_cursor(system_index, *type_id, tick);
+            }
+        }
+        ConditionKind::ResourceChanged(type_id) => {
+            if let Some(tick) = world.resource_changed_tick_for(*type_id) {
+                context.set_resource_changed_cursor(system_index, *type_id, tick);
+            }
+        }
+        ConditionKind::StateChanged(type_id) => {
+            if let Some(tick) = world.state_transition_tick_for(*type_id) {
+                context.set_state_transition_cursor(system_index, *type_id, tick);
+            }
+        }
+        ConditionKind::And(left, right) | ConditionKind::Or(left, right) => {
+            advance_kind_cursors(left, world, system_index, context);
+            advance_kind_cursors(right, world, system_index, context);
+        }
+        _ => {}
+    }
+}
+
+fn advance_kind_set_cursors(
+    kind: &ConditionKind,
+    world: &World,
+    set_index: usize,
+    context: &mut RunContext,
+) {
+    match kind {
+        ConditionKind::ResourceAdded(type_id) => {
+            if let Some(tick) = world.resource_added_tick_for(*type_id) {
+                context.set_resource_added_cursor_for_set(set_index, *type_id, tick);
+            }
+        }
+        ConditionKind::ResourceChanged(type_id) => {
+            if let Some(tick) = world.resource_changed_tick_for(*type_id) {
+                context.set_resource_changed_cursor_for_set(set_index, *type_id, tick);
+            }
+        }
+        ConditionKind::StateChanged(type_id) => {
+            if let Some(tick) = world.state_transition_tick_for(*type_id) {
+                context.set_state_transition_cursor_for_set(set_index, *type_id, tick);
+            }
+        }
+        ConditionKind::And(left, right) | ConditionKind::Or(left, right) => {
+            advance_kind_set_cursors(left, world, set_index, context);
+            advance_kind_set_cursors(right, world, set_index, context);
+        }
+        _ => {}
     }
 }
 

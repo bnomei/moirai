@@ -57,6 +57,10 @@ impl<T: 'static> TypedSparseStorage<T> {
         self.set.dense_slots()
     }
 
+    pub fn dense_value(&self, index: usize) -> Option<&T> {
+        self.set.dense_value(index)
+    }
+
     pub fn added_tick(&self, entity: EntityId) -> Option<ChangeTick> {
         let dense_idx = self.set.dense_index(entity)?;
         self.set.added_tick(dense_idx)

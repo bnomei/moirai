@@ -1,9 +1,11 @@
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::rc::{Rc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
 use core::cell::Cell;
 use core::marker::PhantomData;
+use core::mem;
 
 use crate::event::registry::{EventId, EventRetention};
 use crate::operation::StageOperation;
@@ -15,15 +17,28 @@ pub(crate) struct EventStorage {
 }
 
 struct EventChannel {
-    payloads: Vec<Box<dyn Any>>,
-    free_payloads: Vec<Box<dyn Any>>,
-    sequences: Vec<u64>,
+    entries: EventEntries,
+    active_len: usize,
     next_sequence: u64,
     oldest_retained: u64,
     retention: EventRetention,
     cursors: Vec<Weak<Cell<u64>>>,
+    reader_ops_since_prune: u8,
     closed: bool,
 }
+
+struct EventEntry {
+    sequence: u64,
+    payload: Box<dyn Any>,
+}
+
+enum EventEntries {
+    Linear(Vec<EventEntry>),
+    Ring(VecDeque<EventEntry>),
+}
+
+const READER_PRUNE_INTERVAL: u8 = 128;
+const LINEAR_BOUNDED_CAPACITY_MAX: usize = 16;
 
 /// Explicit reader start policy.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -53,7 +68,7 @@ impl EventStorage {
             self.channels
                 .push(EventChannel::new(EventRetention::Manual));
         }
-        self.channels[index].retention = retention;
+        self.channels[index].set_retention(retention);
     }
 
     pub fn send<E: Clone + 'static>(
@@ -69,7 +84,7 @@ impl EventStorage {
         if channel.closed {
             return Err(WorldError::EventChannelClosed);
         }
-        channel.prune_readers();
+        channel.maybe_prune_readers();
         let sequence = match channel.next_sequence.checked_add(1) {
             Some(sequence) => sequence,
             None => {
@@ -78,9 +93,7 @@ impl EventStorage {
             }
         };
         channel.next_sequence = sequence;
-        let payload = channel.take_or_create_payload(event);
-        channel.payloads.push(payload);
-        channel.sequences.push(sequence);
+        channel.push_event(sequence, event);
         channel.enforce_retention();
         Ok(())
     }
@@ -109,18 +122,20 @@ impl EventStorage {
             reader.cursor.set(channel.oldest_retained);
             return Err(EventReadError::Lagged { dropped });
         }
-        let position = channel
-            .sequences
-            .iter()
-            .position(|sequence| *sequence > cursor);
+        let position = channel.entries.position_after(channel.active_len, cursor);
         let Some(position) = position else {
             if channel.closed {
                 return Err(EventReadError::ChannelClosed);
             }
             return Ok(None);
         };
-        let sequence = channel.sequences[position];
-        let event = channel.payloads[position]
+        let entry = channel
+            .entries
+            .get(position)
+            .expect("active event position must be present");
+        let sequence = entry.sequence;
+        let event = entry
+            .payload
             .downcast_ref::<E>()
             .ok_or_else(|| EventReadError::UnregisteredEvent {
                 name: alloc::format!("event {}", reader.event_id.index()),
@@ -132,15 +147,12 @@ impl EventStorage {
                     *slot = event;
                     payload
                 }
-                None => {
-                    channel.recycle_payload(payload);
-                    Box::new(event)
-                }
+                None => Box::new(event),
             },
             None => Box::new(event),
         });
         reader.cursor.set(sequence);
-        channel.prune_readers();
+        channel.maybe_prune_readers();
         Ok(reader
             .last_payload
             .as_ref()
@@ -163,15 +175,14 @@ impl EventStorage {
         })?;
         let cursor_value = match start {
             EventReaderStart::OldestRetained => channel
-                .sequences
-                .first()
-                .map(|sequence| sequence.saturating_sub(1))
+                .first_active()
+                .map(|entry| entry.sequence.saturating_sub(1))
                 .unwrap_or(channel.oldest_retained),
             EventReaderStart::FromNow => channel.next_sequence,
         };
         let cursor = Rc::new(Cell::new(cursor_value));
         channel.cursors.push(Rc::downgrade(&cursor));
-        channel.prune_readers();
+        channel.maybe_prune_readers();
         Ok(EventReader {
             owner,
             event_id,
@@ -201,6 +212,7 @@ impl EventStorage {
             })?;
         let cursor = Rc::new(Cell::new(reader.cursor.get()));
         channel.cursors.push(Rc::downgrade(&cursor));
+        channel.maybe_prune_readers();
         Ok(EventReader {
             owner: reader.owner.clone(),
             event_id: reader.event_id.clone(),
@@ -232,7 +244,6 @@ impl EventStorage {
         for channel in &mut self.channels {
             if matches!(channel.retention, EventRetention::Frame(owner) if owner == operation) {
                 channel.recycle_payloads();
-                channel.sequences.clear();
                 channel.oldest_retained = channel.next_sequence;
                 channel.prune_readers();
             }
@@ -243,13 +254,13 @@ impl EventStorage {
 impl EventChannel {
     fn new(retention: EventRetention) -> Self {
         Self {
-            payloads: Vec::with_capacity(16),
-            free_payloads: Vec::with_capacity(16),
-            sequences: Vec::with_capacity(16),
+            entries: EventEntries::new(retention),
+            active_len: 0,
             next_sequence: 0,
             oldest_retained: 0,
             retention,
             cursors: Vec::new(),
+            reader_ops_since_prune: 0,
             closed: false,
         }
     }
@@ -257,10 +268,9 @@ impl EventChannel {
     fn enforce_retention(&mut self) {
         match self.retention {
             EventRetention::Bounded(capacity) => {
-                while self.payloads.len() > capacity {
-                    let payload = self.payloads.remove(0);
-                    self.recycle_payload(payload);
-                    let _ = self.sequences.remove(0);
+                while self.active_len > capacity {
+                    self.entries.recycle_oldest();
+                    self.active_len -= 1;
                 }
                 self.refresh_oldest_retained();
             }
@@ -268,23 +278,46 @@ impl EventChannel {
         }
     }
 
-    fn take_or_create_payload<E: 'static>(&mut self, event: E) -> Box<dyn Any> {
-        if let Some(mut payload) = self.free_payloads.pop() {
-            if let Some(slot) = payload.downcast_mut::<E>() {
-                *slot = event;
-                return payload;
-            }
-            self.free_payloads.push(payload);
+    fn push_event<E: 'static>(&mut self, sequence: u64, event: E) {
+        let overwrite_oldest = matches!(
+            self.retention,
+            EventRetention::Bounded(capacity)
+                if capacity != 0
+                    && capacity <= LINEAR_BOUNDED_CAPACITY_MAX
+                    && self.active_len == capacity
+        );
+        if overwrite_oldest {
+            self.entries
+                .overwrite_oldest_linear(self.active_len, sequence, event);
+            return;
         }
-        Box::new(event)
-    }
-
-    fn recycle_payload(&mut self, payload: Box<dyn Any>) {
-        self.free_payloads.push(payload);
+        if let Some(entry) = self.entries.get_mut(self.active_len) {
+            if let Some(slot) = entry.payload.downcast_mut::<E>() {
+                *slot = event;
+                entry.sequence = sequence;
+                self.active_len += 1;
+                return;
+            }
+            entry.payload = Box::new(event);
+            entry.sequence = sequence;
+        } else {
+            self.entries.push(EventEntry {
+                sequence,
+                payload: Box::new(event),
+            });
+        }
+        self.active_len += 1;
     }
 
     fn recycle_payloads(&mut self) {
-        self.free_payloads.append(&mut self.payloads);
+        self.active_len = 0;
+    }
+
+    fn maybe_prune_readers(&mut self) {
+        self.reader_ops_since_prune = self.reader_ops_since_prune.saturating_add(1);
+        if self.reader_ops_since_prune >= READER_PRUNE_INTERVAL {
+            self.prune_readers();
+        }
     }
 
     fn prune_readers(&mut self) {
@@ -296,14 +329,125 @@ impl EventChannel {
                 index += 1;
             }
         }
+        self.reader_ops_since_prune = 0;
     }
 
     fn refresh_oldest_retained(&mut self) {
         self.oldest_retained = self
-            .sequences
-            .first()
-            .map(|sequence| sequence.saturating_sub(1))
+            .first_active()
+            .map(|entry| entry.sequence.saturating_sub(1))
             .unwrap_or(self.next_sequence);
+    }
+
+    fn first_active(&self) -> Option<&EventEntry> {
+        (self.active_len != 0)
+            .then(|| self.entries.first())
+            .flatten()
+    }
+
+    fn set_retention(&mut self, retention: EventRetention) {
+        self.entries.reconfigure(retention);
+        self.retention = retention;
+    }
+}
+
+impl EventEntries {
+    fn new(retention: EventRetention) -> Self {
+        if Self::uses_ring(retention) {
+            Self::Ring(VecDeque::with_capacity(16))
+        } else {
+            Self::Linear(Vec::with_capacity(16))
+        }
+    }
+
+    fn uses_ring(retention: EventRetention) -> bool {
+        matches!(
+            retention,
+            EventRetention::Bounded(capacity) if capacity > LINEAR_BOUNDED_CAPACITY_MAX
+        )
+    }
+
+    fn reconfigure(&mut self, retention: EventRetention) {
+        let wants_ring = Self::uses_ring(retention);
+        if matches!(self, Self::Ring(_)) == wants_ring {
+            return;
+        }
+        *self = match mem::replace(self, Self::Linear(Vec::new())) {
+            Self::Linear(entries) => Self::Ring(VecDeque::from(entries)),
+            Self::Ring(entries) => Self::Linear(entries.into_iter().collect()),
+        };
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        match self {
+            Self::Linear(entries) => entries.len(),
+            Self::Ring(entries) => entries.len(),
+        }
+    }
+
+    fn first(&self) -> Option<&EventEntry> {
+        match self {
+            Self::Linear(entries) => entries.first(),
+            Self::Ring(entries) => entries.front(),
+        }
+    }
+
+    fn get(&self, index: usize) -> Option<&EventEntry> {
+        match self {
+            Self::Linear(entries) => entries.get(index),
+            Self::Ring(entries) => entries.get(index),
+        }
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut EventEntry> {
+        match self {
+            Self::Linear(entries) => entries.get_mut(index),
+            Self::Ring(entries) => entries.get_mut(index),
+        }
+    }
+
+    fn push(&mut self, entry: EventEntry) {
+        match self {
+            Self::Linear(entries) => entries.push(entry),
+            Self::Ring(entries) => entries.push_back(entry),
+        }
+    }
+
+    fn position_after(&self, active_len: usize, sequence: u64) -> Option<usize> {
+        match self {
+            Self::Linear(entries) => entries[..active_len]
+                .iter()
+                .position(|entry| entry.sequence > sequence),
+            Self::Ring(entries) => entries
+                .iter()
+                .take(active_len)
+                .position(|entry| entry.sequence > sequence),
+        }
+    }
+
+    fn recycle_oldest(&mut self) {
+        match self {
+            Self::Linear(entries) => {
+                let entry = entries.remove(0);
+                entries.push(entry);
+            }
+            Self::Ring(entries) => entries.rotate_left(1),
+        }
+    }
+
+    fn overwrite_oldest_linear<E: 'static>(&mut self, active_len: usize, sequence: u64, event: E) {
+        let Self::Linear(entries) = self else {
+            unreachable!("small bounded event channels use linear storage");
+        };
+        entries[..active_len].rotate_left(1);
+        let entry = &mut entries[active_len - 1];
+        if let Some(slot) = entry.payload.downcast_mut::<E>() {
+            *slot = event;
+        } else {
+            entry.payload = Box::new(event);
+        }
+        entry.sequence = sequence;
     }
 }
 
@@ -755,6 +899,9 @@ mod tests {
         storage.send(&event_id, Damage(1)).expect("one");
         storage.send(&event_id, Damage(2)).expect("two");
         storage.send(&event_id, Damage(3)).expect("three");
+        let channel = &storage.channels[event_id.index()];
+        assert_eq!(channel.active_len, 2);
+        assert_eq!(channel.entries.len(), 2);
 
         let mut late = storage
             .create_reader::<Damage>(owner.clone(), event_id, EventReaderStart::OldestRetained)
@@ -850,6 +997,118 @@ mod tests {
                 .map(|event| event.0),
             Some(3)
         );
+    }
+
+    #[test]
+    fn frame_clear_keeps_entry_slots_for_reuse() {
+        let mut builder = WorldBuilder::new();
+        let event_id = builder
+            .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+            .expect("register");
+        let mut storage = EventStorage::new(1);
+        storage.ensure_channel(
+            event_id.index(),
+            EventRetention::Frame(StageOperation::Update),
+        );
+        for value in 0..4 {
+            storage.send(&event_id, Damage(value)).expect("send");
+        }
+        let channel = &storage.channels[event_id.index()];
+        assert_eq!(channel.active_len, 4);
+        assert_eq!(channel.entries.len(), 4);
+
+        storage.clear_frame(StageOperation::Update);
+        let channel = &storage.channels[event_id.index()];
+        assert_eq!(channel.active_len, 0);
+        assert_eq!(channel.entries.len(), 4);
+
+        storage.send(&event_id, Damage(9)).expect("reuse");
+        let channel = &storage.channels[event_id.index()];
+        assert_eq!(channel.active_len, 1);
+        assert_eq!(channel.entries.len(), 4);
+        assert_eq!(
+            channel
+                .entries
+                .first()
+                .and_then(|entry| entry.payload.downcast_ref::<Damage>()),
+            Some(&Damage(9))
+        );
+    }
+
+    #[test]
+    fn entry_storage_adapts_to_retention_without_losing_active_events() {
+        let mut builder = WorldBuilder::new();
+        let event_id = builder
+            .add_event::<Damage>(EventOptions::manual())
+            .expect("register");
+        let mut storage = EventStorage::new(1);
+        storage.ensure_channel(event_id.index(), EventRetention::Manual);
+        storage.send(&event_id, Damage(1)).expect("first");
+        storage.send(&event_id, Damage(2)).expect("second");
+        assert!(matches!(
+            &storage.channels[event_id.index()].entries,
+            EventEntries::Linear(_)
+        ));
+
+        storage.ensure_channel(
+            event_id.index(),
+            EventRetention::Bounded(LINEAR_BOUNDED_CAPACITY_MAX + 1),
+        );
+        let channel = &storage.channels[event_id.index()];
+        assert!(matches!(&channel.entries, EventEntries::Ring(_)));
+        assert_eq!(channel.active_len, 2);
+        assert_eq!(
+            channel
+                .entries
+                .get(0)
+                .and_then(|entry| entry.payload.downcast_ref::<Damage>()),
+            Some(&Damage(1))
+        );
+
+        storage.ensure_channel(
+            event_id.index(),
+            EventRetention::Bounded(LINEAR_BOUNDED_CAPACITY_MAX),
+        );
+        let channel = &storage.channels[event_id.index()];
+        assert!(matches!(&channel.entries, EventEntries::Linear(_)));
+        assert_eq!(channel.active_len, 2);
+        assert_eq!(
+            channel
+                .entries
+                .get(1)
+                .and_then(|entry| entry.payload.downcast_ref::<Damage>()),
+            Some(&Damage(2))
+        );
+    }
+
+    #[test]
+    fn dropped_reader_slots_are_pruned_within_the_operation_budget() {
+        let mut builder = WorldBuilder::new();
+        let event_id = builder
+            .add_event::<Damage>(EventOptions::manual())
+            .expect("register");
+        let owner = builder.owner_for_test();
+        let mut storage = EventStorage::new(1);
+        storage.ensure_channel(event_id.index(), EventRetention::Manual);
+
+        for _ in 0..usize::from(READER_PRUNE_INTERVAL) {
+            let reader = storage
+                .create_reader::<Damage>(owner.clone(), event_id.clone(), EventReaderStart::FromNow)
+                .expect("reader");
+            drop(reader);
+        }
+        assert!(storage.channels[event_id.index()].cursors.len() <= 1);
+
+        for _ in 1..usize::from(READER_PRUNE_INTERVAL) {
+            let reader = storage
+                .create_reader::<Damage>(owner.clone(), event_id.clone(), EventReaderStart::FromNow)
+                .expect("reader");
+            drop(reader);
+        }
+        storage
+            .send(&event_id, Damage(1))
+            .expect("prune checkpoint");
+        assert!(storage.channels[event_id.index()].cursors.is_empty());
     }
 
     #[test]

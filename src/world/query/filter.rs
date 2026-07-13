@@ -57,6 +57,41 @@ pub(crate) fn entity_matches_structural(
     true
 }
 
+pub(crate) fn entity_matches_structural_with_covered(
+    world: &World,
+    entity: EntityId,
+    plan: &ResolvedPlan,
+    covered_required: &[usize],
+) -> bool {
+    if world.allocator_is_reserved(entity) {
+        return false;
+    }
+    if !world.is_alive(entity) {
+        return false;
+    }
+    for &index in &plan.required_indices {
+        if !covered_required.contains(&index) && !world.entity_has_component(entity, index) {
+            return false;
+        }
+    }
+    for &index in &plan.without_indices {
+        if world.entity_has_component(entity, index) {
+            return false;
+        }
+    }
+    for &index in &plan.with_tag_indices {
+        if !world.entity_has_tag(entity, index) {
+            return false;
+        }
+    }
+    for &index in &plan.without_tag_indices {
+        if world.entity_has_tag(entity, index) {
+            return false;
+        }
+    }
+    true
+}
+
 pub(crate) fn entity_matches(
     world: &World,
     entity: EntityId,
@@ -65,6 +100,42 @@ pub(crate) fn entity_matches(
     captured_now: ChangeTick,
 ) -> bool {
     if !entity_matches_structural(world, entity, plan) {
+        return false;
+    }
+    if !plan.added_indices.is_empty()
+        && !plan.added_indices.iter().any(|&index| {
+            tick_in_window(
+                world.component_added_tick(entity, index),
+                since,
+                captured_now,
+            )
+        })
+    {
+        return false;
+    }
+    if !plan.changed_indices.is_empty()
+        && !plan.changed_indices.iter().any(|&index| {
+            tick_in_window(
+                world.component_changed_tick(entity, index),
+                since,
+                captured_now,
+            )
+        })
+    {
+        return false;
+    }
+    true
+}
+
+pub(crate) fn entity_matches_with_covered(
+    world: &World,
+    entity: EntityId,
+    plan: &ResolvedPlan,
+    since: ChangeTick,
+    captured_now: ChangeTick,
+    covered_required: &[usize],
+) -> bool {
+    if !entity_matches_structural_with_covered(world, entity, plan, covered_required) {
         return false;
     }
     if !plan.added_indices.is_empty()

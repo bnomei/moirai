@@ -58,15 +58,19 @@ impl World {
         &mut self,
         spec: &QuerySpec,
     ) -> Result<(Rc<ResolvedPlan>, usize, bool), QueryError> {
+        let (fingerprint, second_index, second_is_table) = {
+            let mut scratch = self.query_resolve_scratch.borrow_mut();
+            super::spec::peek_query2_fingerprint::<A, B>(self, spec, &mut scratch)?
+        };
+        if let Some(plan) = self.resolved_plan_cache.get(&fingerprint) {
+            return Ok((plan.clone(), second_index, second_is_table));
+        }
         let (plan, second_index, second_is_table) = {
             let mut scratch = self.query_resolve_scratch.borrow_mut();
             resolve_query2::<A, B>(self, spec, &mut scratch)?
         };
-        let cached = self
-            .resolved_plan_cache
-            .entry(plan.fingerprint)
-            .or_insert_with(|| Rc::new(plan.clone()))
-            .clone();
-        Ok((cached, second_index, second_is_table))
+        let plan = Rc::new(plan);
+        self.resolved_plan_cache.insert(fingerprint, plan.clone());
+        Ok((plan, second_index, second_is_table))
     }
 }

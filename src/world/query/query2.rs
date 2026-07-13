@@ -36,8 +36,11 @@ impl World {
         if let Some(component_index) = table_component {
             self.ensure_table_archetypes(component_index);
         }
-        let table_archetypes =
-            table_component.map(|index| self.table_archetype_cache[index].as_slice());
+        let table_archetypes = table_component.map(|index| {
+            self.table_archetype_cache[index]
+                .as_deref()
+                .expect("table archetypes prepared")
+        });
 
         Query2::new(
             self,

@@ -43,6 +43,10 @@ impl<T> SparseSet<T> {
         self.dense.get(index).copied()
     }
 
+    pub fn dense_value(&self, index: usize) -> Option<&T> {
+        self.data.get(index)
+    }
+
     pub fn dense_index(&self, entity: EntityId) -> Option<usize> {
         self.sparse.get(entity.slot() as usize).and_then(|v| *v)
     }

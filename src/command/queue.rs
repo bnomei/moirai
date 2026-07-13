@@ -7,10 +7,13 @@ use crate::entity::{AllocatorError, EntityAllocator, EntityId};
 use crate::time::ChangeTick;
 use crate::world::{Bundle, BundleWriter, FlushError, World, WorldError, WorldOwner};
 
+const MAX_RETAINED_COMMAND_BYTES: usize = 256 * 1024;
+
 pub(crate) struct CommandQueue {
     ops: Vec<CommandOp>,
     owner: Option<WorldOwner>,
     components: Vec<(Option<TypeId>, bool)>,
+    preflight_scratch: PreflightScratch,
 }
 
 pub(crate) enum CommandOp {
@@ -63,6 +66,7 @@ impl CommandQueue {
             ops: Vec::new(),
             owner: None,
             components: Vec::new(),
+            preflight_scratch: PreflightScratch::default(),
         }
     }
 
@@ -71,6 +75,7 @@ impl CommandQueue {
             ops: Vec::new(),
             owner: Some(owner),
             components,
+            preflight_scratch: PreflightScratch::default(),
         }
     }
 
@@ -182,27 +187,35 @@ impl CommandQueue {
     }
 
     pub fn discard(&mut self, allocator: &mut EntityAllocator) -> Result<(), WorldError> {
-        for entity in self.reserved_entities() {
-            allocator
-                .release_reserved(entity)
-                .map_err(|error| map_allocator_error(entity, error))?;
+        for op in &self.ops {
+            if let CommandOp::SpawnReserved { entity } = op {
+                allocator
+                    .release_reserved(*entity)
+                    .map_err(|error| map_allocator_error(*entity, error))?;
+            }
         }
         self.ops.clear();
+        self.trim_empty_scratch_to_budget();
         Ok(())
     }
 
-    pub fn reserved_entities(&self) -> Vec<EntityId> {
-        let mut reserved = Vec::new();
-        for op in &self.ops {
-            if let CommandOp::SpawnReserved { entity } = op {
-                reserved.push(*entity);
-            }
-        }
-        reserved
+    pub(crate) fn take_preflight_scratch(&mut self) -> PreflightScratch {
+        core::mem::take(&mut self.preflight_scratch)
     }
 
-    pub fn preflight(&self, world: &World) -> Result<(), FlushError> {
-        let mut live = LiveSet::from_world(world);
+    pub(crate) fn restore_preflight_scratch(&mut self, mut scratch: PreflightScratch) {
+        scratch.reset();
+        if scratch.retained_bytes() <= MAX_RETAINED_COMMAND_BYTES {
+            self.preflight_scratch = scratch;
+        }
+    }
+
+    pub fn preflight(
+        &self,
+        world: &World,
+        scratch: &mut PreflightScratch,
+    ) -> Result<(), FlushError> {
+        let mut live = LiveSet::new(world, scratch);
         for (index, op) in self.ops.iter().enumerate() {
             if let Err(detail) = op.preflight(&mut live, world) {
                 return Err(FlushError::CommandValidation { index, detail });
@@ -215,12 +228,37 @@ impl CommandQueue {
         core::mem::take(&mut self.ops)
     }
 
+    pub fn restore_ops(&mut self, ops: Vec<CommandOp>) {
+        debug_assert!(ops.is_empty());
+        self.ops = ops;
+        self.trim_empty_scratch_to_budget();
+    }
+
     pub fn truncate(&mut self, len: usize) {
         self.ops.truncate(len);
     }
 
     pub fn len(&self) -> usize {
         self.ops.len()
+    }
+
+    fn trim_empty_scratch_to_budget(&mut self) {
+        if self.retained_scratch_bytes() > MAX_RETAINED_COMMAND_BYTES {
+            self.ops = Vec::new();
+            self.preflight_scratch = PreflightScratch::default();
+        }
+    }
+
+    fn retained_scratch_bytes(&self) -> usize {
+        self.ops
+            .capacity()
+            .saturating_mul(core::mem::size_of::<CommandOp>())
+            .saturating_add(self.preflight_scratch.retained_bytes())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_scratch_bytes_for_test(&self) -> usize {
+        self.retained_scratch_bytes()
     }
 }
 
@@ -299,35 +337,76 @@ impl CommandOp {
     }
 }
 
-struct LiveSet {
-    entities: Vec<EntityId>,
+#[derive(Default)]
+pub(crate) struct PreflightScratch {
+    transitions: Vec<u64>,
+    touched_slots: Vec<usize>,
 }
 
-impl LiveSet {
-    fn from_world(world: &World) -> Self {
-        let mut entities = Vec::new();
-        world.collect_live_entities(&mut entities);
-        Self { entities }
+impl PreflightScratch {
+    fn reset(&mut self) {
+        for slot in self.touched_slots.drain(..) {
+            self.transitions[slot] = 0;
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.transitions
+            .capacity()
+            .saturating_mul(core::mem::size_of::<u64>())
+            .saturating_add(
+                self.touched_slots
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<usize>()),
+            )
+    }
+}
+
+struct LiveSet<'a> {
+    world: &'a World,
+    scratch: &'a mut PreflightScratch,
+}
+
+impl<'a> LiveSet<'a> {
+    fn new(world: &'a World, scratch: &'a mut PreflightScratch) -> Self {
+        debug_assert!(scratch.touched_slots.is_empty());
+        Self { world, scratch }
     }
 
     fn contains(&self, entity: EntityId) -> bool {
-        self.entities.contains(&entity)
+        if !self.world.owns_entity(entity) {
+            return false;
+        }
+        let transition = self
+            .scratch
+            .transitions
+            .get(entity.slot() as usize)
+            .copied()
+            .unwrap_or(0);
+        if transition >> 1 == u64::from(entity.generation()) {
+            transition & 1 != 0
+        } else {
+            self.world.is_alive(entity) || self.world.allocator_is_reserved(entity)
+        }
     }
 
     fn insert(&mut self, entity: EntityId) {
-        if !self.contains(entity) {
-            self.entities.push(entity);
-        }
+        self.set(entity, true);
     }
 
     fn remove(&mut self, entity: EntityId) {
-        if let Some(index) = self
-            .entities
-            .iter()
-            .position(|candidate| *candidate == entity)
-        {
-            self.entities.swap_remove(index);
+        self.set(entity, false);
+    }
+
+    fn set(&mut self, entity: EntityId, live: bool) {
+        let slot = entity.slot() as usize;
+        if self.scratch.transitions.len() <= slot {
+            self.scratch.transitions.resize(slot + 1, 0);
         }
+        if self.scratch.transitions[slot] == 0 {
+            self.scratch.touched_slots.push(slot);
+        }
+        self.scratch.transitions[slot] = (u64::from(entity.generation()) << 1) | u64::from(live);
     }
 }
 
@@ -459,6 +538,11 @@ mod tests {
         builder.build().expect("build")
     }
 
+    fn preflight(queue: &CommandQueue, world: &World) -> Result<(), FlushError> {
+        let mut scratch = PreflightScratch::default();
+        queue.preflight(world, &mut scratch)
+    }
+
     #[test]
     fn preflight_rejects_invalid_spawn_insert_and_remove_targets() {
         let mut world = world_with_health();
@@ -467,7 +551,7 @@ mod tests {
         let mut queue = CommandQueue::new();
         queue.push(CommandOp::SpawnReserved { entity: live });
         assert!(matches!(
-            queue.preflight(&world),
+            preflight(&queue, &world),
             Err(FlushError::CommandValidation { .. })
         ));
 
@@ -478,7 +562,7 @@ mod tests {
             value: Box::new(Health(1)),
         });
         assert!(matches!(
-            queue.preflight(&world),
+            preflight(&queue, &world),
             Err(FlushError::CommandValidation { .. })
         ));
 
@@ -488,7 +572,7 @@ mod tests {
             component_index: 0,
         });
         assert!(matches!(
-            queue.preflight(&world),
+            preflight(&queue, &world),
             Err(FlushError::CommandValidation { .. })
         ));
 
@@ -498,7 +582,7 @@ mod tests {
             component_index: 0,
         });
         assert!(matches!(
-            queue.preflight(&world),
+            preflight(&queue, &world),
             Err(FlushError::CommandValidation { .. })
         ));
     }
@@ -514,7 +598,38 @@ mod tests {
         let mut queue = CommandQueue::new();
         queue.push(CommandOp::SpawnReserved { entity: reserved });
         queue.push(CommandOp::SpawnReserved { entity: reserved });
-        queue.preflight(&world).expect("valid batch");
+        preflight(&queue, &world).expect("valid batch");
+    }
+
+    #[test]
+    fn preflight_overlay_preserves_order_and_generation_checks() {
+        let mut world = world_with_health();
+        let live = world.spawn().expect("live");
+        let mut queue = CommandQueue::new();
+        queue.push(CommandOp::Despawn { entity: live });
+        queue.push(CommandOp::Insert {
+            entity: live,
+            component_index: 0,
+            value: Box::new(Health(1)),
+        });
+        assert_eq!(
+            preflight(&queue, &world),
+            Err(FlushError::CommandValidation {
+                index: 1,
+                detail: String::from("insert target is not live in batch"),
+            })
+        );
+
+        let stale = live.with_generation(live.generation() + 1);
+        let mut stale_queue = CommandQueue::new();
+        stale_queue.push(CommandOp::Despawn { entity: stale });
+        assert_eq!(
+            preflight(&stale_queue, &world),
+            Err(FlushError::CommandValidation {
+                index: 0,
+                detail: String::from("despawn target is not live in batch"),
+            })
+        );
     }
 
     #[test]
@@ -538,10 +653,11 @@ mod tests {
 
     #[test]
     fn live_set_push_tracks_entities_not_seen_yet() {
-        let mut live = LiveSet {
-            entities: alloc::vec::Vec::new(),
-        };
-        let entity = EntityId::from_parts(4, 1);
+        let mut world = WorldBuilder::new().build().expect("world");
+        let entity = world.spawn().expect("entity");
+        world.despawn(entity).expect("despawn");
+        let mut scratch = PreflightScratch::default();
+        let mut live = LiveSet::new(&world, &mut scratch);
         live.insert(entity);
         assert!(live.contains(entity));
     }
