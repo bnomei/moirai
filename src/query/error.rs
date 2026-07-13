@@ -26,6 +26,9 @@ pub enum QueryError {
         detail: String,
     },
     ExactIdOrderConflict,
+    DuplicateExactId {
+        entity: crate::EntityId,
+    },
     MissingExactId {
         entity: crate::EntityId,
     },
@@ -62,6 +65,9 @@ impl core::fmt::Display for QueryError {
                 write!(f, "unsupported cache policy: {detail}")
             }
             Self::ExactIdOrderConflict => f.write_str("exact-id order conflicts with result cache"),
+            Self::DuplicateExactId { entity } => {
+                write!(f, "exact-id query contains duplicate entity {entity:?}")
+            }
             Self::MissingExactId { entity } => {
                 write!(f, "exact-id query missing unavailable entity {entity:?}")
             }

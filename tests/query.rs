@@ -259,13 +259,26 @@ fn exact_entity_queries_preserve_order_reject_stale_and_reject_foreign_collision
         ),
         Err(QueryError::MissingExactId { entity }) if entity == stale
     ));
+    assert!(matches!(
+        world.query_ids(
+            &QuerySpec::new().exact_ids(
+                vec![stale, stale],
+                ExactIdPolicy::ErrorOnUnavailable
+            ),
+            QueryParams::new()
+        ),
+        Err(QueryError::MissingExactId { entity }) if entity == stale
+    ));
 
     let mut foreign = sparse_world();
     let colliding_position = foreign.spawn().expect("same allocator position");
     assert_ne!(first, colliding_position);
     assert!(matches!(
         world.query_ids(
-            &QuerySpec::new().exact_ids(vec![colliding_position], ExactIdPolicy::SkipUnavailable),
+            &QuerySpec::new().exact_ids(
+                vec![colliding_position, colliding_position],
+                ExactIdPolicy::SkipUnavailable
+            ),
             QueryParams::new()
         ),
         Err(QueryError::WrongOwner)
@@ -274,6 +287,80 @@ fn exact_entity_queries_preserve_order_reject_stale_and_reject_foreign_collision
         world.get::<Position>(colliding_position),
         Err(moirai::WorldError::EntityOwnerMismatch { .. })
     ));
+}
+
+#[test]
+fn exact_id_duplicates_are_rejected_before_reads_mutation_or_cursor_progress() {
+    let mut world = sparse_world();
+    let entity = world.spawn().expect("spawn");
+    world.insert(entity, Position(1)).expect("position");
+    world.insert(entity, Velocity(2)).expect("velocity");
+    let spec = QuerySpec::new().exact_ids(vec![entity, entity], ExactIdPolicy::SkipUnavailable);
+
+    assert!(matches!(
+        world.query_ids(&spec, QueryParams::new()),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert!(matches!(
+        world.query_entities(&spec, QueryParams::new()),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert!(matches!(
+        world.query::<Position>(&spec, QueryParams::new()),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert!(matches!(
+        world.query2::<Position, Velocity>(&spec, QueryParams::new()),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+
+    let mut cursor = QueryCursor::from_spec_start::<Position>(&mut world, &spec).expect("cursor");
+    let before = cursor.since();
+    assert!(matches!(
+        world.query::<Position>(&spec, QueryParams::new().cursor(&mut cursor)),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert_eq!(cursor.since(), before);
+
+    let mut one_calls = 0;
+    assert!(matches!(
+        world.for_each_mut::<Position>(&spec, QueryParams::new(), |_, position| {
+            one_calls += 1;
+            position.0 += 10;
+            Ok(())
+        }),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    let mut two_calls = 0;
+    assert!(matches!(
+        world.for_each2_mut::<Position, Velocity>(
+            &spec,
+            QueryParams::new(),
+            |_, position, velocity| {
+                two_calls += 1;
+                position.0 += velocity.0;
+                Ok(())
+            }
+        ),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert_eq!((one_calls, two_calls), (0, 0));
+    assert_eq!(
+        world
+            .get::<Position>(entity)
+            .expect("get")
+            .expect("present")
+            .0,
+        1
+    );
+    assert_eq!(
+        world
+            .get::<Velocity>(entity)
+            .expect("get")
+            .expect("present")
+            .0,
+        2
+    );
 }
 
 #[test]

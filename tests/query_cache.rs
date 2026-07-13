@@ -1,5 +1,5 @@
 use moirai::component::ComponentOptions;
-use moirai::query::{QueryCursor, QueryError, QueryParams, QuerySpec};
+use moirai::query::{ExactIdPolicy, QueryCursor, QueryError, QueryParams, QuerySpec};
 use moirai::world::{World, WorldBuilder};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,6 +46,73 @@ fn query_cache_cold_and_hot_hit() {
         .collect();
     assert_eq!(first, vec![1]);
     assert_eq!(second, vec![1]);
+}
+
+#[test]
+fn membership_cache_paths_reject_duplicate_exact_ids_contextually() {
+    let mut other = world();
+    let foreign = other.spawn().expect("foreign");
+    let mut world = world();
+    let entity = world.spawn().expect("spawn");
+    world.insert(entity, Position(1)).expect("insert");
+    world.insert(entity, Marker).expect("marker");
+    let stale = world.spawn().expect("stale");
+    world.despawn(stale).expect("despawn stale");
+    let exact = QuerySpec::new().exact_ids(vec![entity, entity], ExactIdPolicy::SkipUnavailable);
+    let cache = world
+        .build_query_cache::<Position>(QuerySpec::new())
+        .expect("cache");
+
+    assert!(matches!(
+        world.query::<Position>(&exact, QueryParams::new().membership_cache(&cache)),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert!(matches!(
+        world.build_entity_query_cache(exact.clone()),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert!(matches!(
+        world.build_query_cache::<Position>(exact.clone()),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+    assert!(matches!(
+        world.build_query2_cache::<Position, Marker>(exact),
+        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+    ));
+
+    let mixed_foreign = QuerySpec::new().exact_ids(
+        vec![foreign, foreign, entity, entity],
+        ExactIdPolicy::SkipUnavailable,
+    );
+    assert!(matches!(
+        world.build_entity_query_cache(mixed_foreign.clone()),
+        Err(QueryError::WrongOwner)
+    ));
+    assert!(matches!(
+        world.build_query_cache::<Position>(mixed_foreign.clone()),
+        Err(QueryError::WrongOwner)
+    ));
+    assert!(matches!(
+        world.build_query2_cache::<Position, Marker>(mixed_foreign),
+        Err(QueryError::WrongOwner)
+    ));
+
+    let mixed_stale = QuerySpec::new().exact_ids(
+        vec![stale, stale, entity, entity],
+        ExactIdPolicy::ErrorOnUnavailable,
+    );
+    assert!(matches!(
+        world.build_entity_query_cache(mixed_stale.clone()),
+        Err(QueryError::MissingExactId { entity: missing }) if missing == stale
+    ));
+    assert!(matches!(
+        world.build_query_cache::<Position>(mixed_stale.clone()),
+        Err(QueryError::MissingExactId { entity: missing }) if missing == stale
+    ));
+    assert!(matches!(
+        world.build_query2_cache::<Position, Marker>(mixed_stale),
+        Err(QueryError::MissingExactId { entity: missing }) if missing == stale
+    ));
 }
 
 #[test]

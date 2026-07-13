@@ -5,6 +5,24 @@ use crate::world::World;
 
 use super::plan::{ResolvedPlan, TraversalSource};
 
+pub(crate) fn validate_exact_id_duplicates(
+    world: &World,
+    ids: &[EntityId],
+) -> Result<(), QueryError> {
+    for (index, &entity) in ids.iter().enumerate() {
+        if !world.owns_entity(entity)
+            || !world.is_alive(entity)
+            || world.allocator_is_reserved(entity)
+        {
+            continue;
+        }
+        if ids[..index].contains(&entity) {
+            return Err(QueryError::DuplicateExactId { entity });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn entity_matches_structural(
     world: &World,
     entity: EntityId,
@@ -75,26 +93,23 @@ pub(crate) fn entity_matches(
 }
 
 pub(crate) fn validate_exact_ids(world: &World, plan: &ResolvedPlan) -> Result<(), QueryError> {
-    if let TraversalSource::Exact { ids } = &plan.traversal {
-        if ids.iter().any(|&entity| !world.owns_entity(entity)) {
-            return Err(QueryError::WrongOwner);
-        }
-    }
-    if plan.exact_id_policy != Some(ExactIdPolicy::ErrorOnUnavailable) {
-        return Ok(());
-    }
     let TraversalSource::Exact { ids } = &plan.traversal else {
         return Ok(());
     };
-    for &entity in ids {
-        if !world.is_alive(entity)
-            || world.allocator_is_reserved(entity)
-            || !entity_matches_structural(world, entity, plan)
-        {
-            return Err(QueryError::MissingExactId { entity });
+    if ids.iter().any(|&entity| !world.owns_entity(entity)) {
+        return Err(QueryError::WrongOwner);
+    }
+    if plan.exact_id_policy == Some(ExactIdPolicy::ErrorOnUnavailable) {
+        for &entity in ids {
+            if !world.is_alive(entity)
+                || world.allocator_is_reserved(entity)
+                || !entity_matches_structural(world, entity, plan)
+            {
+                return Err(QueryError::MissingExactId { entity });
+            }
         }
     }
-    Ok(())
+    validate_exact_id_duplicates(world, ids)
 }
 
 fn tick_in_window(tick: Option<ChangeTick>, since: ChangeTick, captured_now: ChangeTick) -> bool {

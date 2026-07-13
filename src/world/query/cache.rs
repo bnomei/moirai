@@ -5,6 +5,7 @@ use crate::query::{QueryCache, QueryError, QueryParams, QuerySpec};
 use crate::world::World;
 
 use super::collect::collect_query1_structural_members;
+use super::filter::validate_exact_ids;
 
 const RETIRED_GENERATION: u32 = u32::MAX;
 
@@ -33,14 +34,15 @@ impl MembershipCacheSlot {
 
 impl World {
     pub fn build_entity_query_cache(&mut self, spec: QuerySpec) -> Result<QueryCache, QueryError> {
+        let plan = self.resolve_entity_plan(&spec)?;
         if spec.exact_ids.is_some() {
+            validate_exact_ids(self, &plan)?;
             return Err(QueryError::UnsupportedCachePolicy {
                 detail: alloc::string::String::from(
                     "membership cache does not support exact-id specs",
                 ),
             });
         }
-        let plan = self.resolve_entity_plan(&spec)?;
         let members = collect_query1_structural_members(self, &plan);
         let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
         Ok(QueryCache {
@@ -54,14 +56,15 @@ impl World {
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryCache, QueryError> {
+        let plan = self.resolve_query1_plan::<T>(&spec)?;
         if spec.exact_ids.is_some() {
+            validate_exact_ids(self, &plan)?;
             return Err(QueryError::UnsupportedCachePolicy {
                 detail: alloc::string::String::from(
                     "membership cache does not support exact-id specs",
                 ),
             });
         }
-        let plan = self.resolve_query1_plan::<T>(&spec)?;
         let members = collect_query1_structural_members(self, &plan);
         let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
         Ok(QueryCache {
@@ -75,14 +78,15 @@ impl World {
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryCache, QueryError> {
+        let (plan, _, _) = self.resolve_query2_plan::<A, B>(&spec)?;
         if spec.exact_ids.is_some() {
+            validate_exact_ids(self, &plan)?;
             return Err(QueryError::UnsupportedCachePolicy {
                 detail: alloc::string::String::from(
                     "membership cache does not support exact-id specs",
                 ),
             });
         }
-        let (plan, _, _) = self.resolve_query2_plan::<A, B>(&spec)?;
         let members = collect_query1_structural_members(self, &plan);
         let slot = self.allocate_membership_cache_slot(plan.fingerprint, members)?;
         Ok(QueryCache {

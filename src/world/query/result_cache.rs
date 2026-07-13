@@ -5,6 +5,7 @@ use crate::query::{QueryError, QueryResultCache, QuerySpec};
 use crate::world::World;
 
 use super::collect::collect_query1_entities;
+use super::filter::validate_exact_ids;
 
 const RETIRED_GENERATION: u32 = u32::MAX;
 
@@ -36,6 +37,13 @@ impl World {
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
+        let exact_plan = if spec.exact_ids.is_some() {
+            let plan = self.resolve_entity_plan(&spec)?;
+            validate_exact_ids(self, &plan)?;
+            Some(plan)
+        } else {
+            None
+        };
         if !spec.added.is_empty()
             || !spec.added_ids.is_empty()
             || !spec.changed.is_empty()
@@ -43,7 +51,7 @@ impl World {
         {
             return Err(QueryError::MovingChangeWindow);
         }
-        if spec.exact_ids.is_some() {
+        if exact_plan.is_some() {
             return Err(QueryError::ExactIdOrderConflict);
         }
         let plan = self.resolve_entity_plan(&spec)?;
@@ -61,6 +69,13 @@ impl World {
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
+        let exact_plan = if spec.exact_ids.is_some() {
+            let plan = self.resolve_query1_plan::<T>(&spec)?;
+            validate_exact_ids(self, &plan)?;
+            Some(plan)
+        } else {
+            None
+        };
         if !spec.added.is_empty()
             || !spec.added_ids.is_empty()
             || !spec.changed.is_empty()
@@ -68,7 +83,7 @@ impl World {
         {
             return Err(QueryError::MovingChangeWindow);
         }
-        if spec.exact_ids.is_some() {
+        if exact_plan.is_some() {
             return Err(QueryError::ExactIdOrderConflict);
         }
         let plan = self.resolve_query1_plan::<T>(&spec)?;
@@ -86,6 +101,13 @@ impl World {
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
+        let exact_plan = if spec.exact_ids.is_some() {
+            let (plan, _, _) = self.resolve_query2_plan::<A, B>(&spec)?;
+            validate_exact_ids(self, &plan)?;
+            Some(plan)
+        } else {
+            None
+        };
         if !spec.added.is_empty()
             || !spec.added_ids.is_empty()
             || !spec.changed.is_empty()
@@ -93,7 +115,7 @@ impl World {
         {
             return Err(QueryError::MovingChangeWindow);
         }
-        if spec.exact_ids.is_some() {
+        if exact_plan.is_some() {
             return Err(QueryError::ExactIdOrderConflict);
         }
         let (plan, second_index, second_is_table) = self.resolve_query2_plan::<A, B>(&spec)?;
