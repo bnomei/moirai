@@ -8,6 +8,9 @@ pub(crate) struct WorldOwner(u32);
 
 impl WorldOwner {
     pub fn new() -> Self {
+        // `fetch_update` is the Rust 1.75-compatible spelling; newer Rust
+        // releases call it `try_update`.
+        #[allow(deprecated)]
         let token = NEXT_OWNER_TOKEN
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
