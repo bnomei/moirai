@@ -7,7 +7,9 @@ use crate::operation::StageOperation;
 use crate::schedule::stage;
 pub use crate::schedule::BuildError;
 use crate::schedule::RunOutcome;
-use crate::schedule::{RunContext, Schedule, ScheduleBuilder, ScheduleError, System, SystemId};
+use crate::schedule::{
+    FlushMode, RunContext, Schedule, ScheduleBuilder, ScheduleError, System, SystemId, SystemSet,
+};
 use crate::time::FixedConfig;
 use crate::world::{World, WorldBuilder};
 
@@ -363,6 +365,15 @@ impl AppBuilder {
         self
     }
 
+    pub fn set_stage_flush_mode(
+        &mut self,
+        label: impl AsRef<str>,
+        mode: FlushMode,
+    ) -> Result<&mut Self, BuildError> {
+        self.schedule_builder.set_stage_flush_mode(label, mode)?;
+        Ok(self)
+    }
+
     pub fn observer(&mut self, observer: impl Observer + 'static) -> &mut Self {
         self.observer = Some(Box::new(observer));
         self
@@ -390,6 +401,24 @@ impl AppBuilder {
         condition: crate::schedule::Condition,
     ) -> Result<&mut Self, BuildError> {
         self.schedule_builder.set_run_if(set, condition)?;
+        Ok(self)
+    }
+
+    pub fn order_set_before(
+        &mut self,
+        before: &SystemSet,
+        after: &SystemSet,
+    ) -> Result<&mut Self, BuildError> {
+        self.schedule_builder.order_set_before(before, after)?;
+        Ok(self)
+    }
+
+    pub fn order_set_after(
+        &mut self,
+        after: &SystemSet,
+        before: &SystemSet,
+    ) -> Result<&mut Self, BuildError> {
+        self.schedule_builder.order_set_after(after, before)?;
         Ok(self)
     }
 }

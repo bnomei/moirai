@@ -94,6 +94,8 @@ pub struct System {
     pub(crate) flush_mode: FlushMode,
     pub(crate) before: Vec<String>,
     pub(crate) after: Vec<String>,
+    pub(crate) before_sets: Vec<String>,
+    pub(crate) after_sets: Vec<String>,
     pub(crate) in_set: Option<String>,
     pub(crate) conditions: Vec<Condition>,
     pub(crate) required_resources: Vec<TypeId>,
@@ -118,6 +120,8 @@ impl System {
             flush_mode: FlushMode::Final,
             before: Vec::new(),
             after: Vec::new(),
+            before_sets: Vec::new(),
+            after_sets: Vec::new(),
             in_set: None,
             conditions: Vec::new(),
             required_resources: Vec::new(),
@@ -139,6 +143,8 @@ impl System {
             flush_mode: FlushMode::Final,
             before: Vec::new(),
             after: Vec::new(),
+            before_sets: Vec::new(),
+            after_sets: Vec::new(),
             in_set: None,
             conditions: Vec::new(),
             required_resources: Vec::new(),
@@ -153,6 +159,16 @@ impl System {
 
     pub fn after(mut self, label: impl Into<String>) -> Self {
         self.after.push(label.into());
+        self
+    }
+
+    pub fn before_set(mut self, set: &SystemSet) -> Self {
+        self.before_sets.push(set.label.clone());
+        self
+    }
+
+    pub fn after_set(mut self, set: &SystemSet) -> Self {
+        self.after_sets.push(set.label.clone());
         self
     }
 
@@ -258,6 +274,8 @@ mod tests {
         let _ = System::new("move", "Update", |_world, _dt| {})
             .before("setup")
             .after("cleanup")
+            .before_set(&set)
+            .after_set(&set)
             .in_set(&set)
             .run_if(Condition::always())
             .requires_resource::<WorldBuilder>()

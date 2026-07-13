@@ -5,7 +5,6 @@ use std::rc::Rc;
 
 use moirai::component::ComponentOptions;
 use moirai::event::{EventOptions, EventReaderStart};
-#[cfg(feature = "testkit")]
 use moirai::schedule::FlushMode;
 use moirai::schedule::{stage, Condition, ScheduleBuilder, System, SystemSet};
 use moirai::state::{apply, State};
@@ -393,6 +392,53 @@ fn registration_order_tie_breaks_system_order() {
 }
 
 #[test]
+fn world_predicate_gates_systems_and_sets_from_read_only_resources() {
+    static RAN: AtomicU32 = AtomicU32::new(0);
+
+    #[derive(Clone)]
+    struct Gate {
+        open: bool,
+    }
+
+    let enabled = Condition::from_world(|world| {
+        world
+            .resource::<Gate>()
+            .expect("gate resource")
+            .is_some_and(|gate| gate.open)
+    });
+    let set = SystemSet::new("gated");
+    let mut builder = AppBuilder::new();
+    builder.world_builder().register_resource::<Gate>();
+    builder.register_set(set.clone()).expect("set");
+    builder
+        .set_run_if(&set, enabled.clone())
+        .expect("set condition");
+    builder
+        .add_system(
+            System::new("run", stage::UPDATE, |_world, _dt| {
+                RAN.fetch_add(1, Ordering::SeqCst);
+            })
+            .in_set(&set)
+            .run_if(enabled),
+        )
+        .expect("system");
+    let mut app = builder.build().expect("app");
+
+    RAN.store(0, Ordering::SeqCst);
+    app.world_mut()
+        .insert_resource(Gate { open: false })
+        .expect("closed gate");
+    app.update(0.0).expect("closed update");
+    assert_eq!(RAN.load(Ordering::SeqCst), 0);
+
+    app.world_mut()
+        .insert_resource(Gate { open: true })
+        .expect("open gate");
+    app.update(0.0).expect("open update");
+    assert_eq!(RAN.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn cycle_is_rejected_at_build() {
     let mut world = WorldBuilder::new().build().expect("world");
     let mut builder = ScheduleBuilder::standard();
@@ -422,6 +468,123 @@ fn cross_stage_system_edge_is_rejected_at_build() {
         builder.build(&mut world),
         Err(BuildError::CrossStageSystemEdge { .. })
     ));
+}
+
+#[test]
+fn system_to_set_and_set_to_set_edges_expand_deterministically() {
+    static ORDER: AtomicU32 = AtomicU32::new(0);
+
+    fn record(digit: u32) {
+        ORDER
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                Some(value * 10 + digit)
+            })
+            .expect("record order");
+    }
+
+    let early = SystemSet::new("early");
+    let late = SystemSet::new("late");
+    let mut builder = AppBuilder::new();
+    builder.register_set(early.clone()).expect("early set");
+    builder.register_set(late.clone()).expect("late set");
+    builder
+        .order_set_before(&early, &late)
+        .expect("set ordering");
+    builder
+        .add_system(System::new("tail", stage::UPDATE, |_world, _dt| record(4)).in_set(&late))
+        .expect("tail");
+    builder
+        .add_system(
+            System::new("middle", stage::UPDATE, |_world, _dt| record(3))
+                .after_set(&early)
+                .before_set(&late),
+        )
+        .expect("middle");
+    builder
+        .add_system(System::new("early-b", stage::UPDATE, |_world, _dt| record(2)).in_set(&early))
+        .expect("early-b");
+    builder
+        .add_system(System::new("early-a", stage::UPDATE, |_world, _dt| record(1)).in_set(&early))
+        .expect("early-a");
+    let mut app = builder.build().expect("app");
+
+    ORDER.store(0, Ordering::SeqCst);
+    app.update(0.0).expect("update");
+    assert_eq!(ORDER.load(Ordering::SeqCst), 2134);
+}
+
+#[test]
+fn expanded_set_edges_participate_in_cycles_and_reject_cross_stage_ordering() {
+    let first = SystemSet::new("first");
+    let second = SystemSet::new("second");
+
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut cycle = ScheduleBuilder::standard();
+    cycle.register_set(first.clone()).expect("first");
+    cycle.register_set(second.clone()).expect("second");
+    cycle
+        .order_set_before(&first, &second)
+        .expect("first before second");
+    cycle
+        .order_set_after(&first, &second)
+        .expect("first after second");
+    cycle
+        .add_system(System::new("a", stage::UPDATE, |_world, _dt| {}).in_set(&first))
+        .expect("a");
+    cycle
+        .add_system(System::new("b", stage::UPDATE, |_world, _dt| {}).in_set(&second))
+        .expect("b");
+    assert!(matches!(
+        cycle.build(&mut world),
+        Err(BuildError::Cycle { .. })
+    ));
+
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut cross_stage = ScheduleBuilder::standard();
+    cross_stage.register_set(first.clone()).expect("first");
+    cross_stage.register_set(second.clone()).expect("second");
+    cross_stage
+        .order_set_before(&first, &second)
+        .expect("set ordering");
+    cross_stage
+        .add_system(System::new("startup", stage::STARTUP, |_world, _dt| {}).in_set(&first))
+        .expect("startup");
+    cross_stage
+        .add_system(System::new("update", stage::UPDATE, |_world, _dt| {}).in_set(&second))
+        .expect("update");
+    assert!(matches!(
+        cross_stage.build(&mut world),
+        Err(BuildError::CrossStageSystemEdge { from, to })
+            if from == "startup" && to == "update"
+    ));
+}
+
+#[test]
+fn empty_registered_sets_keep_normal_ordering_semantics() {
+    let empty = SystemSet::new("empty");
+    let occupied = SystemSet::new("occupied");
+    let missing = SystemSet::new("missing");
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut builder = ScheduleBuilder::standard();
+    builder.register_set(empty.clone()).expect("empty");
+    builder.register_set(occupied.clone()).expect("occupied");
+    builder
+        .order_set_before(&empty, &occupied)
+        .expect("empty ordering");
+    builder
+        .add_system(
+            System::new("work", stage::UPDATE, |_world, _dt| {})
+                .in_set(&occupied)
+                .after_set(&empty),
+        )
+        .expect("work");
+    assert!(matches!(
+        builder.order_set_before(&empty, &missing),
+        Err(BuildError::UnknownSystemSet { label }) if label == "missing"
+    ));
+    builder
+        .build(&mut world)
+        .expect("empty relations are inert");
 }
 
 #[test]
@@ -700,6 +863,45 @@ fn flush_mode_stage_makes_commands_visible_between_stages() {
 }
 
 #[test]
+fn explicit_stage_flush_makes_commands_visible_to_the_next_stage() {
+    static SAW: AtomicU32 = AtomicU32::new(0);
+
+    let spawned = Rc::new(Cell::new(None));
+    let capture = Rc::clone(&spawned);
+    let observe = Rc::clone(&spawned);
+    let mut schedule_builder = ScheduleBuilder::new();
+    schedule_builder
+        .add_stage("First", StageOperation::Update)
+        .expect("first stage");
+    schedule_builder
+        .add_stage("Second", StageOperation::Update)
+        .expect("second stage");
+    schedule_builder
+        .set_stage_flush_mode("First", FlushMode::Stage)
+        .expect("stage flush");
+    schedule_builder
+        .add_system(System::new("spawn", "First", move |world, _dt| {
+            let entity = world.commands().expect("commands").spawn().expect("spawn");
+            capture.set(Some(entity));
+        }))
+        .expect("spawn system");
+    schedule_builder
+        .add_system(System::new("observe", "Second", move |world, _dt| {
+            if observe.get().is_some_and(|entity| world.is_alive(entity)) {
+                SAW.fetch_add(1, Ordering::SeqCst);
+            }
+        }))
+        .expect("observe system");
+    let mut world = WorldBuilder::new().build().expect("world");
+    let schedule = schedule_builder.build(&mut world).expect("schedule");
+    let mut app = moirai::App::from_parts(world, schedule).expect("app");
+
+    SAW.store(0, Ordering::SeqCst);
+    app.update(0.0).expect("update");
+    assert_eq!(SAW.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn flush_mode_final_defers_commands_until_update_end() {
     static MID: AtomicU32 = AtomicU32::new(0);
 
@@ -861,14 +1063,56 @@ fn missing_required_resource_is_rejected_at_build() {
 
 #[test]
 fn fixed_update_without_config_is_rejected_at_build() {
-    let world = WorldBuilder::new().build().expect("world");
-    let result = ScheduleBuilder::standard().add_system(System::new(
-        "fixed",
-        stage::FIXED_UPDATE,
-        |_world, _dt| {},
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("fixed", stage::FIXED_UPDATE, |_world, _dt| {}))
+        .expect("authoring is call-order independent");
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::FixedUpdateWithoutConfig)
     ));
-    assert!(matches!(result, Err(BuildError::FixedUpdateWithoutConfig)));
-    let _ = world;
+}
+
+#[test]
+fn fixed_configuration_can_follow_fixed_system_authoring() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::new("fixed", stage::FIXED_UPDATE, |_world, _dt| {}))
+        .expect("fixed system");
+    builder.fixed(FixedConfig::new(Duration::from_millis(16)).expect("config"));
+    builder.build(&mut world).expect("schedule");
+}
+
+#[test]
+fn explicit_flush_modes_are_effective_and_invalid_placements_are_rejected() {
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .set_stage_flush_mode(stage::UPDATE, FlushMode::Final)
+        .expect("final update flush");
+    builder
+        .set_stage_flush_mode(stage::UPDATE, FlushMode::Stage)
+        .expect("stage update flush");
+    assert!(matches!(
+        builder.set_stage_flush_mode(stage::UPDATE, FlushMode::AfterSystem),
+        Err(BuildError::InvalidStageFlushMode { .. })
+    ));
+    assert!(matches!(
+        builder.set_stage_flush_mode(stage::RENDER, FlushMode::Stage),
+        Err(BuildError::InvalidStageFlushMode { .. })
+    ));
+    assert!(matches!(
+        builder.add_system(
+            System::new("bad-stage", stage::UPDATE, |_world, _dt| {}).flush_mode(FlushMode::Stage)
+        ),
+        Err(BuildError::InvalidSystemFlushMode { .. })
+    ));
+    assert!(matches!(
+        builder
+            .add_system(System::new("bad-render", stage::RENDER, |_world, _dt| {}).flush_after()),
+        Err(BuildError::InvalidSystemFlushMode { .. })
+    ));
 }
 
 #[test]

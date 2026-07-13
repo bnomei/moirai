@@ -22,6 +22,7 @@ pub struct ScheduleBuilder {
     stage_index: BTreeMap<String, usize>,
     systems: Vec<System>,
     sets: BTreeMap<String, Condition>,
+    set_ordering: Vec<(String, String)>,
     fixed_config: Option<FixedConfig>,
     default_update_flush: FlushMode,
 }
@@ -34,6 +35,7 @@ impl ScheduleBuilder {
             stage_index: BTreeMap::new(),
             systems: Vec::new(),
             sets: BTreeMap::new(),
+            set_ordering: Vec::new(),
             fixed_config: None,
             default_update_flush: FlushMode::Final,
         }
@@ -97,6 +99,35 @@ impl ScheduleBuilder {
         Ok(self)
     }
 
+    pub fn set_stage_flush_mode(
+        &mut self,
+        label: impl AsRef<str>,
+        mode: FlushMode,
+    ) -> Result<&mut Self, BuildError> {
+        let label = label.as_ref();
+        let index =
+            self.stage_index
+                .get(label)
+                .copied()
+                .ok_or_else(|| BuildError::UnknownStage {
+                    label: label.into(),
+                })?;
+        let operation = self.stages[index].operation;
+        let valid = matches!(
+            (operation, mode),
+            (StageOperation::Update, FlushMode::Final | FlushMode::Stage)
+                | (StageOperation::Render, FlushMode::Final)
+        );
+        if !valid {
+            return Err(BuildError::InvalidStageFlushMode {
+                label: label.into(),
+                mode,
+            });
+        }
+        self.stages[index].flush_mode = mode;
+        Ok(self)
+    }
+
     pub fn set_run_if(
         &mut self,
         set: &SystemSet,
@@ -113,12 +144,44 @@ impl ScheduleBuilder {
         }
     }
 
-    pub fn add_system(&mut self, system: System) -> Result<(), BuildError> {
-        if !self.stage_index.contains_key(&system.stage_label) {
-            return Err(BuildError::UnknownStage {
-                label: system.stage_label.clone(),
-            });
+    pub fn order_set_before(
+        &mut self,
+        before: &SystemSet,
+        after: &SystemSet,
+    ) -> Result<&mut Self, BuildError> {
+        self.ensure_registered_set(before)?;
+        self.ensure_registered_set(after)?;
+        self.set_ordering
+            .push((before.label().into(), after.label().into()));
+        Ok(self)
+    }
+
+    pub fn order_set_after(
+        &mut self,
+        after: &SystemSet,
+        before: &SystemSet,
+    ) -> Result<&mut Self, BuildError> {
+        self.order_set_before(before, after)
+    }
+
+    fn ensure_registered_set(&self, set: &SystemSet) -> Result<(), BuildError> {
+        if self.sets.contains_key(set.label()) {
+            Ok(())
+        } else {
+            Err(BuildError::UnknownSystemSet {
+                label: set.label().into(),
+            })
         }
+    }
+
+    pub fn add_system(&mut self, system: System) -> Result<(), BuildError> {
+        let stage_index = self
+            .stage_index
+            .get(&system.stage_label)
+            .copied()
+            .ok_or_else(|| BuildError::UnknownStage {
+                label: system.stage_label.clone(),
+            })?;
         if self
             .systems
             .iter()
@@ -128,10 +191,15 @@ impl ScheduleBuilder {
                 label: system.name.clone(),
             });
         }
-        if system.stage_label == stage::FIXED_UPDATE && self.fixed_config.is_none() {
-            return Err(BuildError::FixedUpdateWithoutConfig);
-        }
+        validate_system_flush_mode(&system, self.stages[stage_index].operation)?;
         if let Some(set_label) = &system.in_set {
+            if !self.sets.contains_key(set_label) {
+                return Err(BuildError::UnknownSystemSet {
+                    label: set_label.clone(),
+                });
+            }
+        }
+        for set_label in system.before_sets.iter().chain(&system.after_sets) {
             if !self.sets.contains_key(set_label) {
                 return Err(BuildError::UnknownSystemSet {
                     label: set_label.clone(),
@@ -194,6 +262,11 @@ impl ScheduleBuilder {
         }
 
         for system in &self.systems {
+            let stage_index = *self
+                .stage_index
+                .get(&system.stage_label)
+                .expect("validated stage");
+            validate_system_flush_mode(system, self.stages[stage_index].operation)?;
             for before in &system.before {
                 if !name_to_index.contains_key(before) {
                     return Err(BuildError::UnknownSystem {
@@ -212,6 +285,13 @@ impl ScheduleBuilder {
                 return Err(BuildError::SelfEdge {
                     label: system.name.clone(),
                 });
+            }
+            for set_label in system.before_sets.iter().chain(&system.after_sets) {
+                if !self.sets.contains_key(set_label) {
+                    return Err(BuildError::UnknownSystemSet {
+                        label: set_label.clone(),
+                    });
+                }
             }
         }
 
@@ -232,18 +312,20 @@ impl ScheduleBuilder {
             }
         }
 
+        let ordering_edges = collect_ordering_edges(
+            &self.systems,
+            &self.sets,
+            &self.set_ordering,
+            &name_to_index,
+        )?;
+
         let mut compiled_stages = Vec::with_capacity(self.stages.len());
         let generation = 1u32;
         let lease = ExecutionLease::new();
 
         for (stage_index, descriptor) in self.stages.iter().enumerate() {
-            let order = topological_sort(
-                stage_index,
-                &stage_systems[stage_index],
-                &self.systems,
-                &self.stages,
-                &name_to_index,
-            )?;
+            let order =
+                topological_sort(&stage_systems[stage_index], &self.systems, &ordering_edges)?;
             compiled_stages.push(CompiledStage {
                 descriptor: descriptor.clone(),
                 system_order: order,
@@ -254,7 +336,7 @@ impl ScheduleBuilder {
             &self.systems,
             &self.stages,
             &self.stage_index,
-            &name_to_index,
+            &ordering_edges,
             world,
         )?;
 
@@ -345,7 +427,7 @@ fn validate_event_roles(
     systems: &[System],
     stages: &[StageDescriptor],
     stage_indices: &BTreeMap<String, usize>,
-    names: &BTreeMap<String, usize>,
+    ordering_edges: &[(usize, usize)],
     world: &World,
 ) -> Result<Vec<crate::world::guard::EventAccess>, BuildError> {
     let mut resolved = Vec::with_capacity(systems.len());
@@ -427,7 +509,7 @@ fn validate_event_roles(
                     systems,
                     stages,
                     stage_indices,
-                    names,
+                    ordering_edges,
                 ) {
                     continue;
                 }
@@ -464,7 +546,7 @@ fn system_precedes(
     systems: &[System],
     stages: &[StageDescriptor],
     stage_indices: &BTreeMap<String, usize>,
-    names: &BTreeMap<String, usize>,
+    ordering_edges: &[(usize, usize)],
 ) -> bool {
     let producer_stage = stage_indices[&systems[producer].stage_label];
     let consumer_stage = stage_indices[&systems[consumer].stage_label];
@@ -472,40 +554,141 @@ fn system_precedes(
         return stages[producer_stage].operation == stages[consumer_stage].operation
             && producer_stage < consumer_stage;
     }
-    has_explicit_path(producer, consumer, systems, names)
+    has_explicit_path(producer, consumer, systems.len(), ordering_edges)
 }
 
 fn has_explicit_path(
     from: usize,
     to: usize,
-    systems: &[System],
-    names: &BTreeMap<String, usize>,
+    system_count: usize,
+    ordering_edges: &[(usize, usize)],
 ) -> bool {
-    let mut visited = vec![false; systems.len()];
+    let mut visited = vec![false; system_count];
     let mut pending = vec![from];
     while let Some(current) = pending.pop() {
         if visited[current] {
             continue;
         }
         visited[current] = true;
-        for (index, system) in systems.iter().enumerate() {
-            let direct = systems[current]
-                .before
-                .iter()
-                .any(|label| names.get(label) == Some(&index))
-                || system
-                    .after
-                    .iter()
-                    .any(|label| names.get(label) == Some(&current));
-            if direct {
-                if index == to {
+        for &(edge_from, edge_to) in ordering_edges {
+            if edge_from == current {
+                if edge_to == to {
                     return true;
                 }
-                pending.push(index);
+                pending.push(edge_to);
             }
         }
     }
     false
+}
+
+fn validate_system_flush_mode(
+    system: &System,
+    operation: StageOperation,
+) -> Result<(), BuildError> {
+    let valid = matches!(system.flush_mode, FlushMode::Final)
+        || matches!(
+            (operation, system.flush_mode),
+            (StageOperation::Update, FlushMode::AfterSystem)
+        );
+    if valid {
+        Ok(())
+    } else {
+        Err(BuildError::InvalidSystemFlushMode {
+            label: system.name.clone(),
+            mode: system.flush_mode,
+        })
+    }
+}
+
+fn collect_ordering_edges(
+    systems: &[System],
+    sets: &BTreeMap<String, Condition>,
+    set_ordering: &[(String, String)],
+    names: &BTreeMap<String, usize>,
+) -> Result<Vec<(usize, usize)>, BuildError> {
+    let mut edges = Vec::new();
+
+    for (system_index, system) in systems.iter().enumerate() {
+        for before in &system.before {
+            let target = *names.get(before).ok_or_else(|| BuildError::UnknownSystem {
+                label: before.clone(),
+            })?;
+            push_ordering_edge(&mut edges, system_index, target, systems)?;
+        }
+        for after in &system.after {
+            let source = *names.get(after).ok_or_else(|| BuildError::UnknownSystem {
+                label: after.clone(),
+            })?;
+            push_ordering_edge(&mut edges, source, system_index, systems)?;
+        }
+        for before_set in &system.before_sets {
+            ensure_set_label(sets, before_set)?;
+            for (target, candidate) in systems.iter().enumerate() {
+                if candidate.in_set.as_ref() == Some(before_set) {
+                    push_ordering_edge(&mut edges, system_index, target, systems)?;
+                }
+            }
+        }
+        for after_set in &system.after_sets {
+            ensure_set_label(sets, after_set)?;
+            for (source, candidate) in systems.iter().enumerate() {
+                if candidate.in_set.as_ref() == Some(after_set) {
+                    push_ordering_edge(&mut edges, source, system_index, systems)?;
+                }
+            }
+        }
+    }
+
+    for (before_set, after_set) in set_ordering {
+        ensure_set_label(sets, before_set)?;
+        ensure_set_label(sets, after_set)?;
+        for (source, source_system) in systems.iter().enumerate() {
+            if source_system.in_set.as_ref() != Some(before_set) {
+                continue;
+            }
+            for (target, target_system) in systems.iter().enumerate() {
+                if target_system.in_set.as_ref() == Some(after_set) {
+                    push_ordering_edge(&mut edges, source, target, systems)?;
+                }
+            }
+        }
+    }
+
+    edges.sort_unstable();
+    edges.dedup();
+    Ok(edges)
+}
+
+fn ensure_set_label(sets: &BTreeMap<String, Condition>, label: &str) -> Result<(), BuildError> {
+    if sets.contains_key(label) {
+        Ok(())
+    } else {
+        Err(BuildError::UnknownSystemSet {
+            label: label.into(),
+        })
+    }
+}
+
+fn push_ordering_edge(
+    edges: &mut Vec<(usize, usize)>,
+    from: usize,
+    to: usize,
+    systems: &[System],
+) -> Result<(), BuildError> {
+    if from == to {
+        return Err(BuildError::SelfEdge {
+            label: systems[from].name.clone(),
+        });
+    }
+    if systems[from].stage_label != systems[to].stage_label {
+        return Err(BuildError::CrossStageSystemEdge {
+            from: systems[from].name.clone(),
+            to: systems[to].name.clone(),
+        });
+    }
+    edges.push((from, to));
+    Ok(())
 }
 
 impl Default for ScheduleBuilder {
@@ -515,54 +698,22 @@ impl Default for ScheduleBuilder {
 }
 
 fn topological_sort(
-    _stage_index: usize,
     stage_members: &[usize],
     systems: &[System],
-    _stages: &[StageDescriptor],
-    names: &BTreeMap<String, usize>,
+    ordering_edges: &[(usize, usize)],
 ) -> Result<Vec<usize>, BuildError> {
     if stage_members.is_empty() {
         return Ok(Vec::new());
-    }
-
-    let mut edges: Vec<(usize, usize)> = Vec::new();
-    for &global_index in stage_members {
-        let system = &systems[global_index];
-        for before in &system.before {
-            let Some(&before_index) = names.get(before) else {
-                return Err(BuildError::UnknownSystem {
-                    label: before.clone(),
-                });
-            };
-            if systems[before_index].stage_label != system.stage_label {
-                return Err(BuildError::CrossStageSystemEdge {
-                    from: system.name.clone(),
-                    to: before.clone(),
-                });
-            }
-            edges.push((global_index, before_index));
-        }
-        for after in &system.after {
-            let Some(&after_index) = names.get(after) else {
-                return Err(BuildError::UnknownSystem {
-                    label: after.clone(),
-                });
-            };
-            if systems[after_index].stage_label != system.stage_label {
-                return Err(BuildError::CrossStageSystemEdge {
-                    from: after.clone(),
-                    to: system.name.clone(),
-                });
-            }
-            edges.push((after_index, global_index));
-        }
     }
 
     let mut indegree = BTreeMap::<usize, usize>::new();
     for &index in stage_members {
         indegree.insert(index, 0);
     }
-    for (_, to) in &edges {
+    for (_, to) in ordering_edges {
+        if !indegree.contains_key(to) {
+            continue;
+        }
         *indegree.get_mut(to).expect("member") += 1;
     }
 
@@ -577,7 +728,7 @@ fn topological_sort(
     while let Some(index) = ready.first().copied() {
         ready.remove(0);
         order.push(index);
-        for (from, to) in &edges {
+        for (from, to) in ordering_edges {
             if *from != index {
                 continue;
             }
@@ -653,24 +804,19 @@ mod tests {
 
     #[test]
     fn topological_sort_rejects_unknown_before_and_after_edges() {
-        let stage = StageDescriptor {
-            label: String::from(stage::UPDATE),
-            operation: StageOperation::Update,
-            flush_mode: FlushMode::Final,
-        };
-        let stages = vec![stage];
         let mut names = BTreeMap::new();
         names.insert(String::from("leaf"), 0);
+        let sets = BTreeMap::new();
         let systems = vec![System::new("leaf", stage::UPDATE, |_world, _dt| {}).before("ghost")];
         assert!(matches!(
-            topological_sort(0, &[0], &systems, &stages, &names),
+            collect_ordering_edges(&systems, &sets, &[], &names),
             Err(BuildError::UnknownSystem { label })
                 if label == "ghost"
         ));
 
         let systems = vec![System::new("leaf", stage::UPDATE, |_world, _dt| {}).after("missing")];
         assert!(matches!(
-            topological_sort(0, &[0], &systems, &stages, &names),
+            collect_ordering_edges(&systems, &sets, &[], &names),
             Err(BuildError::UnknownSystem { label })
                 if label == "missing"
         ));

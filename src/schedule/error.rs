@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::operation::StageOperation;
+use crate::schedule::system::FlushMode;
 use crate::world::WorldError;
 
 /// Schedule construction failure before first execution.
@@ -68,6 +69,14 @@ pub enum BuildError {
     FixedConfigWithoutFixedUpdate,
     StageOperationMismatch {
         label: String,
+    },
+    InvalidStageFlushMode {
+        label: String,
+        mode: FlushMode,
+    },
+    InvalidSystemFlushMode {
+        label: String,
+        mode: FlushMode,
     },
     WorldBuild(WorldError),
 }
@@ -145,6 +154,12 @@ impl core::fmt::Display for BuildError {
             }
             Self::StageOperationMismatch { label } => {
                 write!(f, "stage operation mismatch for '{label}'")
+            }
+            Self::InvalidStageFlushMode { label, mode } => {
+                write!(f, "invalid {mode:?} flush mode for stage '{label}'")
+            }
+            Self::InvalidSystemFlushMode { label, mode } => {
+                write!(f, "invalid {mode:?} flush mode for system '{label}'")
             }
             Self::WorldBuild(error) => write!(f, "world build failed: {error}"),
         }

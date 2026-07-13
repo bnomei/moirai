@@ -51,15 +51,23 @@ impl Condition {
         Self(ConditionKind::StateChanged(TypeId::of::<State<S>>()))
     }
 
+    /// Creates a cloneable condition from a read-only world predicate.
+    pub fn from_world<F>(predicate: F) -> Self
+    where
+        F: Fn(&World) -> bool + 'static,
+    {
+        Self::predicate(Rc::new(predicate))
+    }
+
     pub fn in_state<S: Eq + 'static>(value: S) -> Self {
         let expected = value;
-        Self::predicate(Rc::new(move |world| {
+        Self::from_world(move |world| {
             world
                 .state_current::<S>()
                 .ok()
                 .flatten()
                 .is_some_and(|current| *current == expected)
-        }))
+        })
     }
 
     pub fn and(self, other: Self) -> Self {
