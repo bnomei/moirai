@@ -18,6 +18,7 @@ import os
 import pathlib
 import platform
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -79,6 +80,37 @@ def selected_features(command: Sequence[str]) -> dict[str, Any]:
         "all_features": "--all-features" in command,
         "no_default_features": "--no-default-features" in command,
     }
+
+
+def executable_metadata(command: Sequence[str], cwd: pathlib.Path) -> dict[str, Any] | None:
+    executable = pathlib.Path(command[0])
+    if not executable.is_absolute():
+        if len(executable.parts) == 1:
+            resolved = shutil.which(command[0])
+            if resolved is None:
+                return None
+            executable = pathlib.Path(resolved)
+        else:
+            executable = cwd / executable
+    try:
+        executable = executable.resolve(strict=True)
+        contents = executable.read_bytes()
+    except (OSError, RuntimeError):
+        return None
+    if not executable.is_file():
+        return None
+    return {
+        "path": str(executable),
+        "bytes": len(contents),
+        "sha256": hashlib.sha256(contents).hexdigest(),
+    }
+
+
+def load_average() -> list[float] | None:
+    try:
+        return list(os.getloadavg())
+    except OSError:
+        return None
 
 
 def git_metadata(cwd: pathlib.Path) -> dict[str, Any]:
@@ -167,6 +199,11 @@ def parse_arguments() -> argparse.Namespace:
         default=pathlib.Path("target/perf-results"),
         help="Ignored directory for capture artifacts",
     )
+    parser.add_argument(
+        "--max-load-one",
+        type=float,
+        help="Reject the capture when the one-minute load average exceeds this value",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command[:1] == ["--"]:
@@ -202,6 +239,7 @@ def main() -> int:
         "working_directory": str(cwd),
         "command_argv": args.command,
         "command_display": shlex.join(args.command),
+        "command_executable": executable_metadata(args.command, cwd),
         "benchmark_options": {
             "target": command_value(args.command, "--target"),
             "timer": command_value(args.command, "--timer"),
@@ -221,11 +259,33 @@ def main() -> int:
             "logical_cpu_count": os.cpu_count(),
         },
         "power_note": args.power_note,
+        "load_average_at_start": load_average(),
+        "max_load_one": args.max_load_one,
         "status": "running",
     }
     metadata["git"].update(capture_working_tree(cwd, capture_dir))
     metadata_path = capture_dir / "metadata.json"
     write_json(metadata_path, metadata)
+
+    initial_load = metadata["load_average_at_start"]
+    if (
+        args.max_load_one is not None
+        and initial_load is not None
+        and initial_load[0] > args.max_load_one
+    ):
+        metadata["status"] = "load-rejected"
+        metadata["exit_code"] = 75
+        metadata["error"] = (
+            f"one-minute load average {initial_load[0]:.2f} exceeds "
+            f"the configured maximum {args.max_load_one:.2f}"
+        )
+        metadata["duration_seconds"] = 0.0
+        metadata["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        metadata["load_average_at_end"] = load_average()
+        write_json(metadata_path, metadata)
+        print(f"performance capture rejected: {metadata['error']}", file=sys.stderr)
+        print(f"performance capture: {capture_dir}", file=sys.stderr)
+        return 75
 
     started = time.monotonic()
     try:
@@ -253,6 +313,7 @@ def main() -> int:
     metadata["exit_code"] = exit_code
     metadata["duration_seconds"] = time.monotonic() - started
     metadata["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    metadata["load_average_at_end"] = load_average()
     write_json(metadata_path, metadata)
     print(f"performance capture: {capture_dir}", file=sys.stderr)
     return exit_code

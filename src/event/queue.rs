@@ -122,7 +122,7 @@ impl EventStorage {
             reader.cursor.set(channel.oldest_retained);
             return Err(EventReadError::Lagged { dropped });
         }
-        let position = channel.entries.position_after(channel.active_len, cursor);
+        let position = channel.position_after(cursor);
         let Some(position) = position else {
             if channel.closed {
                 return Err(EventReadError::ChannelClosed);
@@ -235,6 +235,12 @@ impl EventStorage {
         closed: bool,
     ) {
         if let Some(channel) = self.channels.get_mut(index) {
+            if channel.active_len == 0 {
+                channel.oldest_retained = next_sequence;
+                for cursor in channel.cursors.iter().filter_map(Weak::upgrade) {
+                    cursor.set(next_sequence);
+                }
+            }
             channel.next_sequence = next_sequence;
             channel.closed = closed;
         }
@@ -345,6 +351,12 @@ impl EventChannel {
             .flatten()
     }
 
+    fn position_after(&self, sequence: u64) -> Option<usize> {
+        let offset = sequence.checked_sub(self.oldest_retained)?;
+        let position = usize::try_from(offset).ok()?;
+        (position < self.active_len).then_some(position)
+    }
+
     fn set_retention(&mut self, retention: EventRetention) {
         self.entries.reconfigure(retention);
         self.retention = retention;
@@ -411,18 +423,6 @@ impl EventEntries {
         match self {
             Self::Linear(entries) => entries.push(entry),
             Self::Ring(entries) => entries.push_back(entry),
-        }
-    }
-
-    fn position_after(&self, active_len: usize, sequence: u64) -> Option<usize> {
-        match self {
-            Self::Linear(entries) => entries[..active_len]
-                .iter()
-                .position(|entry| entry.sequence > sequence),
-            Self::Ring(entries) => entries
-                .iter()
-                .take(active_len)
-                .position(|entry| entry.sequence > sequence),
         }
     }
 

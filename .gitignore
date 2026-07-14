@@ -7,3 +7,4 @@
 .orchid/packets
 .orchid/reports
 /target
+/.perf-artifacts

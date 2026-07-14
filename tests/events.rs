@@ -121,6 +121,29 @@ fn sequence_exhaustion_closes_channel_and_reads_report_closed() {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
+fn oldest_retained_reader_reads_after_near_exhaustion_sequence_override() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .add_event::<Damage>(EventOptions::manual())
+        .expect("register");
+    let mut world = builder.build().expect("build");
+
+    world
+        .set_event_sequence_for_test::<Damage>(u64::MAX - 2, false)
+        .expect("registered event");
+    world.send(Damage { amount: 7 }).expect("send near max");
+    let mut reader = world
+        .event_reader::<Damage>(EventReaderStart::OldestRetained)
+        .expect("reader");
+
+    assert_eq!(
+        world.read_event(&mut reader).expect("read").cloned(),
+        Some(Damage { amount: 7 })
+    );
+}
+
+#[test]
 fn unregistered_event_send_is_rejected() {
     let mut world = WorldBuilder::new().build().expect("build");
     assert!(matches!(

@@ -240,6 +240,58 @@ fn bounded_send_with_lagging_reader(bencher: divan::Bencher<'_, '_>, capacity: u
         });
 }
 
+struct RetainedReadInput {
+    world: World,
+    reader: EventReader<ReaderEvent>,
+}
+
+fn retained_read_input(event_count: usize) -> RetainedReadInput {
+    let mut builder = WorldBuilder::new();
+    builder
+        .add_event::<ReaderEvent>(EventOptions::manual())
+        .expect("register retained reader event");
+    let mut world = builder.build().expect("build retained reader world");
+    for _ in 0..event_count {
+        world.send(ReaderEvent).expect("send retained reader event");
+    }
+    let reader = world
+        .event_reader::<ReaderEvent>(EventReaderStart::OldestRetained)
+        .expect("create retained reader");
+    RetainedReadInput { world, reader }
+}
+
+#[divan::bench(args = [1, 16, 256, 4_096])]
+fn event_reader_drain_retained(bencher: divan::Bencher<'_, '_>, event_count: usize) {
+    bencher
+        .with_inputs(|| retained_read_input(event_count))
+        .bench_local_refs(|input| {
+            let mut read = 0;
+            while input
+                .world
+                .read_event(&mut input.reader)
+                .expect("read retained event")
+                .is_some()
+            {
+                read += 1;
+            }
+            divan::black_box(read);
+        });
+}
+
+#[divan::bench(args = [1, 16, 256, 4_096])]
+fn event_reader_first_of_retained(bencher: divan::Bencher<'_, '_>, event_count: usize) {
+    bencher
+        .with_inputs(|| retained_read_input(event_count))
+        .bench_local_refs(|input| {
+            let event = input
+                .world
+                .read_event(&mut input.reader)
+                .expect("read first retained event")
+                .expect("retained event present");
+            divan::black_box(event);
+        });
+}
+
 #[derive(Clone, Copy)]
 struct ReaderCase {
     readers: usize,

@@ -12,6 +12,7 @@ import json
 import pathlib
 import re
 import statistics
+import sys
 from collections import defaultdict
 
 
@@ -65,6 +66,11 @@ def main() -> int:
     parser.add_argument("--max-regression-pct", type=float, default=3.0)
     parser.add_argument("--required-wins", type=int, default=4)
     parser.add_argument("--required-pairs", type=int, default=5)
+    parser.add_argument(
+        "--max-load-one",
+        type=float,
+        help="Exclude captures whose start or end one-minute load exceeds this value",
+    )
     args = parser.parse_args()
     if args.capture_dir is not None and (args.baseline_dir or args.candidate_dir):
         parser.error("use capture_dir or the paired --baseline-dir/--candidate-dir options")
@@ -81,12 +87,35 @@ def main() -> int:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             match = LABEL_PATTERN.match(metadata["label"])
             stdout_path = metadata_path.with_name("stdout.log")
+            load_values = [
+                values[0]
+                for key in ("load_average_at_start", "load_average_at_end")
+                if (values := metadata.get(key)) is not None
+            ]
             if (
                 match is None
                 or selected_phase is not None and match.group("phase") != selected_phase
                 or metadata.get("status") != "passed"
                 or not stdout_path.exists()
+                or args.max_load_one is not None
+                and (
+                    len(load_values) != 2
+                    or max(load_values) > args.max_load_one
+                )
             ):
+                if (
+                    match is not None
+                    and metadata.get("status") == "passed"
+                    and args.max_load_one is not None
+                    and (
+                        len(load_values) != 2
+                        or max(load_values) > args.max_load_one
+                    )
+                ):
+                    print(
+                        f"excluded {metadata_path.parent.name}: load={load_values or 'missing'}",
+                        file=sys.stderr,
+                    )
                 continue
             for case, median_ns in parse_stdout(stdout_path).items():
                 samples[(match.group("group"), case, match.group("phase"))][

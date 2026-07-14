@@ -381,6 +381,60 @@ fn query_ids_result_cache_hit(bencher: divan::Bencher, count: usize) {
     });
 }
 
+#[divan::bench(args = [0, 1, 16, 256, 4_096])]
+fn typed_membership_cache_full_exhaustion(bencher: divan::Bencher, count: usize) {
+    let mut world = sparse_world(count);
+    let spec = QuerySpec::new();
+    let cache = world
+        .build_query_cache::<BenchPos>(spec.clone())
+        .expect("membership cache");
+
+    bencher.bench_local(|| {
+        let sum: i32 = world
+            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
+            .expect("cached typed query")
+            .map(|(_, pos)| pos.0)
+            .sum();
+        divan::black_box(sum)
+    });
+}
+
+#[divan::bench(args = [0, 1, 16, 256, 4_096])]
+fn typed_result_cache_full_exhaustion(bencher: divan::Bencher, count: usize) {
+    let mut world = sparse_world(count);
+    let spec = QuerySpec::new();
+    let cache = world
+        .build_query_result_cache::<BenchPos>(spec.clone())
+        .expect("result cache");
+
+    bencher.bench_local(|| {
+        let sum: i32 = world
+            .query::<BenchPos>(&spec, QueryParams::new().result_cache(&cache))
+            .expect("result-cached typed query")
+            .map(|(_, pos)| pos.0)
+            .sum();
+        divan::black_box(sum)
+    });
+}
+
+#[divan::bench(args = [0, 1, 16, 256, 4_096])]
+fn typed_membership_cache_first_item(bencher: divan::Bencher, count: usize) {
+    let mut world = sparse_world(count);
+    let spec = QuerySpec::new();
+    let cache = world
+        .build_query_cache::<BenchPos>(spec.clone())
+        .expect("membership cache");
+
+    bencher.bench_local(|| {
+        let first = world
+            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
+            .expect("cached typed query")
+            .next()
+            .map(|(_, pos)| pos.0);
+        divan::black_box(first)
+    });
+}
+
 #[divan::bench(args = [0, 1, 64, 4096])]
 fn query1_sparse_scan_isolated(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
