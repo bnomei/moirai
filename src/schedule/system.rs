@@ -3,8 +3,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::TypeId;
 
+use crate::event::{ComponentAdded, ComponentRemoved, EventReader, EventReaderStart};
+use crate::query::{PreparedQuery1, PreparedQuery2, QueryError, QueryPolicy, QuerySpec};
 use crate::schedule::condition::Condition;
 use crate::schedule::owner::ScheduleOwner;
+use crate::world::{World, WorldError};
 
 /// When deferred structural commands become visible during Update.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -15,6 +18,74 @@ pub enum FlushMode {
 }
 
 pub(crate) type SystemBody = Box<dyn FnMut(&mut crate::world::World, f32) -> Result<(), String>>;
+pub(crate) type SystemInitializer =
+    Box<dyn for<'world> FnOnce(&mut SystemInitContext<'world>) -> Result<SystemBody, String>>;
+
+pub(crate) enum SystemBodySource {
+    Ready(SystemBody),
+    Initialize(SystemInitializer),
+}
+
+/// Restricted build-time access used to create persistent system-local state.
+///
+/// Initializers may inspect resources and create event readers, but cannot
+/// mutate the world. The context is constructed only while a schedule builds.
+pub struct SystemInitContext<'world> {
+    world: &'world mut World,
+}
+
+impl<'world> SystemInitContext<'world> {
+    pub(crate) fn new(world: &'world mut World) -> Self {
+        Self { world }
+    }
+
+    pub fn contains_resource<R: 'static>(&self) -> bool {
+        self.world.contains_resource::<R>()
+    }
+
+    pub fn resource<R: 'static>(&self) -> Result<Option<&R>, WorldError> {
+        self.world.resource::<R>()
+    }
+
+    pub fn event_reader<E: Clone + 'static>(
+        &mut self,
+        start: EventReaderStart,
+    ) -> Result<EventReader<E>, WorldError> {
+        self.world.event_reader::<E>(start)
+    }
+
+    pub fn on_add_reader<T: 'static>(
+        &mut self,
+        start: EventReaderStart,
+    ) -> Result<EventReader<ComponentAdded>, WorldError> {
+        self.world.on_add_reader::<T>(start)
+    }
+
+    pub fn on_remove_reader<T: 'static>(
+        &mut self,
+        start: EventReaderStart,
+    ) -> Result<EventReader<ComponentRemoved>, WorldError> {
+        self.world.on_remove_reader::<T>(start)
+    }
+
+    /// Resolves and stores a reusable single-component query for this system.
+    pub fn prepare_query1<T: 'static>(
+        &mut self,
+        spec: QuerySpec,
+        policy: QueryPolicy,
+    ) -> Result<PreparedQuery1<T>, QueryError> {
+        self.world.prepare_query1(spec, policy)
+    }
+
+    /// Resolves and stores a reusable two-component query for this system.
+    pub fn prepare_query2<A: 'static, B: 'static>(
+        &mut self,
+        spec: QuerySpec,
+        policy: QueryPolicy,
+    ) -> Result<PreparedQuery2<A, B>, QueryError> {
+        self.world.prepare_query2(spec, policy)
+    }
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EventRoleKind {
@@ -89,7 +160,7 @@ impl SystemSet {
 pub struct System {
     pub(crate) name: String,
     pub(crate) stage_label: String,
-    pub(crate) body: SystemBody,
+    pub(crate) body: SystemBodySource,
     pub(crate) enabled: bool,
     pub(crate) flush_mode: FlushMode,
     pub(crate) before: Vec<String>,
@@ -112,10 +183,10 @@ impl System {
         Self {
             name: name.into(),
             stage_label: stage.into(),
-            body: Box::new(move |world, dt| {
+            body: SystemBodySource::Ready(Box::new(move |world, dt| {
                 handler(world, dt);
                 Ok(())
-            }),
+            })),
             enabled: true,
             flush_mode: FlushMode::Final,
             before: Vec::new(),
@@ -138,7 +209,37 @@ impl System {
         Self {
             name: name.into(),
             stage_label: stage.into(),
-            body: Box::new(move |world, dt| handler(world, dt)),
+            body: SystemBodySource::Ready(Box::new(move |world, dt| handler(world, dt))),
+            enabled: true,
+            flush_mode: FlushMode::Final,
+            before: Vec::new(),
+            after: Vec::new(),
+            before_sets: Vec::new(),
+            after_sets: Vec::new(),
+            in_set: None,
+            conditions: Vec::new(),
+            required_resources: Vec::new(),
+            event_roles: Vec::new(),
+        }
+    }
+
+    /// Creates a system whose persistent local state is initialized at build time.
+    pub fn with_local<L: 'static>(
+        name: impl Into<String>,
+        stage: impl Into<String>,
+        init: impl FnOnce(&mut SystemInitContext<'_>) -> Result<L, String> + 'static,
+        run: impl FnMut(&mut World, f32, &mut L) -> Result<(), String> + 'static,
+    ) -> Self {
+        let mut run = run;
+        let initializer = move |context: &mut SystemInitContext<'_>| {
+            let mut local = init(context)?;
+            let body: SystemBody = Box::new(move |world, dt| run(world, dt, &mut local));
+            Ok(body)
+        };
+        Self {
+            name: name.into(),
+            stage_label: stage.into(),
+            body: SystemBodySource::Initialize(Box::new(initializer)),
             enabled: true,
             flush_mode: FlushMode::Final,
             before: Vec::new(),

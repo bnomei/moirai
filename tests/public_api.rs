@@ -113,20 +113,17 @@ fn phase_4_prelude_paths_compile() {
 #[test]
 fn phase_5_query_namespace_paths_compile() {
     use moirai::query::{
-        EntityRef, ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor,
-        QueryEffects, QueryEntities, QueryError, QueryIds, QueryParams, QueryResultCache,
-        QuerySpec,
+        ExactIdPolicy, PreparedQuery1, PreparedQuery2, Query1, Query2, QueryCommands, QueryCursor,
+        QueryEffects, QueryError, QueryPolicy, QuerySpec, QueryWindow,
     };
     let _ = core::mem::size_of::<ExactIdPolicy>();
     let _ = core::mem::size_of::<QuerySpec>();
-    let _ = core::mem::size_of::<QueryParams<'_>>();
+    let _ = core::mem::size_of::<QueryPolicy>();
     let _ = core::mem::size_of::<Query1<'_, '_, ()>>();
     let _ = core::mem::size_of::<Query2<'_, '_, (), ()>>();
-    let _ = core::mem::size_of::<QueryIds<'_, '_>>();
-    let _ = core::mem::size_of::<QueryEntities<'_, '_>>();
-    let _ = core::mem::size_of::<EntityRef<'_>>();
-    let _ = core::mem::size_of::<QueryCache>();
-    let _ = core::mem::size_of::<QueryResultCache>();
+    let _ = core::mem::size_of::<PreparedQuery1<()>>();
+    let _ = core::mem::size_of::<PreparedQuery2<(), ()>>();
+    let _ = core::mem::size_of::<QueryWindow<'_>>();
     let _ = core::mem::size_of::<QueryCursor>();
     let _ = core::mem::size_of::<QueryError>();
     let _ = core::mem::size_of::<QueryEffects<'_>>();
@@ -134,21 +131,22 @@ fn phase_5_query_namespace_paths_compile() {
 }
 
 #[test]
-fn entity_query_root_paths_compile() {
-    use moirai::{EntityRef, QueryEntities, QueryIds};
-    let _ = core::mem::size_of::<QueryIds<'_, '_>>();
-    let _ = core::mem::size_of::<QueryEntities<'_, '_>>();
-    let _ = core::mem::size_of::<EntityRef<'_>>();
+fn prepared_query_root_paths_compile() {
+    use moirai::{PreparedQuery1, PreparedQuery2, QueryPolicy, QueryWindow};
+    let _ = core::mem::size_of::<PreparedQuery1<()>>();
+    let _ = core::mem::size_of::<PreparedQuery2<(), ()>>();
+    let _ = core::mem::size_of::<QueryPolicy>();
+    let _ = core::mem::size_of::<QueryWindow<'_>>();
 }
 
 #[test]
 fn entity_scratch_root_and_world_paths_compile() {
     use moirai::world::{
-        EntityScratch as WorldEntityScratch, EntityScratchError as WorldScratchError,
+        DenseEntityScratch as WorldEntityScratch, EntityScratchError as WorldScratchError,
     };
-    use moirai::{EntityScratch, EntityScratchError};
+    use moirai::{DenseEntityScratch, EntityScratchError};
 
-    let _ = core::mem::size_of::<EntityScratch<u8>>();
+    let _ = core::mem::size_of::<DenseEntityScratch<u8>>();
     let _ = core::mem::size_of::<EntityScratchError>();
     let _ = core::mem::size_of::<WorldEntityScratch<u8>>();
     let _ = core::mem::size_of::<WorldScratchError>();

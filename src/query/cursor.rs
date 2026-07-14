@@ -26,20 +26,29 @@ impl QueryCursor {
         Self::from_now(world, fingerprint)
     }
 
-    pub fn for_entities_from_start(
+    pub fn from_spec2_start<A: 'static, B: 'static>(
+        world: &mut crate::world::World,
+        spec: &crate::query::QuerySpec,
+    ) -> Result<Self, QueryError> {
+        let (plan, _, _) = world.resolve_query2_plan::<A, B>(spec)?;
+        Ok(Self::from_start(world, plan.fingerprint))
+    }
+
+    pub fn from_spec2_now<A: 'static, B: 'static>(
+        world: &mut crate::world::World,
+        spec: &crate::query::QuerySpec,
+    ) -> Result<Self, QueryError> {
+        let (plan, _, _) = world.resolve_query2_plan::<A, B>(spec)?;
+        Self::from_now(world, plan.fingerprint)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_entities_from_start(
         world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
     ) -> Result<Self, QueryError> {
         let fingerprint = world.entity_query_fingerprint(spec)?;
         Ok(Self::from_start(world, fingerprint))
-    }
-
-    pub fn for_entities_from_now(
-        world: &mut crate::world::World,
-        spec: &crate::query::QuerySpec,
-    ) -> Result<Self, QueryError> {
-        let fingerprint = world.entity_query_fingerprint(spec)?;
-        Self::from_now(world, fingerprint)
     }
 
     pub fn fork(&self) -> Self {

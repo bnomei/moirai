@@ -2,7 +2,7 @@
 
 use moirai::component::{ComponentOptions, RegistrationError};
 use moirai::event::{EventOptions, EventReaderStart};
-use moirai::query::{QueryError, QueryParams, QuerySpec};
+use moirai::query::{QueryError, QueryPolicy, QuerySpec, QueryWindow};
 use moirai::schedule::{stage, ScheduleBuilder, System};
 use moirai::state::{apply, State};
 use moirai::world::{DynamicBundle, WorldBuilder, WorldError};
@@ -228,12 +228,14 @@ fn query_cache_respects_without() {
     world.insert(a, Velocity(1)).expect("vel a");
     world.insert(b, Position(2)).expect("b");
 
-    let spec = QuerySpec::new().without::<Velocity>();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-    let matches: Vec<_> = world
-        .query::<Position>(&spec, QueryParams::new().membership_cache(&cache))
+    let mut query = world
+        .prepare_query1::<Position>(
+            QuerySpec::new().without::<Velocity>(),
+            QueryPolicy::Membership,
+        )
+        .expect("prepare");
+    let matches: Vec<_> = query
+        .iter(&mut world, QueryWindow::All)
         .expect("query")
         .map(|(_, p)| p.0)
         .collect();
@@ -256,12 +258,14 @@ fn query_cache_respects_inactive_changes() {
     world.insert(tagged, Player).expect("tag");
     world.insert(plain, Position(2)).expect("plain");
 
-    let spec = QuerySpec::new().without_tag::<Player>();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-    let matches: Vec<_> = world
-        .query::<Position>(&spec, QueryParams::new().membership_cache(&cache))
+    let mut query = world
+        .prepare_query1::<Position>(
+            QuerySpec::new().without_tag::<Player>(),
+            QueryPolicy::Membership,
+        )
+        .expect("prepare");
+    let matches: Vec<_> = query
+        .iter(&mut world, QueryWindow::All)
         .expect("query")
         .map(|(_, p)| p.0)
         .collect();
@@ -281,10 +285,9 @@ fn query_cache_survives_frame_event_clear() {
     let entity = world.spawn().expect("spawn");
     world.insert(entity, Position(1)).expect("insert");
 
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
+    let mut query = world
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare");
     world.send(Damage(1)).expect("send");
 
     let schedule = ScheduleBuilder::standard()
@@ -293,9 +296,8 @@ fn query_cache_survives_frame_event_clear() {
     let mut app = moirai::App::from_parts(world, schedule).expect("app");
     app.update(1.0 / 60.0).expect("update");
 
-    let matches: Vec<_> = app
-        .world_mut()
-        .query::<Position>(&spec, QueryParams::new().membership_cache(&cache))
+    let matches: Vec<_> = query
+        .iter(app.world_mut(), QueryWindow::All)
         .expect("query")
         .map(|(_, p)| p.0)
         .collect();
@@ -360,13 +362,13 @@ fn component_events_readable_after_registration() {
 }
 
 #[test]
-fn resource_scope_marks_changed() {
+fn resource_scope_mut_marks_changed() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();
     let mut world = builder.build().expect("build");
     world.insert_resource(Score(1)).expect("insert");
     world
-        .resource_scope::<Score, _>(|value, _| {
+        .resource_scope_mut::<Score, _>(|value, _| {
             if let Some(score) = value {
                 score.0 = 2;
             }
@@ -414,7 +416,7 @@ fn dynamic_component_mut_updates_value() {
 fn query2_result_cache_handles_registered_and_missing() {
     let mut world = sparse_world();
     assert!(matches!(
-        world.query2::<Position, Velocity>(&QuerySpec::new(), QueryParams::new()),
+        world.prepare_query2::<Position, Velocity>(QuerySpec::new(), QueryPolicy::Result),
         Err(QueryError::UnregisteredComponent { .. })
     ));
 }

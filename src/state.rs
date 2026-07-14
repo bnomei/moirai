@@ -142,11 +142,14 @@ mod tests {
         let mut builder = WorldBuilder::new();
         builder.register_resource::<State<Menu>>();
         let mut world = builder.build().expect("world");
-        let mut system = apply::<Menu>("apply", stage::UPDATE);
+        let system = apply::<Menu>("apply", stage::UPDATE);
+        let crate::schedule::SystemBodySource::Ready(mut body) = system.body else {
+            panic!("state apply system must be ready without local initialization");
+        };
         world
             .begin_run(crate::operation::StageOperation::Update)
             .expect("begin");
-        let err = (system.body)(&mut world, 0.0).expect_err("missing state");
+        let err = body(&mut world, 0.0).expect_err("missing state");
         assert_eq!(err, "state resource missing");
         world.end_run();
     }

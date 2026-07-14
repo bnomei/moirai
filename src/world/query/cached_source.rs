@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::entity::EntityId;
 use crate::query::{QueryCache, QueryError, QueryResultCache};
 use crate::world::World;

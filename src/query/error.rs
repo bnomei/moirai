@@ -58,9 +58,9 @@ impl core::fmt::Display for QueryError {
             Self::WrongOwner => f.write_str("query handle belongs to another world"),
             Self::StaleCache => f.write_str("stale query cache handle"),
             Self::WrongQuery { detail } => write!(f, "wrong query cursor: {detail}"),
-            Self::MovingChangeWindow => {
-                f.write_str("added/changed filters require QueryCache, not QueryResultCache")
-            }
+            Self::MovingChangeWindow => f.write_str(
+                "added/changed filters require a traversal or membership policy, not Result",
+            ),
             Self::UnsupportedCachePolicy { detail } => {
                 write!(f, "unsupported cache policy: {detail}")
             }

@@ -1,48 +1,51 @@
-# The 10% median gate has no demonstrated noise floor
+# Replace the unreproducible median threshold with retained descriptive captures
 
 Priority: high
 Confidence: high
+Status: implemented as a descriptive protocol; no timing admission gate
 
-Hotspot:
+## Finding
 
-`docs/perf.md:70-74` asks reviewers to investigate a median regression above about 10%, but the repository does not record repeated baseline distributions or an exact command that reproduces the saved sampling configuration.
+The former fixed same-machine median rule had no demonstrated noise floor. Earlier saved results also
+mixed Divan defaults with explicit sample descriptions, and an unchanged Q16 source produced a
+large unexplained cross-session shift. A fixed percentage could therefore classify host or artifact
+drift as a source-code regression or improvement.
 
-Evidence:
+## Protocol
 
-- `docs/perf.md:15` records `cargo bench` with "Divan defaults", while the Q16 row at `docs/perf.md:25` says `100 samples x 100 iters`. Those are materially different experiment descriptions; the exact flags are absent.
-- The saved Q16 median is 416.4 ns at commit `ab93dbb1d68796b2c5fbb9b5976f8e56834ad4f0` on Rust 1.96.0 / Apple M4.
-- On 2026-07-13 at `dfd4177b293651536413377be783b3ac0c19bc9f`, five consecutive runs of `cargo bench --bench q16 -- --sample-count 100 --sample-size 100` produced medians of 181.4, 181.4, 181.6, 181.4, and 181.4 ns (41 ns timer precision).
-- `git diff ab93dbb1d68796b2c5fbb9b5976f8e56834ad4f0..HEAD -- benches/q16.rs src/math/q16.rs Cargo.toml` shows no Q16 benchmark change and only a `#[cfg(test)]` Q16 helper plus an unrelated test-target declaration. This does not prove identical generated artifacts, but it leaves the 56% median difference unexplained by the measured workload's source.
-- CI only runs `cargo bench --no-run` (`.github/workflows/ci.yml:125-137`), so it checks compilation but neither calibrates runner noise nor preserves performance distributions.
+Run seven positive paired cycles. `perf_experiment.py` alternates AB then BA ordering to expose
+directional thermal drift. `perf_capture.py` records the exact argv, working-tree identity, executable
+metadata when available, toolchain, target, feature selection, power note, timestamps, load average,
+exit status, and raw stdout/stderr.
 
-Candidate and mechanism:
+All endpoints are evidence. Busy-host samples, outliers, parse-empty output, and failed commands are
+retained. There is no pre-launch load rejection, no post-hoc exclusion, and no automatic threshold.
+`perf_summarize.py` reports inventory, failures, descriptive median/MAD/min/max statistics separated
+by endpoint status, and matched deltas carrying both baseline and candidate status. It emits no gate.
 
-Replace the single-number advisory gate with a capture protocol: record the exact Divan flags, commit and dirty state, feature set, target, rustc/LLVM, timer, power mode, and multiple independent repetitions. Compare an unchanged control immediately before and after a candidate, or alternate baseline and candidate when thermal drift is plausible. Derive the investigation threshold from observed control noise plus a minimum useful effect, not from an uncalibrated constant.
+## Exact paired commands
 
-Expected scope (not promised speedup):
+The feature-gated `query1_paired_control` runs the retained internal ad-hoc path and reusable prepared
+path behind one Divan case identity, so the summary can match corresponding rows:
 
-This improves regression classification. It should reduce false alarms and prevent large environment or harness shifts from being presented as code improvements.
+```sh
+uv run python scripts/perf_experiment.py \
+  --group prepared-query1 \
+  --cycles 7 \
+  --power-note "record current power and thermal context" \
+  --output-dir target/perf-results/prepared-query1 \
+  --baseline-command "env MOIRAI_QUERY_CONTROL=adhoc cargo bench --features bench-internals --bench prepared_queries -- query1_paired_control --sample-count 100 --sample-size 100" \
+  --candidate-command "env MOIRAI_QUERY_CONTROL=prepared cargo bench --features bench-internals --bench prepared_queries -- query1_paired_control --sample-count 100 --sample-size 100"
+uv run python scripts/perf_summarize.py target/perf-results/prepared-query1
+```
 
-Semantic and operational risks:
+For a revision-to-revision experiment, make both commands invoke already-built benchmark executables
+from the two revisions with identical Divan arguments and case names. Do not alternate source edits or
+builds inside timed commands.
 
-Repeated local runs take longer and still do not make an Apple M4 baseline portable to CI or constrained targets. Divan medians do not provide saved cross-revision confidence intervals by themselves. A wider evidence-based threshold can miss small but cumulative regressions.
+## Interpretation
 
-Benchmark plan:
-
-1. Re-capture the unchanged HEAD at least five times with explicit `--sample-count` and `--sample-size`, preserving raw output.
-2. Run the same five-repetition control on a second day or after a normal thermal/load cycle to measure between-session drift.
-3. Alternate baseline and one no-op/rebuild candidate to measure artifact/layout noise.
-4. Set a per-family advisory threshold only above the larger demonstrated noise floor; require an end-to-end confirmation for borderline results.
-5. Disprove the new protocol if it cannot reliably classify an intentionally injected slowdown larger than its threshold.
-
-Losing/crossover case:
-
-A compile-only CI smoke gate remains cheaper and more portable for every pull request. Timing gates belong on controlled hardware or scheduled runs; noisy shared runners should not enforce local nanosecond baselines.
-
-Result:
-
-Accepted as a reproducibility protocol. `scripts/perf_capture.py`, run through UV, records the exact command, executable path/size/SHA-256, label, UTC timestamp, commit, dirty state, rustc/Cargo/host metadata, one-minute load average at start/end, exit status, and raw stdout/stderr beneath the ignored `target/perf-results/` directory. It can reject a run before launch with `--max-load-one` when the host is already busy. It also saves the tracked binary patch, patch SHA-256, and a path/size/SHA-256 manifest for untracked files, producing a working-tree identity even when baseline and candidate share a dirty `HEAD`. Five repeated Q16 foundation captures and paired runtime-candidate captures use explicit OS timer and 100 x 100 sampling.
-
-Decision and fallback:
-
-Replace the uncalibrated 10% rule for this work with paired five-run gates: latency-only changes need at least a 5% win in four of five pairs and no case worse than 3%; work-removal changes must eliminate the claimed work/allocation and keep median latency within 3%. `scripts/perf_summarize.py` computes medians only from matched run IDs and reports pair count, wins, worst paired regression, and pass/fail; it fails closed below the default five required pairs. Its optional `--max-load-one` filter excludes a pair when either endpoint lacks start/end load metadata or exceeds the quiet-host ceiling. Use `--required-wins 0` for work-removal/control cases whose gate is the median regression ceiling plus separately proven work removal. Keep compile-only benchmark CI as the portable fallback and retain raw local captures for audit rather than committing machine-specific output.
+The distributions support engineering judgment and identify unstable measurements; they do not by
+themselves accept or reject an optimization. Allocation counts, removed work, correctness contracts,
+profiles, and representative end-to-end behavior remain separate evidence. Compile-only CI remains a
+portable benchmark build check and provides no performance verdict.

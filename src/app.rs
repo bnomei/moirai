@@ -170,9 +170,7 @@ impl App {
             if stage_label == stage::FIXED_UPDATE {
                 if let Some(config) = fixed_config {
                     for _ in 0..substeps {
-                        let mut step = self.schedule.fixed_accumulator_mut().next_step(&config);
-                        step.advance_index()
-                            .map_err(|_| self.fault_fixed_exhaustion())?;
+                        let step = self.schedule.fixed_accumulator_mut().next_step(&config);
                         self.world.set_fixed_step(Some(step));
                         self.run_context.fixed_step = Some(step);
                         let result = self.run_stage(stage_index, seconds_from_duration(step.delta));

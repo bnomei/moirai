@@ -8,12 +8,14 @@ pub mod stage;
 mod system;
 
 pub use builder::ScheduleBuilder;
-pub use condition::Condition;
+pub use condition::{Condition, ConditionError};
 pub use error::{BuildError, ScheduleError};
 pub(crate) use owner::ExecutionLease;
 pub(crate) use runner::RunOutcome;
 pub use stage::StageId;
-pub use system::{FlushMode, System, SystemId, SystemSet};
+#[cfg(test)]
+pub(crate) use system::SystemBodySource;
+pub use system::{FlushMode, System, SystemId, SystemInitContext, SystemSet};
 
 use alloc::collections::BTreeMap;
 use alloc::vec;

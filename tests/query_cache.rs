@@ -1,11 +1,11 @@
 use moirai::component::ComponentOptions;
-use moirai::query::{ExactIdPolicy, QueryCursor, QueryError, QueryParams, QuerySpec};
+use moirai::query::{ExactIdPolicy, QueryCursor, QueryError, QueryPolicy, QuerySpec, QueryWindow};
 use moirai::world::{World, WorldBuilder};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Position(i32);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Marker;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -15,412 +15,281 @@ fn world() -> World {
     let mut builder = WorldBuilder::new();
     builder
         .register_component::<Position>(ComponentOptions::sparse())
-        .expect("register");
+        .expect("register Position");
     builder
         .register_component::<Marker>(ComponentOptions::sparse())
-        .expect("register");
+        .expect("register Marker");
+    builder
+        .register_component::<TablePos>(ComponentOptions::table())
+        .expect("register TablePos");
     builder.build().expect("build")
 }
 
-#[test]
-fn query_cache_cold_and_hot_hit() {
-    let mut world = world();
-    let a = world.spawn().expect("spawn");
-    world.insert(a, Position(1)).expect("insert");
-
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-    let params = QueryParams::new().membership_cache(&cache);
-
-    let first: Vec<_> = world
-        .query::<Position>(&spec, params)
-        .expect("query")
-        .map(|(_, p)| p.0)
-        .collect();
-    let second: Vec<_> = world
-        .query::<Position>(&spec, QueryParams::new().membership_cache(&cache))
-        .expect("query")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(first, vec![1]);
-    assert_eq!(second, vec![1]);
+fn position_values(
+    query: &mut moirai::query::PreparedQuery1<Position>,
+    world: &mut World,
+) -> Vec<i32> {
+    query
+        .iter(world, QueryWindow::All)
+        .expect("iterate")
+        .map(|(_, position)| position.0)
+        .collect()
 }
 
 #[test]
-fn membership_cache_paths_reject_duplicate_exact_ids_contextually() {
-    let mut other = world();
-    let foreign = other.spawn().expect("foreign");
-    let mut world = world();
-    let entity = world.spawn().expect("spawn");
-    world.insert(entity, Position(1)).expect("insert");
-    world.insert(entity, Marker).expect("marker");
-    let stale = world.spawn().expect("stale");
-    world.despawn(stale).expect("despawn stale");
-    let exact = QuerySpec::new().exact_ids(vec![entity, entity], ExactIdPolicy::SkipUnavailable);
-    let cache = world
-        .build_query_cache::<Position>(QuerySpec::new())
-        .expect("cache");
+fn membership_policies_are_reusable_and_track_relevant_topology() {
+    for policy in [QueryPolicy::Membership, QueryPolicy::DeltaMembership] {
+        let mut world = world();
+        let first = world.spawn().expect("spawn first");
+        world.insert(first, Position(1)).expect("insert first");
+        let mut query = world
+            .prepare_query1::<Position>(QuerySpec::new(), policy)
+            .expect("prepare");
 
-    assert!(matches!(
-        world.query::<Position>(&exact, QueryParams::new().membership_cache(&cache)),
-        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
-    ));
-    assert!(matches!(
-        world.build_entity_query_cache(exact.clone()),
-        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
-    ));
-    assert!(matches!(
-        world.build_query_cache::<Position>(exact.clone()),
-        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
-    ));
-    assert!(matches!(
-        world.build_query2_cache::<Position, Marker>(exact),
-        Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
-    ));
+        assert_eq!(position_values(&mut query, &mut world), vec![1]);
+        assert_eq!(position_values(&mut query, &mut world), vec![1]);
 
-    let mixed_foreign = QuerySpec::new().exact_ids(
-        vec![foreign, foreign, entity, entity],
-        ExactIdPolicy::SkipUnavailable,
-    );
-    assert!(matches!(
-        world.build_entity_query_cache(mixed_foreign.clone()),
-        Err(QueryError::WrongOwner)
-    ));
-    assert!(matches!(
-        world.build_query_cache::<Position>(mixed_foreign.clone()),
-        Err(QueryError::WrongOwner)
-    ));
-    assert!(matches!(
-        world.build_query2_cache::<Position, Marker>(mixed_foreign),
-        Err(QueryError::WrongOwner)
-    ));
+        let second = world.spawn().expect("spawn second");
+        world.insert(second, Position(2)).expect("insert second");
+        assert_eq!(position_values(&mut query, &mut world), vec![1, 2]);
 
-    let mixed_stale = QuerySpec::new().exact_ids(
-        vec![stale, stale, entity, entity],
-        ExactIdPolicy::ErrorOnUnavailable,
-    );
-    assert!(matches!(
-        world.build_entity_query_cache(mixed_stale.clone()),
-        Err(QueryError::MissingExactId { entity: missing }) if missing == stale
-    ));
-    assert!(matches!(
-        world.build_query_cache::<Position>(mixed_stale.clone()),
-        Err(QueryError::MissingExactId { entity: missing }) if missing == stale
-    ));
-    assert!(matches!(
-        world.build_query2_cache::<Position, Marker>(mixed_stale),
-        Err(QueryError::MissingExactId { entity: missing }) if missing == stale
-    ));
+        world.remove::<Position>(first).expect("remove first");
+        assert_eq!(position_values(&mut query, &mut world), vec![2]);
+    }
 }
 
 #[test]
-fn entity_membership_cache_refreshes_after_deferred_empty_spawn() {
-    let mut world = world();
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_entity_query_cache(spec.clone())
-        .expect("entity cache");
-    let entity = world.commands().expect("commands").spawn().expect("spawn");
-    world.flush().expect("flush");
-    assert_eq!(
+fn membership_policies_observe_values_without_structural_changes() {
+    for policy in [QueryPolicy::Membership, QueryPolicy::DeltaMembership] {
+        let mut world = world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position(1)).expect("insert");
+        let mut query = world
+            .prepare_query1::<Position>(QuerySpec::new(), policy)
+            .expect("prepare");
+
         world
-            .query_ids(&spec, QueryParams::new().membership_cache(&cache))
-            .expect("refreshed")
-            .collect::<Vec<_>>(),
-        vec![entity]
-    );
+            .get_mut::<Position>(entity)
+            .expect("get")
+            .expect("present")
+            .0 = 9;
+        assert_eq!(position_values(&mut query, &mut world), vec![9]);
+
+        let unrelated = world.spawn().expect("spawn unrelated");
+        world.insert(unrelated, Marker).expect("insert unrelated");
+        assert_eq!(position_values(&mut query, &mut world), vec![9]);
+    }
 }
 
 #[test]
-fn entity_membership_cache_is_owner_and_spec_scoped() {
-    let mut a = world();
-    let mut b = world();
-    let cache = a.build_entity_query_cache(QuerySpec::new()).expect("cache");
+fn membership_policies_are_owner_scoped() {
+    for policy in [QueryPolicy::Membership, QueryPolicy::DeltaMembership] {
+        let mut source = world();
+        let mut other = world();
+        let mut query = source
+            .prepare_query1::<Position>(QuerySpec::new(), policy)
+            .expect("prepare");
+
+        assert!(matches!(
+            query.iter(&mut other, QueryWindow::All),
+            Err(QueryError::WrongOwner)
+        ));
+    }
+}
+
+#[test]
+fn materialized_membership_rejects_exact_order_but_validates_exact_ids_first() {
+    for policy in [QueryPolicy::Membership, QueryPolicy::DeltaMembership] {
+        let mut other = world();
+        let foreign = other.spawn().expect("foreign");
+        let mut world = world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position(1)).expect("insert");
+        let stale = world.spawn().expect("stale");
+        world.despawn(stale).expect("despawn stale");
+
+        assert!(matches!(
+            world.prepare_query1::<Position>(
+                QuerySpec::new().exact_ids(
+                    vec![entity, entity],
+                    ExactIdPolicy::SkipUnavailable,
+                ),
+                policy,
+            ),
+            Err(QueryError::DuplicateExactId { entity: duplicate }) if duplicate == entity
+        ));
+        assert!(matches!(
+            world.prepare_query1::<Position>(
+                QuerySpec::new().exact_ids(vec![foreign], ExactIdPolicy::SkipUnavailable),
+                policy,
+            ),
+            Err(QueryError::WrongOwner)
+        ));
+        assert!(matches!(
+            world.prepare_query1::<Position>(
+                QuerySpec::new().exact_ids(vec![stale], ExactIdPolicy::ErrorOnUnavailable),
+                policy,
+            ),
+            Err(QueryError::MissingExactId { entity: missing }) if missing == stale
+        ));
+        assert!(matches!(
+            world.prepare_query1::<Position>(
+                QuerySpec::new().exact_ids(vec![entity], ExactIdPolicy::SkipUnavailable),
+                policy,
+            ),
+            Err(QueryError::UnsupportedCachePolicy { .. })
+        ));
+    }
+}
+
+#[test]
+fn membership_applies_since_and_cursor_windows_at_execution() {
+    for policy in [QueryPolicy::Membership, QueryPolicy::DeltaMembership] {
+        let mut world = world();
+        let old = world.spawn().expect("spawn old");
+        world.insert(old, Position(1)).expect("insert old");
+        let since_after_old = world.change_tick();
+        let new = world.spawn().expect("spawn new");
+        world.insert(new, Position(2)).expect("insert new");
+        let spec = QuerySpec::new().added::<Position>();
+        let mut query = world
+            .prepare_query1::<Position>(spec.clone(), policy)
+            .expect("prepare");
+
+        let narrow: Vec<_> = query
+            .iter(&mut world, QueryWindow::Since(since_after_old))
+            .expect("since")
+            .map(|(_, position)| position.0)
+            .collect();
+        assert_eq!(narrow, vec![2]);
+
+        let mut cursor =
+            QueryCursor::from_spec_start::<Position>(&mut world, &spec).expect("cursor");
+        let before = cursor.since();
+        let wide: Vec<_> = query
+            .iter(&mut world, QueryWindow::Cursor(&mut cursor))
+            .expect("cursor iteration")
+            .map(|(_, position)| position.0)
+            .collect();
+        assert_eq!(wide, vec![1, 2]);
+        assert!(cursor.since() > before);
+    }
+}
+
+#[test]
+fn membership_cursor_must_match_the_prepared_query() {
+    let mut world = world();
+    let spec = QuerySpec::new().changed::<Position>();
+    let mut query = world
+        .prepare_query1::<Position>(spec, QueryPolicy::Membership)
+        .expect("prepare");
+    let mut wrong =
+        QueryCursor::from_spec_start::<Position>(&mut world, &QuerySpec::new()).expect("cursor");
+
     assert!(matches!(
-        b.query_ids(
-            &QuerySpec::new(),
-            QueryParams::new().membership_cache(&cache)
-        ),
-        Err(QueryError::WrongOwner)
-    ));
-    assert!(matches!(
-        a.query_ids(
-            &QuerySpec::new().with::<Position>(),
-            QueryParams::new().membership_cache(&cache)
-        ),
+        query.iter(&mut world, QueryWindow::Cursor(&mut wrong)),
         Err(QueryError::WrongQuery { .. })
     ));
 }
 
 #[test]
-fn query_result_cache_rejects_added_or_changed() {
-    let mut world = world();
-    let spec = QuerySpec::new().added::<Position>();
-    assert!(matches!(
-        world.build_query_result_cache::<Position>(spec),
-        Err(QueryError::MovingChangeWindow)
-    ));
+fn membership_supports_sparse_table_query2_with_repeatable_results() {
+    for policy in [QueryPolicy::Membership, QueryPolicy::DeltaMembership] {
+        let mut world = world();
+        let first = world.spawn().expect("first");
+        let second = world.spawn().expect("second");
+        let table_only = world.spawn().expect("table only");
+        for (entity, value) in [(first, 1), (second, 2)] {
+            world.insert(entity, Position(value)).expect("Position");
+            world
+                .insert(entity, TablePos(value * 10))
+                .expect("TablePos");
+        }
+        world.insert(table_only, TablePos(99)).expect("table only");
+        let mut query = world
+            .prepare_query2::<Position, TablePos>(QuerySpec::new(), policy)
+            .expect("prepare");
+
+        let first_read: Vec<_> = query
+            .iter(&mut world, QueryWindow::All)
+            .expect("first read")
+            .map(|(entity, position, table)| (entity, position.0, table.0))
+            .collect();
+        let second_read: Vec<_> = query
+            .iter(&mut world, QueryWindow::All)
+            .expect("second read")
+            .map(|(entity, position, table)| (entity, position.0, table.0))
+            .collect();
+        assert_eq!(first_read, second_read);
+        let mut actual = first_read;
+        actual.sort_unstable_by_key(|(_, position, _)| *position);
+        assert_eq!(actual, vec![(first, 1, 10), (second, 2, 20)]);
+    }
 }
 
 #[test]
-fn query_cache_is_owner_scoped() {
-    let mut world_a = world();
-    let mut world_b = world();
-    let entity = world_a.spawn().expect("spawn");
-    world_a.insert(entity, Position(1)).expect("insert");
-
-    let cache = world_a
-        .build_query_cache::<Position>(QuerySpec::new())
-        .expect("cache");
-    let params = QueryParams::new().membership_cache(&cache);
-    assert!(matches!(
-        world_b.query::<Position>(&QuerySpec::new(), params),
-        Err(QueryError::WrongOwner)
-    ));
-}
-
-#[test]
-fn query_cache_updates_on_spawn() {
+fn delta_membership_preserves_the_set_and_repeatability_through_slot_reuse() {
     let mut world = world();
-    let a = world.spawn().expect("spawn");
-    world.insert(a, Position(1)).expect("insert");
+    let first = world.spawn().expect("first");
+    let second = world.spawn().expect("second");
+    let third = world.spawn().expect("third");
+    for (entity, value) in [(first, 1), (second, 2), (third, 3)] {
+        world.insert(entity, Position(value)).expect("insert");
+    }
+    let mut query = world
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::DeltaMembership)
+        .expect("prepare");
 
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-    let params = QueryParams::new().membership_cache(&cache);
-
-    let b = world.spawn().expect("spawn");
-    world.insert(b, Position(2)).expect("insert");
-
-    let matches: Vec<_> = world
-        .query::<Position>(&spec, params)
-        .expect("query")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(matches, vec![1, 2]);
-}
-
-#[test]
-fn value_only_mutation_preserves_structural_cache() {
-    let mut world = world();
-    let a = world.spawn().expect("spawn");
-    world.insert(a, Position(1)).expect("insert");
-
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-    let params = QueryParams::new().membership_cache(&cache);
-
+    world.remove::<Position>(first).expect("remove first");
+    world.despawn(second).expect("despawn second");
+    let replacement = world.spawn().expect("replacement");
+    assert_ne!(replacement, second);
     world
-        .get_mut::<Position>(a)
-        .expect("get")
-        .expect("present")
-        .0 = 9;
+        .insert(replacement, Position(4))
+        .expect("insert replacement");
 
-    let matches: Vec<_> = world
-        .query::<Position>(&spec, params)
-        .expect("query")
-        .map(|(_, p)| p.0)
+    let first_read: Vec<_> = query
+        .iter(&mut world, QueryWindow::All)
+        .expect("iterate")
+        .map(|(entity, position)| (entity, position.0))
         .collect();
-    assert_eq!(matches, vec![9]);
+    let second_read: Vec<_> = query
+        .iter(&mut world, QueryWindow::All)
+        .expect("iterate again")
+        .map(|(entity, position)| (entity, position.0))
+        .collect();
+    assert_eq!(second_read, first_read);
+    let mut actual = first_read;
+    actual.sort_unstable_by_key(|(_, position)| *position);
+    assert_eq!(actual, vec![(third, 3), (replacement, 4)]);
 }
 
 #[test]
-fn membership_cache_stores_structural_members_for_added_queries() {
-    let mut world = world();
-    let a = world.spawn().expect("spawn a");
-    world.insert(a, Position(1)).expect("insert a");
-    let since_after_a = world.change_tick();
-
-    let b = world.spawn().expect("spawn b");
-    world.insert(b, Position(2)).expect("insert b");
-
-    let spec = QuerySpec::new().added::<Position>();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-
-    let narrow: Vec<_> = world
-        .query::<Position>(
-            &spec,
-            QueryParams::new()
-                .membership_cache(&cache)
-                .since(since_after_a),
-        )
-        .expect("narrow")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(narrow, vec![2]);
-
-    let mut cursor = QueryCursor::from_spec_start::<Position>(&mut world, &spec).expect("cursor");
-    let wide: Vec<_> = world
-        .query::<Position>(
-            &spec,
-            QueryParams::new()
-                .membership_cache(&cache)
-                .cursor(&mut cursor),
-        )
-        .expect("wide")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(wide, vec![1, 2]);
-}
-
-fn table_world() -> World {
-    let mut builder = WorldBuilder::new();
-    builder
-        .register_component::<TablePos>(ComponentOptions::table())
-        .expect("register");
-    builder.build().expect("build")
-}
-
-#[test]
-fn table_membership_cache_collects_archetype_entities() {
-    let mut world = table_world();
-    let a = world.spawn().expect("spawn a");
-    let b = world.spawn().expect("spawn b");
-    world.insert(a, TablePos(1)).expect("insert a");
-    world.insert(b, TablePos(2)).expect("insert b");
-
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<TablePos>(spec.clone())
-        .expect("cache");
-    let matches: Vec<_> = world
-        .query::<TablePos>(&spec, QueryParams::new().membership_cache(&cache))
-        .expect("query")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(matches, vec![1, 2]);
-}
-
-#[test]
-fn table_added_filter_uses_structural_membership_cache() {
-    let mut world = table_world();
-    let a = world.spawn().expect("spawn a");
-    world.insert(a, TablePos(1)).expect("insert a");
-    let since_after_a = world.change_tick();
-
-    let b = world.spawn().expect("spawn b");
-    world.insert(b, TablePos(2)).expect("insert b");
-
-    let spec = QuerySpec::new().added::<TablePos>();
-    let cache = world
-        .build_query_cache::<TablePos>(spec.clone())
-        .expect("cache");
-    let matches: Vec<_> = world
-        .query::<TablePos>(
-            &spec,
-            QueryParams::new()
-                .membership_cache(&cache)
-                .since(since_after_a),
-        )
-        .expect("query")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(matches, vec![2]);
-}
-
-#[test]
-fn exact_id_query_iterator_skips_unmatched_entities() {
-    let mut world = world();
-    let matched = world.spawn().expect("matched");
-    let skipped = world.spawn().expect("skipped");
-    world.insert(matched, Position(7)).expect("matched");
-    world.insert(skipped, Marker).expect("marker only");
-
-    let spec = QuerySpec::new().exact_ids(
-        vec![matched, skipped],
-        moirai::query::ExactIdPolicy::SkipUnavailable,
-    );
-    let matches: Vec<_> = world
-        .query::<Position>(&spec, QueryParams::new())
-        .expect("query")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(matches, vec![7]);
-}
-
-#[test]
-fn cached_for_each_mut_matches_uncached_added_window() {
+fn membership_mutation_uses_the_selected_window() {
     let mut world = world();
     let old = world.spawn().expect("old");
-    world.insert(old, Position(1)).expect("old");
+    world.insert(old, Position(1)).expect("old position");
     let since_after_old = world.change_tick();
-
     let new = world.spawn().expect("new");
-    world.insert(new, Position(2)).expect("new");
+    world.insert(new, Position(2)).expect("new position");
+    let mut query = world
+        .prepare_query1::<Position>(
+            QuerySpec::new().added::<Position>(),
+            QueryPolicy::DeltaMembership,
+        )
+        .expect("prepare");
 
-    let spec = QuerySpec::new().added::<Position>();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-    let mut uncached = Vec::new();
-    world
-        .for_each_mut::<Position>(
-            &spec,
-            QueryParams::new().since(since_after_old),
-            |_, pos| {
-                uncached.push(pos.0);
-                pos.0 += 100;
+    query
+        .for_each_mut(
+            &mut world,
+            QueryWindow::Since(since_after_old),
+            |_, position| {
+                position.0 += 10;
                 Ok(())
             },
         )
-        .expect("uncached");
+        .expect("mutate");
 
-    world.insert(old, Position(1)).expect("reset old");
-    world.insert(new, Position(2)).expect("reset new");
-
-    let mut cached = Vec::new();
-    world
-        .for_each_mut::<Position>(
-            &spec,
-            QueryParams::new()
-                .membership_cache(&cache)
-                .since(since_after_old),
-            |_, pos| {
-                cached.push(pos.0);
-                pos.0 += 100;
-                Ok(())
-            },
-        )
-        .expect("cached");
-
-    assert_eq!(uncached, cached);
-    assert_eq!(uncached, vec![2]);
-    assert_eq!(
-        world.get::<Position>(old).expect("get").expect("present").0,
-        1,
-        "older structural member must not be mutated"
-    );
-}
-
-#[test]
-fn cached_query_iterator_refreshes_after_topology_change() {
-    let mut world = world();
-    let entity = world.spawn().expect("spawn");
-    world.insert(entity, Position(1)).expect("insert");
-
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<Position>(spec.clone())
-        .expect("cache");
-    let _first: Vec<_> = world
-        .query::<Position>(&spec, QueryParams::new().membership_cache(&cache))
-        .expect("warm")
-        .collect();
-
-    let newcomer = world.spawn().expect("spawn");
-    world.insert(newcomer, Position(2)).expect("insert");
-    let matches: Vec<_> = world
-        .query::<Position>(&spec, QueryParams::new().membership_cache(&cache))
-        .expect("refresh")
-        .map(|(_, p)| p.0)
-        .collect();
-    assert_eq!(matches.len(), 2);
+    assert_eq!(world.get::<Position>(old).expect("get").expect("old").0, 1);
+    assert_eq!(world.get::<Position>(new).expect("get").expect("new").0, 12);
 }

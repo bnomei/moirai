@@ -1,5 +1,5 @@
 use moirai::component::ComponentOptions;
-use moirai::query::{QueryParams, QuerySpec};
+use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 use moirai::world::{DynamicBundle, WorldBuilder};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -127,15 +127,14 @@ fn table_query2_mutates_both_components() {
         .spawn_bundle((Position(1), Velocity(2)))
         .expect("spawn");
 
-    world
-        .for_each2_mut::<Position, Velocity>(
-            &QuerySpec::new(),
-            QueryParams::new(),
-            |_, pos, vel| {
-                pos.0 += vel.0;
-                Ok(())
-            },
-        )
+    let mut query = world
+        .prepare_query2::<Position, Velocity>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
+    query
+        .for_each_mut_mut(&mut world, QueryWindow::All, |_, pos, vel| {
+            pos.0 += vel.0;
+            Ok(())
+        })
         .expect("mutate");
 
     assert_eq!(
@@ -159,8 +158,11 @@ fn table_for_each2_mut_with_reversed_component_indices() {
     world.insert(entity, Mass(5)).expect("mass");
     world.insert(entity, Velocity(10)).expect("vel");
 
-    world
-        .for_each2_mut::<Velocity, Mass>(&QuerySpec::new(), QueryParams::new(), |_, vel, mass| {
+    let mut query = world
+        .prepare_query2::<Velocity, Mass>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
+    query
+        .for_each_mut_mut(&mut world, QueryWindow::All, |_, vel, mass| {
             vel.0 += mass.0;
             mass.0 *= 2;
             Ok(())
@@ -190,21 +192,24 @@ fn table_insert_replace_preserves_added_tick() {
     let since_after_add = world.change_tick();
     world.insert(entity, Position(2)).expect("replace");
 
-    let added: Vec<_> = world
-        .query::<Position>(
-            &QuerySpec::new().added::<Position>(),
-            QueryParams::new().since(since_after_add),
-        )
+    let mut added_query = world
+        .prepare_query1::<Position>(QuerySpec::new().added::<Position>(), QueryPolicy::Prepared)
+        .expect("prepare added");
+    let added: Vec<_> = added_query
+        .iter(&mut world, QueryWindow::Since(since_after_add))
         .expect("added")
         .map(|(_, p)| p.0)
         .collect();
     assert!(added.is_empty());
 
-    let changed: Vec<_> = world
-        .query::<Position>(
-            &QuerySpec::new().changed::<Position>(),
-            QueryParams::new().since(since_after_add),
+    let mut changed_query = world
+        .prepare_query1::<Position>(
+            QuerySpec::new().changed::<Position>(),
+            QueryPolicy::Prepared,
         )
+        .expect("prepare changed");
+    let changed: Vec<_> = changed_query
+        .iter(&mut world, QueryWindow::Since(since_after_add))
         .expect("changed")
         .map(|(_, p)| p.0)
         .collect();
@@ -262,27 +267,30 @@ fn table_migration_moves_identity_and_ticks_without_cloning() {
         identity
     );
 
-    let added_after_original_insert = world
-        .query::<IdentityTracked>(
-            &QuerySpec::new().added::<IdentityTracked>(),
-            QueryParams::new().since(after_insert),
+    let mut added_query = world
+        .prepare_query1::<IdentityTracked>(
+            QuerySpec::new().added::<IdentityTracked>(),
+            QueryPolicy::Prepared,
         )
+        .expect("prepare added");
+    let added_after_original_insert = added_query
+        .iter(&mut world, QueryWindow::Since(after_insert))
         .expect("added query")
         .count();
     assert_eq!(added_after_original_insert, 0);
-    let changed_after_original_insert = world
-        .query::<IdentityTracked>(
-            &QuerySpec::new().changed::<IdentityTracked>(),
-            QueryParams::new().since(after_insert),
+    let mut changed_query = world
+        .prepare_query1::<IdentityTracked>(
+            QuerySpec::new().changed::<IdentityTracked>(),
+            QueryPolicy::Prepared,
         )
+        .expect("prepare changed");
+    let changed_after_original_insert = changed_query
+        .iter(&mut world, QueryWindow::Since(after_insert))
         .expect("changed query")
         .count();
     assert_eq!(changed_after_original_insert, 1);
-    let changed_by_migration = world
-        .query::<IdentityTracked>(
-            &QuerySpec::new().changed::<IdentityTracked>(),
-            QueryParams::new().since(after_mutation),
-        )
+    let changed_by_migration = changed_query
+        .iter(&mut world, QueryWindow::Since(after_mutation))
         .expect("changed query")
         .count();
     assert_eq!(changed_by_migration, 0);

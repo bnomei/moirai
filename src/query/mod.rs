@@ -6,7 +6,7 @@
 //!
 //! ```
 //! use moirai::component::ComponentOptions;
-//! use moirai::query::{QueryParams, QuerySpec};
+//! use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 //! use moirai::world::WorldBuilder;
 //!
 //! #[derive(Clone, Copy)]
@@ -21,9 +21,12 @@
 //! world.insert(entity, Position(1)).expect("insert");
 //!
 //! let spec = QuerySpec::new();
-//! let count = world
-//!     .query::<Position>(&spec, QueryParams::new())
-//!     .expect("query")
+//! let mut query = world
+//!     .prepare_query1::<Position>(spec, QueryPolicy::Prepared)
+//!     .expect("prepare");
+//! let count = query
+//!     .iter(&mut world, QueryWindow::All)
+//!     .expect("iterate")
 //!     .count();
 //! assert_eq!(count, 1);
 //! ```
@@ -32,7 +35,7 @@
 //!
 //! ```
 //! use moirai::component::ComponentOptions;
-//! use moirai::query::{QueryParams, QuerySpec};
+//! use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 //! use moirai::world::WorldBuilder;
 //!
 //! #[derive(Clone, Copy)]
@@ -46,8 +49,11 @@
 //! let entity = world.spawn().expect("spawn");
 //! world.insert(entity, Velocity(1)).expect("insert");
 //!
-//! world
-//!     .for_each_mut::<Velocity>(&QuerySpec::new(), QueryParams::new(), |_, vel| {
+//! let mut query = world
+//!     .prepare_query1::<Velocity>(QuerySpec::new(), QueryPolicy::Prepared)
+//!     .expect("prepare");
+//! query
+//!     .for_each_mut(&mut world, QueryWindow::All, |_, vel| {
 //!         vel.0 += 1;
 //!         Ok(())
 //!     })
@@ -58,20 +64,25 @@
 mod cache;
 mod cursor;
 mod effects;
+#[allow(dead_code)]
 mod entity;
 mod error;
 mod exact_id;
 mod iter;
+#[allow(dead_code)]
 mod params;
+mod prepared;
 mod spec;
 
-pub use cache::{QueryCache, QueryResultCache};
+pub(crate) use cache::{QueryCache, QueryResultCache};
 pub use cursor::QueryCursor;
 pub use effects::{QueryCommands, QueryEffects};
-pub use entity::{EntityRef, QueryEntities, QueryIds};
+#[allow(unused_imports)]
+pub(crate) use entity::{EntityRef, QueryEntities, QueryIds};
 pub use error::QueryError;
 pub use exact_id::ExactIdPolicy;
 pub(crate) use iter::Query1State;
 pub use iter::{Query1, Query2};
-pub use params::QueryParams;
+pub(crate) use params::QueryParams;
+pub use prepared::{PreparedQuery1, PreparedQuery2, QueryPolicy, QueryWindow};
 pub use spec::QuerySpec;

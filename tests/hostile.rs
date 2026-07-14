@@ -1,12 +1,12 @@
 use moirai::component::{ComponentOptions, RegistrationError};
 use moirai::event::{EventOptions, EventReaderStart};
-use moirai::query::{QueryError, QueryParams, QuerySpec};
+use moirai::query::{QueryError, QueryPolicy, QuerySpec, QueryWindow};
 use moirai::schedule::{stage, BuildError, ScheduleBuilder, System};
 #[cfg(feature = "testkit")]
 use moirai::testkit::WorldTestExt;
 use moirai::world::WorldBuilder;
 use moirai::world::WorldError;
-use moirai::{AppBuilder, AppError, EntityScratch, EntityScratchError};
+use moirai::{AppBuilder, AppError, DenseEntityScratch, EntityScratchError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Damage(u32);
@@ -44,7 +44,7 @@ fn entity_scratch_never_falls_through_to_a_foreign_entity_handle() {
     let mut world_b = sparse_world();
     let entity_a = world_a.spawn().expect("spawn a");
     let entity_b = world_b.spawn().expect("spawn b");
-    let mut scratch = EntityScratch::new(&world_a);
+    let mut scratch = DenseEntityScratch::new(&world_a);
     scratch.insert(&world_a, entity_a, 7).expect("insert");
 
     assert_eq!(
@@ -78,8 +78,11 @@ fn conflicting_registration_leaves_registry_unchanged() {
         .expect_err("conflict");
     assert!(matches!(err, RegistrationError::TypeConflict { .. }));
     let mut world = builder.build().expect("build");
-    let count = world
-        .query::<Position>(&QuerySpec::new(), QueryParams::new())
+    let mut query = world
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
+    let count = query
+        .iter(&mut world, QueryWindow::All)
         .expect("query")
         .count();
     assert_eq!(count, 0);
@@ -106,32 +109,28 @@ fn duplicate_mutable_query2_is_rejected_before_borrow() {
     let entity = world.spawn().expect("spawn");
     world.insert(entity, Position(1)).expect("insert");
 
+    let mut query = world
+        .prepare_query2::<Position, Position>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare immutable pair");
     assert!(matches!(
-        world.for_each2_mut::<Position, Position>(
-            &QuerySpec::new(),
-            QueryParams::new(),
-            |_, _, _| { Ok(()) }
-        ),
+        query.for_each_mut_mut(&mut world, QueryWindow::All, |_, _, _| Ok(())),
         Err(QueryError::DuplicateMutableComponent { .. })
     ));
 }
 
 #[test]
-fn query_cache_from_another_world_is_rejected() {
+fn prepared_query_from_another_world_is_rejected() {
     let mut world_a = sparse_world();
     let mut world_b = sparse_world();
 
     let entity = world_a.spawn().expect("spawn");
     world_a.insert(entity, Position(1)).expect("insert");
-    let cache = world_a
-        .build_query_cache::<Position>(QuerySpec::new())
-        .expect("cache");
+    let mut query = world_a
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare");
 
     assert!(matches!(
-        world_b.query::<Position>(
-            &QuerySpec::new(),
-            QueryParams::new().membership_cache(&cache)
-        ),
+        query.iter(&mut world_b, QueryWindow::All),
         Err(QueryError::WrongOwner)
     ));
 }
@@ -166,7 +165,7 @@ fn stale_entity_id_is_not_alive() {
 }
 
 #[test]
-fn resource_scope_cannot_reborrow_same_type() {
+fn resource_scope_ref_cannot_reborrow_same_type() {
     #[derive(Debug, PartialEq)]
     struct Score(i32);
 
@@ -176,7 +175,7 @@ fn resource_scope_cannot_reborrow_same_type() {
     world.insert_resource(Score(1)).expect("insert");
 
     let result = world
-        .resource_scope::<Score, _>(|_, inner| inner.resource_changed_tick::<Score>())
+        .resource_scope_ref::<Score, _>(|_, inner| inner.resource_changed_tick::<Score>())
         .expect("scope");
     assert!(matches!(result, Err(WorldError::ResourceScoped { .. })));
 }
@@ -272,6 +271,9 @@ fn for_each_mut_rejects_poisoned_world() {
     let mut world = sparse_world();
     let entity = world.spawn().expect("spawn");
     world.insert(entity, Position(1)).expect("seed");
+    let mut query = world
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
 
     world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
     world
@@ -283,8 +285,8 @@ fn for_each_mut_rejects_poisoned_world() {
     ));
     assert!(world.is_mutation_poisoned());
 
-    let err = world
-        .for_each_mut::<Position>(&QuerySpec::new(), QueryParams::new(), |_, _| Ok(()))
+    let err = query
+        .for_each_mut(&mut world, QueryWindow::All, |_, _| Ok(()))
         .expect_err("poisoned");
 
     assert!(matches!(
@@ -376,15 +378,14 @@ fn for_each2_mut_preflight_rejects_insufficient_change_ticks() {
     world.insert(a, Velocity(1)).expect("a vel");
     world.insert(b, Position(2)).expect("b");
     world.insert(b, Velocity(2)).expect("b vel");
+    let mut query = world
+        .prepare_query2::<Position, Velocity>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
 
     world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
 
-    let err = world
-        .for_each2_mut::<Position, Velocity>(
-            &QuerySpec::new(),
-            QueryParams::new(),
-            |_, _, _| Ok(()),
-        )
+    let err = query
+        .for_each_mut_mut(&mut world, QueryWindow::All, |_, _, _| Ok(()))
         .expect_err("preflight");
 
     assert!(matches!(

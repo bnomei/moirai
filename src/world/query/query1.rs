@@ -9,11 +9,15 @@ use super::filter::{entity_matches, validate_exact_ids};
 use super::plan::{ResolvedPlan, TraversalSource};
 
 impl World {
-    pub fn query_fingerprint<T: 'static>(&mut self, spec: &QuerySpec) -> Result<u64, QueryError> {
+    pub(crate) fn query_fingerprint<T: 'static>(
+        &mut self,
+        spec: &QuerySpec,
+    ) -> Result<u64, QueryError> {
         Ok(self.resolve_query1_plan::<T>(spec)?.fingerprint)
     }
 
-    pub fn query<'w, 'c, T: 'static>(
+    #[allow(dead_code)]
+    pub(crate) fn query<'w, 'c, T: 'static>(
         &'w mut self,
         spec: &QuerySpec,
         params: QueryParams<'c>,
@@ -186,4 +190,122 @@ impl World {
     pub(crate) fn archetype_entity_slots(&self, archetype: usize) -> &[u32] {
         self.archetypes.entity_slots(archetype)
     }
+
+    pub(crate) fn table_archetypes(&self, component_index: usize) -> Option<&[usize]> {
+        self.table_archetype_cache
+            .get(component_index)
+            .and_then(|entry| entry.as_deref())
+    }
+
+    pub(crate) fn query_topology_revision(&self) -> u64 {
+        self.query_topology_revision
+    }
+
+    pub(crate) fn register_query_delta_cursor(&mut self) -> alloc::rc::Rc<core::cell::Cell<u64>> {
+        let cursor = alloc::rc::Rc::new(core::cell::Cell::new(self.query_delta_next_sequence));
+        self.query_delta_cursors
+            .push(alloc::rc::Rc::downgrade(&cursor));
+        cursor
+    }
+
+    pub(crate) fn collect_query_delta_entities(
+        &self,
+        cursor: &core::cell::Cell<u64>,
+        plan: &ResolvedPlan,
+        entities: &mut alloc::vec::Vec<EntityId>,
+        reverse: &mut alloc::vec::Vec<Option<usize>>,
+    ) {
+        for entity in entities.drain(..) {
+            reverse[entity.slot() as usize] = None;
+        }
+
+        let since = cursor.get();
+        let retained_start = self
+            .query_delta_changes
+            .front()
+            .map_or(self.query_delta_next_sequence, |(sequence, _, _)| *sequence);
+        // Entries are assigned contiguous sequence numbers. Convert the cursor
+        // directly into a VecDeque index so a current query does not rescan a
+        // long prefix retained for another, lagging query. Clamp deliberately:
+        // an older cursor consumes everything retained, while a newer cursor
+        // consumes nothing and is brought back to the world's current edge.
+        let offset = if since <= retained_start {
+            0
+        } else if since >= self.query_delta_next_sequence {
+            self.query_delta_changes.len()
+        } else {
+            usize::try_from(since - retained_start)
+                .unwrap_or(self.query_delta_changes.len())
+                .min(self.query_delta_changes.len())
+        };
+        for &(_, entity, component_index) in self.query_delta_changes.range(offset..) {
+            if !plan_depends_on_component(plan, component_index) {
+                continue;
+            }
+
+            let slot = entity.slot() as usize;
+            if reverse.len() <= slot {
+                reverse.resize(slot + 1, None);
+            }
+            if let Some(index) = reverse[slot] {
+                // Slot reuse can put multiple generations in the retained log.
+                // Only the most recent generation can determine final membership.
+                entities[index] = entity;
+            } else {
+                reverse[slot] = Some(entities.len());
+                entities.push(entity);
+            }
+        }
+        cursor.set(self.query_delta_next_sequence);
+    }
+
+    pub(crate) fn query_component_population(
+        &self,
+        component_index: usize,
+        is_table: bool,
+    ) -> usize {
+        if is_table {
+            self.archetypes.component_population(component_index as u32)
+        } else {
+            self.sparse_dense_slots(component_index)
+                .map_or(0, <[u32]>::len)
+        }
+    }
+
+    pub(crate) fn query_component_topology_revision(&self, component_index: usize) -> u64 {
+        self.query_component_revisions[component_index]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn query_delta_log_len_for_test(&self) -> usize {
+        self.query_delta_changes.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_query_delta_exhaustion_for_test(
+        &mut self,
+        cursor: &core::cell::Cell<u64>,
+        entity: EntityId,
+        component_index: usize,
+    ) {
+        cursor.set(u64::MAX - 1);
+        self.query_delta_changes
+            .push_back((u64::MAX - 1, entity, component_index));
+        self.query_delta_next_sequence = u64::MAX;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn query_delta_sequences_for_test(&self) -> alloc::vec::Vec<u64> {
+        self.query_delta_changes
+            .iter()
+            .map(|(sequence, _, _)| *sequence)
+            .collect()
+    }
+}
+
+fn plan_depends_on_component(plan: &ResolvedPlan, component_index: usize) -> bool {
+    plan.required_indices.contains(&component_index)
+        || plan.without_indices.contains(&component_index)
+        || plan.with_tag_indices.contains(&component_index)
+        || plan.without_tag_indices.contains(&component_index)
 }

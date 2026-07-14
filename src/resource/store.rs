@@ -15,9 +15,29 @@ pub(crate) struct ResourceStore {
     entries: Vec<Option<ResourceEntry>>,
     locked: Vec<TypeId>,
     scoped: Option<TypeId>,
-    scoped_added: Option<ChangeTick>,
     #[allow(clippy::type_complexity)]
     state_transition_readers: BTreeMap<TypeId, fn(&dyn Any) -> Option<ChangeTick>>,
+}
+
+pub(crate) struct ScopedResource<R> {
+    value: Box<dyn Any>,
+    added: ChangeTick,
+    changed: ChangeTick,
+    marker: core::marker::PhantomData<fn() -> R>,
+}
+
+impl<R: 'static> ScopedResource<R> {
+    pub(crate) fn get(&self) -> &R {
+        self.value
+            .downcast_ref::<R>()
+            .expect("scoped resource type matches registration")
+    }
+
+    pub(crate) fn get_mut(&mut self) -> &mut R {
+        self.value
+            .downcast_mut::<R>()
+            .expect("scoped resource type matches registration")
+    }
 }
 
 struct ResourceEntry {
@@ -33,7 +53,6 @@ impl ResourceStore {
             entries: Vec::new(),
             locked: Vec::new(),
             scoped: None,
-            scoped_added: None,
             state_transition_readers: BTreeMap::new(),
             registered_names: Vec::new(),
         }
@@ -87,13 +106,18 @@ impl ResourceStore {
         Ok(self.entries[index].is_some())
     }
 
-    pub fn prepare_scope<R: 'static>(&self) -> Result<(), WorldError> {
+    pub fn prepare_scope<R: 'static>(&self) -> Result<bool, WorldError> {
         self.ensure_accessible::<R>()?;
-        self.require_registered::<R>()?;
-        Ok(())
+        if self.scoped.is_some() {
+            return Err(WorldError::ResourceScoped {
+                name: String::from(type_name::<R>()),
+            });
+        }
+        let index = self.require_registered::<R>()?;
+        Ok(self.entries[index].is_some())
     }
 
-    pub fn take_for_scope<R: 'static>(&mut self) -> Result<Option<R>, WorldError> {
+    pub fn take_for_scope<R: 'static>(&mut self) -> Result<Option<ScopedResource<R>>, WorldError> {
         let type_id = TypeId::of::<R>();
         if self.scoped.is_some() {
             return Err(WorldError::ResourceScoped {
@@ -102,19 +126,21 @@ impl ResourceStore {
         }
         let index = self.require_registered::<R>()?;
         self.scoped = Some(type_id);
-        self.scoped_added = self.entries[index].as_ref().map(|entry| entry.added);
         Ok(self.entries[index].take().map(|entry| {
-            *entry
-                .value
-                .downcast::<R>()
-                .expect("resource type matches registration")
+            debug_assert!(entry.value.is::<R>());
+            ScopedResource {
+                value: entry.value,
+                added: entry.added,
+                changed: entry.changed,
+                marker: core::marker::PhantomData,
+            }
         }))
     }
 
     pub fn restore_scope<R: 'static>(
         &mut self,
-        value: R,
-        tick: ChangeTick,
+        resource: ScopedResource<R>,
+        changed: Option<ChangeTick>,
     ) -> Result<(), WorldError> {
         let type_id = TypeId::of::<R>();
         if self.scoped != Some(type_id) {
@@ -123,11 +149,10 @@ impl ResourceStore {
             });
         }
         let index = self.require_registered::<R>()?;
-        let added = self.scoped_added.take().unwrap_or(tick);
         self.entries[index] = Some(ResourceEntry {
-            value: Box::new(value),
-            added,
-            changed: tick,
+            value: resource.value,
+            added: resource.added,
+            changed: changed.unwrap_or(resource.changed),
         });
         self.scoped = None;
         Ok(())
@@ -282,7 +307,6 @@ impl ResourceStore {
 
     pub fn cancel_scope(&mut self) {
         self.scoped = None;
-        self.scoped_added = None;
     }
 
     fn index_of<R: 'static>(&self) -> Option<usize> {
@@ -408,7 +432,15 @@ mod tests {
         other.register::<Other>();
         other.scoped = Some(TypeId::of::<Other>());
         assert!(matches!(
-            other.restore_scope(Score(2), tick),
+            other.restore_scope(
+                ScopedResource::<Score> {
+                    value: Box::new(Score(2)),
+                    added: tick,
+                    changed: tick,
+                    marker: core::marker::PhantomData,
+                },
+                None,
+            ),
             Err(WorldError::ResourceScoped { .. })
         ));
 

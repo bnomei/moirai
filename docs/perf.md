@@ -1,4 +1,4 @@
-# Performance baselines
+# Performance baselines and capture protocol
 
 Recorded on the Phase 6 closure machine for reproducible same-host comparison. These numbers are not portable nanosecond budgets; they anchor regression review on identical hardware, toolchain, and bench configuration.
 
@@ -67,11 +67,31 @@ cargo test --release --features std --test allocation -- --test-threads=1
 
 Warmup/reservation covers command buffers, event payload pools, schedule set gates, and query plan caches before measurement.
 
-## Regression gate (same machine)
+## Current descriptive protocol
 
-1. Re-run `cargo bench` on the same host without changing power/thermal conditions.
-2. Compare medians; investigate if median regresses more than ~10% without a documented safety/correctness trade.
-3. Pair bench deltas with the release allocation test suite above for hot-path changes touching queries, events, commands, or schedule traversal.
+Timing results are descriptive evidence, not an admission gate. Run seven positive paired cycles in
+alternating AB/BA order. Preserve every endpoint, including failed commands, load spikes, thermal
+drift, and outliers; do not reject, discard, or exclude a capture based on host load. The summary
+separates endpoint statuses in statistics and carries both statuses into paired rows so failed
+captures remain visible rather than silently influencing a clean-looking aggregate.
+
+The prepared-query benchmark has a feature-gated retained ad-hoc control with the same Divan case
+name as the prepared candidate. This gives `perf_summarize.py` directly pairable rows:
+
+```sh
+uv run python scripts/perf_experiment.py \
+  --group prepared-query1 \
+  --cycles 7 \
+  --power-note "record current power and thermal context" \
+  --baseline-command "env MOIRAI_QUERY_CONTROL=adhoc cargo bench --features bench-internals --bench prepared_queries -- query1_paired_control --sample-count 100 --sample-size 100" \
+  --candidate-command "env MOIRAI_QUERY_CONTROL=prepared cargo bench --features bench-internals --bench prepared_queries -- query1_paired_control --sample-count 100 --sample-size 100"
+uv run python scripts/perf_summarize.py target/perf-results
+```
+
+Use a fresh `--output-dir` when an experiment should be summarized in isolation. Pair timing evidence
+with the single-threaded release allocation contracts for query, event, command, schedule, scratch,
+resource-scope, or system-local changes. A human may investigate a surprising distribution, but the
+scripts intentionally emit no threshold, pass/fail decision, or automatic exclusion.
 
 ## pd-asteroids comparison
 

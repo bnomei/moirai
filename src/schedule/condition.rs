@@ -13,6 +13,14 @@ type Predicate = Rc<dyn Fn(&World) -> bool>;
 #[derive(Clone)]
 pub struct Condition(ConditionKind);
 
+/// Invalid fixed-step cadence configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConditionError {
+    ZeroPeriod,
+    PeriodNotPowerOfTwo { period: u64 },
+    PhaseOutOfRange { period: u64, phase: u64 },
+}
+
 #[derive(Clone)]
 enum ConditionKind {
     Always,
@@ -21,6 +29,7 @@ enum ConditionKind {
     ResourceAdded(TypeId),
     ResourceChanged(TypeId),
     StateChanged(TypeId),
+    FixedStepMod { mask: u64, phase: u64 },
     And(Box<ConditionKind>, Box<ConditionKind>),
     Or(Box<ConditionKind>, Box<ConditionKind>),
     Predicate(Predicate),
@@ -49,6 +58,26 @@ impl Condition {
 
     pub fn state_changed<S: Eq + 'static>() -> Self {
         Self(ConditionKind::StateChanged(TypeId::of::<State<S>>()))
+    }
+
+    /// Runs on one phase of a power-of-two fixed-step cadence.
+    ///
+    /// The condition is false outside `FixedUpdate`. Fixed-step indices are
+    /// zero-based, so `(8, 0)` includes the first fixed substep.
+    pub fn fixed_step_mod(period: u64, phase: u64) -> Result<Self, ConditionError> {
+        if period == 0 {
+            return Err(ConditionError::ZeroPeriod);
+        }
+        if !period.is_power_of_two() {
+            return Err(ConditionError::PeriodNotPowerOfTwo { period });
+        }
+        if phase >= period {
+            return Err(ConditionError::PhaseOutOfRange { period, phase });
+        }
+        Ok(Self(ConditionKind::FixedStepMod {
+            mask: period - 1,
+            phase,
+        }))
     }
 
     /// Creates a cloneable condition from a read-only world predicate.
@@ -141,6 +170,9 @@ fn evaluate_kind(
             world.state_transition_tick_for(*type_id),
             context.state_transition_cursor(system_index, *type_id),
         ),
+        ConditionKind::FixedStepMod { mask, phase } => context
+            .fixed_step
+            .is_some_and(|step| step.index & mask == *phase),
         ConditionKind::And(left, right) => {
             evaluate_kind(left, world, system_index, context)
                 && evaluate_kind(right, world, system_index, context)
@@ -175,6 +207,9 @@ fn evaluate_kind_for_set(
             world.state_transition_tick_for(*type_id),
             context.state_transition_cursor_for_set(set_index, *type_id),
         ),
+        ConditionKind::FixedStepMod { mask, phase } => context
+            .fixed_step
+            .is_some_and(|step| step.index & mask == *phase),
         ConditionKind::And(left, right) => {
             evaluate_kind_for_set(left, world, set_index, context)
                 && evaluate_kind_for_set(right, world, set_index, context)
@@ -253,6 +288,27 @@ impl core::fmt::Debug for Condition {
     }
 }
 
+impl core::fmt::Display for ConditionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ZeroPeriod => f.write_str("fixed-step cadence period must be nonzero"),
+            Self::PeriodNotPowerOfTwo { period } => {
+                write!(
+                    f,
+                    "fixed-step cadence period {period} is not a power of two"
+                )
+            }
+            Self::PhaseOutOfRange { period, phase } => write!(
+                f,
+                "fixed-step cadence phase {phase} is outside period {period}"
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ConditionError {}
+
 fn resource_tick_advanced(current: Option<ChangeTick>, cursor: ChangeTick) -> bool {
     current.is_some_and(|tick| tick > cursor)
 }
@@ -270,6 +326,45 @@ mod tests {
 
     #[derive(Clone)]
     struct Score(#[allow(dead_code)] i32);
+
+    #[test]
+    fn fixed_step_mod_validates_binary_cadence() {
+        assert_eq!(
+            Condition::fixed_step_mod(0, 0).err(),
+            Some(ConditionError::ZeroPeriod)
+        );
+        assert_eq!(
+            Condition::fixed_step_mod(3, 0).err(),
+            Some(ConditionError::PeriodNotPowerOfTwo { period: 3 })
+        );
+        assert_eq!(
+            Condition::fixed_step_mod(4, 4).err(),
+            Some(ConditionError::PhaseOutOfRange {
+                period: 4,
+                phase: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn fixed_step_mod_uses_zero_based_mask_and_is_false_outside_fixed_update() {
+        let world = WorldBuilder::new().build().expect("world");
+        let condition = Condition::fixed_step_mod(4, 0).expect("condition");
+        let mut context = RunContext::new();
+        assert!(!condition.evaluate(&world, 0, &context));
+
+        for index in 0..8 {
+            context.fixed_step = Some(crate::time::FixedStep {
+                index,
+                delta: core::time::Duration::from_millis(16),
+            });
+            assert_eq!(condition.evaluate(&world, 0, &context), index % 4 == 0);
+            assert_eq!(
+                condition.evaluate_for_set(&world, 0, &context),
+                index % 4 == 0
+            );
+        }
+    }
 
     #[test]
     fn resource_added_and_changed_advance_system_cursors() {

@@ -35,19 +35,57 @@ pub(crate) enum Query1State<'w, T: 'static> {
         source: QueryCachedSource,
         index: usize,
     },
+    Borrowed {
+        ids: &'w [EntityId],
+        index: usize,
+        apply_temporal: bool,
+    },
     Done,
 }
 
 /// Immutable two-component query iterator.
 pub struct Query2<'w, 'c, A: 'static, B: 'static> {
-    pub(crate) inner: Query1<'w, 'c, A>,
+    pub(crate) world: &'w crate::world::World,
+    pub(crate) plan: Rc<crate::world::query::plan::ResolvedPlan>,
+    pub(crate) params_fingerprint: u64,
+    pub(crate) captured_now: crate::time::ChangeTick,
+    pub(crate) since: crate::time::ChangeTick,
+    pub(crate) cursor_committed: bool,
+    pub(crate) cursor: Option<&'c mut crate::query::QueryCursor>,
+    pub(crate) state: Query2State<'w>,
     pub(crate) second_index: usize,
     pub(crate) second_is_table: bool,
-    pub(crate) _marker: core::marker::PhantomData<fn() -> B>,
+    pub(crate) marker: core::marker::PhantomData<fn() -> (A, B)>,
+}
+
+pub(crate) enum Query2State<'w> {
+    Sparse {
+        slots: &'w [u32],
+        index: usize,
+    },
+    Table {
+        archetypes: &'w [usize],
+        archetype_index: usize,
+        row: usize,
+    },
+    Exact {
+        ids: Vec<EntityId>,
+        index: usize,
+    },
+    Cached {
+        source: QueryCachedSource,
+        index: usize,
+    },
+    Borrowed {
+        ids: &'w [EntityId],
+        index: usize,
+        apply_temporal: bool,
+    },
+    Done,
 }
 
 impl<'w, 'c, T: 'static> Query1<'w, 'c, T> {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn new(
         world: &'w crate::world::World,
         plan: Rc<crate::world::query::plan::ResolvedPlan>,
@@ -68,6 +106,38 @@ impl<'w, 'c, T: 'static> Query1<'w, 'c, T> {
             cursor_committed: false,
             cursor,
             additional_covered_required,
+            state,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_prepared(
+        world: &'w crate::world::World,
+        plan: Rc<crate::world::query::plan::ResolvedPlan>,
+        since: crate::time::ChangeTick,
+        captured_now: crate::time::ChangeTick,
+        cursor: Option<&'c mut crate::query::QueryCursor>,
+        materialized: Option<(&'w [EntityId], bool)>,
+        table_archetypes: Option<&'w [usize]>,
+    ) -> Result<Self, crate::query::QueryError> {
+        let state = if let Some((ids, apply_temporal)) = materialized {
+            Query1State::Borrowed {
+                ids,
+                index: 0,
+                apply_temporal,
+            }
+        } else {
+            world.query1_state::<T>(&plan, None, table_archetypes)?
+        };
+        Ok(Self {
+            world,
+            params_fingerprint: plan.fingerprint,
+            plan,
+            captured_now,
+            since,
+            cursor_committed: false,
+            cursor,
+            additional_covered_required: None,
             state,
         })
     }
@@ -203,6 +273,32 @@ impl<'w, 'c, T: 'static> Iterator for Query1<'w, 'c, T> {
                     }
                     self.state = Query1State::Done;
                 }
+                Query1State::Borrowed {
+                    ids,
+                    index,
+                    apply_temporal,
+                } => {
+                    while *index < ids.len() {
+                        let entity = ids[*index];
+                        *index += 1;
+                        if *apply_temporal
+                            && !crate::world::query::filter::entity_matches_temporal(
+                                self.world,
+                                entity,
+                                &self.plan,
+                                self.since,
+                                self.captured_now,
+                            )
+                        {
+                            continue;
+                        }
+                        let value = self.world.query1_match_cached::<T>(entity, &self.plan);
+                        if let Some(value) = value {
+                            return Some((entity, value));
+                        }
+                    }
+                    self.state = Query1State::Done;
+                }
             }
         }
     }
@@ -217,7 +313,7 @@ impl<'w, 'c, T: 'static> Drop for Query1<'w, 'c, T> {
 }
 
 impl<'w, 'c, A: 'static, B: 'static> Query2<'w, 'c, A, B> {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn new(
         world: &'w crate::world::World,
         plan: Rc<crate::world::query::plan::ResolvedPlan>,
@@ -229,21 +325,137 @@ impl<'w, 'c, A: 'static, B: 'static> Query2<'w, 'c, A, B> {
         second_index: usize,
         second_is_table: bool,
     ) -> Result<Self, crate::query::QueryError> {
+        let state = Self::state(world, &plan, cached, None, table_archetypes)?;
         Ok(Self {
-            inner: Query1::new(
-                world,
-                plan,
-                since,
-                captured_now,
-                cursor,
-                cached,
-                table_archetypes,
-                Some(second_index),
-            )?,
+            world,
+            params_fingerprint: plan.fingerprint,
+            plan,
+            captured_now,
+            since,
+            cursor_committed: false,
+            cursor,
+            state,
             second_index,
             second_is_table,
-            _marker: core::marker::PhantomData,
+            marker: core::marker::PhantomData,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_prepared(
+        world: &'w crate::world::World,
+        plan: Rc<crate::world::query::plan::ResolvedPlan>,
+        since: crate::time::ChangeTick,
+        captured_now: crate::time::ChangeTick,
+        cursor: Option<&'c mut crate::query::QueryCursor>,
+        materialized: Option<(&'w [EntityId], bool)>,
+        table_archetypes: Option<&'w [usize]>,
+        second_index: usize,
+        second_is_table: bool,
+    ) -> Result<Self, crate::query::QueryError> {
+        let state = Self::state(world, &plan, None, materialized, table_archetypes)?;
+        Ok(Self {
+            world,
+            params_fingerprint: plan.fingerprint,
+            plan,
+            captured_now,
+            since,
+            cursor_committed: false,
+            cursor,
+            state,
+            second_index,
+            second_is_table,
+            marker: core::marker::PhantomData,
+        })
+    }
+
+    fn state(
+        world: &'w crate::world::World,
+        plan: &crate::world::query::plan::ResolvedPlan,
+        cached: Option<QueryCachedSource>,
+        materialized: Option<(&'w [EntityId], bool)>,
+        table_archetypes: Option<&'w [usize]>,
+    ) -> Result<Query2State<'w>, crate::query::QueryError> {
+        if let Some((ids, apply_temporal)) = materialized {
+            return Ok(Query2State::Borrowed {
+                ids,
+                index: 0,
+                apply_temporal,
+            });
+        }
+        if let Some(source) = cached {
+            return Ok(Query2State::Cached { source, index: 0 });
+        }
+        match &plan.traversal {
+            crate::world::query::plan::TraversalSource::All => {
+                Err(crate::query::QueryError::WrongQuery {
+                    detail: alloc::string::String::from(
+                        "entity-only plan cannot back a typed query",
+                    ),
+                })
+            }
+            crate::world::query::plan::TraversalSource::Sparse { component_index } => {
+                let slots = world.sparse_dense_slots(*component_index).ok_or_else(|| {
+                    crate::query::QueryError::WrongStorageKind {
+                        name: alloc::format!("component {component_index}"),
+                    }
+                })?;
+                Ok(Query2State::Sparse { slots, index: 0 })
+            }
+            crate::world::query::plan::TraversalSource::Table { .. } => Ok(Query2State::Table {
+                archetypes: table_archetypes.expect("table archetypes prepared"),
+                archetype_index: 0,
+                row: 0,
+            }),
+            crate::world::query::plan::TraversalSource::Exact { ids } => Ok(Query2State::Exact {
+                ids: ids.clone(),
+                index: 0,
+            }),
+        }
+    }
+
+    fn commit_cursor_if_needed(&mut self) {
+        if self.cursor_committed {
+            return;
+        }
+        if let Some(cursor) = self.cursor.as_mut() {
+            if cursor.validate(self.world, self.params_fingerprint).is_ok() {
+                cursor.commit(self.captured_now);
+            }
+        }
+        self.cursor_committed = true;
+    }
+
+    fn match_entity(&self, entity: EntityId, filter: CandidateFilter) -> Option<(&'w A, &'w B)> {
+        let matches = match filter {
+            CandidateFilter::Full => crate::world::query::filter::entity_matches(
+                self.world,
+                entity,
+                &self.plan,
+                self.since,
+                self.captured_now,
+            ),
+            CandidateFilter::Temporal => crate::world::query::filter::entity_matches_temporal(
+                self.world,
+                entity,
+                &self.plan,
+                self.since,
+                self.captured_now,
+            ),
+            CandidateFilter::Trusted => true,
+        };
+        if !matches {
+            return None;
+        }
+        let first = self.world.query_component::<A>(
+            entity,
+            self.plan.primary_index,
+            self.plan.primary_is_table,
+        )?;
+        let second =
+            self.world
+                .query_component::<B>(entity, self.second_index, self.second_is_table)?;
+        Some((first, second))
     }
 }
 
@@ -252,14 +464,96 @@ impl<'w, 'c, A: 'static, B: 'static> Iterator for Query2<'w, 'c, A, B> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let (entity, first) = self.inner.next()?;
-            if let Some(second) =
-                self.inner
-                    .world
-                    .query2_second::<B>(entity, self.second_index, self.second_is_table)
-            {
+            let candidate = match &mut self.state {
+                Query2State::Done => {
+                    self.commit_cursor_if_needed();
+                    return None;
+                }
+                Query2State::Sparse { slots, index } => {
+                    let entity = slots
+                        .get(*index)
+                        .copied()
+                        .map(|slot| self.world.entity_from_slot(slot));
+                    *index += usize::from(entity.is_some());
+                    entity.map(|entity| (entity, CandidateFilter::Full))
+                }
+                Query2State::Table {
+                    archetypes,
+                    archetype_index,
+                    row,
+                } => {
+                    let mut entity = None;
+                    while *archetype_index < archetypes.len() && entity.is_none() {
+                        let slots = self
+                            .world
+                            .archetype_entity_slots(archetypes[*archetype_index]);
+                        if let Some(slot) = slots.get(*row).copied() {
+                            *row += 1;
+                            entity = Some(self.world.entity_from_slot(slot));
+                        } else {
+                            *archetype_index += 1;
+                            *row = 0;
+                        }
+                    }
+                    entity.map(|entity| (entity, CandidateFilter::Full))
+                }
+                Query2State::Exact { ids, index } => {
+                    let entity = ids.get(*index).copied();
+                    *index += usize::from(entity.is_some());
+                    entity.map(|entity| (entity, CandidateFilter::Full))
+                }
+                Query2State::Cached { source, index } => {
+                    let ids = match self
+                        .world
+                        .cached_query_entities(source, self.params_fingerprint)
+                    {
+                        Ok(ids) => ids,
+                        Err(_) => {
+                            self.state = Query2State::Done;
+                            continue;
+                        }
+                    };
+                    let entity = ids.get(*index).copied();
+                    *index += usize::from(entity.is_some());
+                    entity.map(|entity| (entity, CandidateFilter::Full))
+                }
+                Query2State::Borrowed {
+                    ids,
+                    index,
+                    apply_temporal,
+                } => {
+                    let entity = ids.get(*index).copied();
+                    *index += usize::from(entity.is_some());
+                    let filter = if *apply_temporal {
+                        CandidateFilter::Temporal
+                    } else {
+                        CandidateFilter::Trusted
+                    };
+                    entity.map(|entity| (entity, filter))
+                }
+            };
+            let Some((entity, filter)) = candidate else {
+                self.state = Query2State::Done;
+                continue;
+            };
+            if let Some((first, second)) = self.match_entity(entity, filter) {
                 return Some((entity, first, second));
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CandidateFilter {
+    Full,
+    Temporal,
+    Trusted,
+}
+
+impl<'w, 'c, A: 'static, B: 'static> Drop for Query2<'w, 'c, A, B> {
+    fn drop(&mut self) {
+        if matches!(self.state, Query2State::Done) {
+            self.commit_cursor_if_needed();
         }
     }
 }

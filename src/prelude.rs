@@ -1,8 +1,8 @@
 //! System-authoring essentials for Moirai hosts.
 
 pub use crate::{
-    App, AppBuilder, Bundle, Commands, ComponentOptions, DynamicBundle, EntityId, EntityRef,
-    EntityScratch, EntityScratchError, ExactIdPolicy, FlushMode, QueryCache, QueryCursor,
-    QueryEntities, QueryError, QueryIds, QueryParams, QueryResultCache, QuerySpec, StageOperation,
-    State, StateError, StorageKind, System, SystemSet, World, WorldTick,
+    App, AppBuilder, Bundle, Commands, ComponentOptions, DenseEntityScratch, DynamicBundle,
+    EntityId, EntityScratchError, ExactIdPolicy, FlushMode, PreparedQuery1, PreparedQuery2,
+    QueryCursor, QueryError, QueryPolicy, QuerySpec, QueryWindow, Revision, RevisionKey,
+    StageOperation, State, StateError, StorageKind, System, SystemSet, World, WorldTick,
 };

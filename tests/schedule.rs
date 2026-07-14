@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use moirai::component::ComponentOptions;
 use moirai::event::{EventOptions, EventReaderStart};
+use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 use moirai::schedule::FlushMode;
 use moirai::schedule::{stage, Condition, ScheduleBuilder, System, SystemSet};
 use moirai::state::{apply, State};
@@ -1823,4 +1824,182 @@ fn condition_or_runs_when_either_true() {
     let mut app = builder.build().expect("build");
     app.update(1.0 / 60.0).expect("update");
     assert_eq!(RAN.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn system_local_initializes_once_and_persists_across_runs() {
+    let initializations = Rc::new(Cell::new(0_u32));
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let init_counter = Rc::clone(&initializations);
+    let observed_runs = Rc::clone(&observed);
+
+    let mut builder = AppBuilder::new();
+    builder
+        .add_system(System::with_local(
+            "local",
+            stage::UPDATE,
+            move |_context| {
+                init_counter.set(init_counter.get() + 1);
+                Ok(0_u32)
+            },
+            move |_world, _dt, local| {
+                *local += 1;
+                observed_runs.borrow_mut().push(*local);
+                Ok(())
+            },
+        ))
+        .expect("system");
+
+    let mut app = builder.build().expect("app");
+    app.update(1.0 / 60.0).expect("first");
+    app.update(1.0 / 60.0).expect("second");
+
+    assert_eq!(initializations.get(), 1);
+    assert_eq!(&*observed.borrow(), &[1, 2]);
+}
+
+#[derive(Clone, Copy)]
+struct LocalQueryPosition(i32);
+
+#[test]
+fn system_local_prepared_query_tracks_entities_across_runs() {
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let observed_counts = Rc::clone(&observed);
+    let mut builder = AppBuilder::new();
+    builder
+        .world_builder()
+        .register_component::<LocalQueryPosition>(ComponentOptions::sparse())
+        .expect("component");
+    builder
+        .add_system(System::with_local(
+            "local-query",
+            stage::UPDATE,
+            |context| {
+                context
+                    .prepare_query1::<LocalQueryPosition>(
+                        QuerySpec::new(),
+                        QueryPolicy::DeltaMembership,
+                    )
+                    .map_err(|error| format!("{error:?}"))
+            },
+            move |world, _dt, query| {
+                let count = query
+                    .iter(world, QueryWindow::All)
+                    .map_err(|error| format!("{error:?}"))?
+                    .map(|(_, position)| position.0)
+                    .sum::<i32>();
+                observed_counts.borrow_mut().push(count);
+                if count == 0 {
+                    let entity = world
+                        .commands()
+                        .map_err(|error| format!("{error:?}"))?
+                        .spawn()
+                        .map_err(|error| format!("{error:?}"))?;
+                    world
+                        .commands()
+                        .map_err(|error| format!("{error:?}"))?
+                        .insert(entity, LocalQueryPosition(1))
+                        .map_err(|error| format!("{error:?}"))?;
+                }
+                Ok(())
+            },
+        ))
+        .expect("system");
+
+    let mut app = builder.build().expect("app");
+    app.update(1.0 / 60.0).expect("first");
+    app.update(1.0 / 60.0).expect("second");
+    assert_eq!(&*observed.borrow(), &[0, 1]);
+}
+
+#[test]
+fn failed_system_local_initialization_attaches_no_schedule_lease() {
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut failing = ScheduleBuilder::standard();
+    failing
+        .add_system(System::with_local(
+            "bad-local",
+            stage::UPDATE,
+            |_context| Err::<(), _>(String::from("nope")),
+            |_world, _dt, _local| Ok(()),
+        ))
+        .expect("add");
+
+    assert!(matches!(
+        failing.build(&mut world),
+        Err(BuildError::SystemInitialization { system, detail })
+            if system == "bad-local" && detail == "nope"
+    ));
+
+    let mut replacement = ScheduleBuilder::standard();
+    replacement
+        .add_system(System::new("replacement", stage::UPDATE, |_world, _dt| {}))
+        .expect("replacement");
+    replacement
+        .build(&mut world)
+        .expect("failed initialization must not leave a live lease");
+}
+
+#[test]
+fn failed_system_local_initialization_drops_prior_locals_atomically() {
+    struct LocalDrop(Rc<Cell<u32>>);
+
+    impl Drop for LocalDrop {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    let drops = Rc::new(Cell::new(0));
+    let local_drops = Rc::clone(&drops);
+    let mut world = WorldBuilder::new().build().expect("world");
+    let mut builder = ScheduleBuilder::standard();
+    builder
+        .add_system(System::with_local(
+            "initialized-first",
+            stage::UPDATE,
+            move |_| Ok(LocalDrop(local_drops)),
+            |_world, _dt, _local| Ok(()),
+        ))
+        .expect("first");
+    builder
+        .add_system(System::with_local(
+            "fails-second",
+            stage::UPDATE,
+            |_| Err::<(), _>(String::from("stop")),
+            |_world, _dt, _local| Ok(()),
+        ))
+        .expect("second");
+
+    assert!(matches!(
+        builder.build(&mut world),
+        Err(BuildError::SystemInitialization { system, detail })
+            if system == "fails-second" && detail == "stop"
+    ));
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn fixed_step_mod_observes_zero_based_binary_phases() {
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let observed_steps = Rc::clone(&observed);
+    let mut builder = AppBuilder::new();
+    builder
+        .schedule_builder()
+        .fixed(FixedConfig::new(Duration::from_millis(1)).expect("fixed"));
+    builder
+        .add_system(
+            System::new("cadenced", stage::FIXED_UPDATE, move |world, _dt| {
+                observed_steps
+                    .borrow_mut()
+                    .push(world.fixed_step().expect("fixed step").index);
+            })
+            .run_if(Condition::fixed_step_mod(4, 0).expect("cadence")),
+        )
+        .expect("system");
+
+    let mut app = builder.build().expect("app");
+    app.update(0.004).expect("first four steps");
+    app.update(0.004).expect("second four steps");
+    assert_eq!(&*observed.borrow(), &[0, 4]);
 }

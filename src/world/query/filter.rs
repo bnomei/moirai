@@ -102,6 +102,16 @@ pub(crate) fn entity_matches(
     if !entity_matches_structural(world, entity, plan) {
         return false;
     }
+    entity_matches_temporal(world, entity, plan, since, captured_now)
+}
+
+pub(crate) fn entity_matches_temporal(
+    world: &World,
+    entity: EntityId,
+    plan: &ResolvedPlan,
+    since: ChangeTick,
+    captured_now: ChangeTick,
+) -> bool {
     if !plan.added_indices.is_empty()
         && !plan.added_indices.iter().any(|&index| {
             tick_in_window(
@@ -138,29 +148,7 @@ pub(crate) fn entity_matches_with_covered(
     if !entity_matches_structural_with_covered(world, entity, plan, covered_required) {
         return false;
     }
-    if !plan.added_indices.is_empty()
-        && !plan.added_indices.iter().any(|&index| {
-            tick_in_window(
-                world.component_added_tick(entity, index),
-                since,
-                captured_now,
-            )
-        })
-    {
-        return false;
-    }
-    if !plan.changed_indices.is_empty()
-        && !plan.changed_indices.iter().any(|&index| {
-            tick_in_window(
-                world.component_changed_tick(entity, index),
-                since,
-                captured_now,
-            )
-        })
-    {
-        return false;
-    }
-    true
+    entity_matches_temporal(world, entity, plan, since, captured_now)
 }
 
 pub(crate) fn validate_exact_ids(world: &World, plan: &ResolvedPlan) -> Result<(), QueryError> {

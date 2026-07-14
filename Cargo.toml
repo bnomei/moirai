@@ -12,6 +12,7 @@ autobenches = false
 default = []
 std = []
 testkit = []
+bench-internals = []
 
 [dependencies]
 
@@ -58,6 +59,22 @@ harness = false
 [[bench]]
 name = "events"
 path = "benches/events.rs"
+harness = false
+
+[[bench]]
+name = "prepared_queries"
+path = "benches/prepared_queries.rs"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "runtime_support"
+path = "benches/runtime_support.rs"
+harness = false
+
+[[bench]]
+name = "consumer_hot_paths"
+path = "benches/consumer_hot_paths.rs"
 harness = false
 
 [[test]]

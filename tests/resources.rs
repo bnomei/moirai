@@ -70,27 +70,27 @@ fn duplicate_builder_seed_is_last_call_wins_with_one_initial_tick() {
 }
 
 #[test]
-fn resource_scope_reports_missing_without_mutation() {
+fn resource_scope_ref_reports_missing_without_mutation() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();
     let mut world = builder.build().expect("build");
 
     let seen = world
-        .resource_scope::<Score, _>(|value, _| value.is_none())
+        .resource_scope_ref::<Score, _>(|value, _| value.is_none())
         .expect("scope");
     assert!(seen);
     assert!(!world.contains_resource::<Score>());
 }
 
 #[test]
-fn resource_scope_updates_value() {
+fn resource_scope_mut_updates_value() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();
     let mut world = builder.build().expect("build");
     world.insert_resource(Score(1)).expect("seed");
 
     world
-        .resource_scope::<Score, _>(|value, _| {
+        .resource_scope_mut::<Score, _>(|value, _| {
             if let Some(score) = value {
                 score.0 = 5;
             }
@@ -110,14 +110,14 @@ fn resource_added_and_changed_ticks_absent_when_missing() {
 }
 
 #[test]
-fn resource_scope_rejects_revision_reads_of_the_scoped_resource() {
+fn resource_scope_ref_rejects_revision_reads_of_the_scoped_resource() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();
     let mut world = builder.build().expect("build");
     world.insert_resource(Score(1)).expect("seed");
 
     let result = world
-        .resource_scope::<Score, _>(|_, world| world.resource_changed_tick::<Score>())
+        .resource_scope_ref::<Score, _>(|_, world| world.resource_changed_tick::<Score>())
         .expect("scope result");
 
     assert!(matches!(
@@ -127,14 +127,14 @@ fn resource_scope_rejects_revision_reads_of_the_scoped_resource() {
 }
 
 #[test]
-fn resource_scope_restores_present_resource_after_unwind() {
+fn resource_scope_mut_restores_present_resource_after_unwind() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();
     let mut world = builder.build().expect("build");
     world.insert_resource(Score(7)).expect("seed");
 
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = world.resource_scope::<Score, _>(|value, _| {
+        let _ = world.resource_scope_mut::<Score, _>(|value, _| {
             value.expect("present").0 = 9;
             panic!("scope panic");
         });
@@ -146,19 +146,19 @@ fn resource_scope_restores_present_resource_after_unwind() {
     );
 
     let seen = world
-        .resource_scope::<Score, _>(|value, _| value.map(|score| score.0))
+        .resource_scope_ref::<Score, _>(|value, _| value.map(|score| score.0))
         .expect("sentinel cleared");
     assert_eq!(seen, Some(9));
 }
 
 #[test]
-fn resource_scope_clears_missing_resource_sentinel_after_unwind() {
+fn resource_scope_ref_clears_missing_resource_sentinel_after_unwind() {
     let mut builder = WorldBuilder::new();
     builder.register_resource::<Score>();
     let mut world = builder.build().expect("build");
 
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = world.resource_scope::<Score, _>(|value, _| {
+        let _ = world.resource_scope_ref::<Score, _>(|value, _| {
             assert!(value.is_none());
             panic!("scope panic");
         });
@@ -166,7 +166,7 @@ fn resource_scope_clears_missing_resource_sentinel_after_unwind() {
     assert!(panic.is_err());
 
     let missing = world
-        .resource_scope::<Score, _>(|value, _| value.is_none())
+        .resource_scope_ref::<Score, _>(|value, _| value.is_none())
         .expect("sentinel cleared");
     assert!(missing);
 }
@@ -180,7 +180,7 @@ impl Drop for DropTracked {
 }
 
 #[test]
-fn resource_scope_drops_values_exactly_once_across_exit_paths() {
+fn resource_scope_ref_drops_values_exactly_once_across_exit_paths() {
     let normal_drops = Rc::new(Cell::new(0));
     let mut builder = WorldBuilder::new();
     builder.register_resource::<DropTracked>();
@@ -189,7 +189,7 @@ fn resource_scope_drops_values_exactly_once_across_exit_paths() {
         .insert_resource(DropTracked(Rc::clone(&normal_drops)))
         .expect("seed");
     world
-        .resource_scope::<DropTracked, _>(|value, _| assert!(value.is_some()))
+        .resource_scope_ref::<DropTracked, _>(|value, _| assert!(value.is_some()))
         .expect("normal scope");
     assert_eq!(normal_drops.get(), 0);
     drop(world.remove_resource::<DropTracked>().expect("remove"));
@@ -217,7 +217,7 @@ fn resource_scope_drops_values_exactly_once_across_exit_paths() {
         .insert_resource(DropTracked(Rc::clone(&unwind_drops)))
         .expect("seed unwind case");
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = world.resource_scope::<DropTracked, _>(|value, _| {
+        let _ = world.resource_scope_ref::<DropTracked, _>(|value, _| {
             assert!(value.is_some());
             panic!("scope panic");
         });

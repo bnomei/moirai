@@ -58,9 +58,21 @@ pub(crate) fn collect_query1_entities(
     captured_now: ChangeTick,
 ) -> Vec<EntityId> {
     let mut out = Vec::new();
+    collect_query1_entities_into(world, plan, since, captured_now, &mut out);
+    out
+}
+
+pub(crate) fn collect_query1_entities_into(
+    world: &World,
+    plan: &ResolvedPlan,
+    since: ChangeTick,
+    captured_now: ChangeTick,
+    out: &mut Vec<EntityId>,
+) {
+    out.clear();
     match &plan.traversal {
         TraversalSource::All => {
-            world.collect_live_entities(&mut out);
+            world.collect_live_entities(out);
             out.retain(|&entity| entity_matches(world, entity, plan, since, captured_now));
         }
         TraversalSource::Sparse { component_index } => {
@@ -74,11 +86,11 @@ pub(crate) fn collect_query1_entities(
             }
         }
         TraversalSource::Table { component_index } => {
-            for archetype in world
+            for slots in world
                 .archetypes
-                .archetypes_with_component(*component_index as u32)
+                .entity_slot_slices_with_component(*component_index as u32)
             {
-                for &slot in world.archetype_entity_slots(archetype) {
+                for &slot in slots {
                     let entity = world.entity_from_slot(slot);
                     if entity_matches(world, entity, plan, since, captured_now) {
                         out.push(entity);
@@ -94,9 +106,9 @@ pub(crate) fn collect_query1_entities(
             }
         }
     }
-    out
 }
 
+#[allow(dead_code)]
 pub(crate) fn collect_query2_entities(
     world: &World,
     plan: &ResolvedPlan,

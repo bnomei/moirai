@@ -5,7 +5,7 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use moirai::component::ComponentOptions;
-use moirai::query::{QueryParams, QuerySpec};
+use moirai::query::{PreparedQuery1, QueryPolicy, QuerySpec, QueryWindow};
 use moirai::world::{World, WorldBuilder};
 use moirai::EntityId;
 
@@ -71,10 +71,6 @@ impl Model {
             .iter()
             .filter_map(|(slot, comps)| comps.contains(&Comp::Pos).then_some(*slot))
             .collect()
-    }
-
-    fn query_entities(&self) -> Vec<usize> {
-        self.entities.keys().copied().collect()
     }
 
     fn query_pos_vel(&self) -> Vec<usize> {
@@ -143,8 +139,11 @@ fn apply_op(world: &mut World, ids: &mut BTreeMap<usize, EntityId>, model: &mut 
 
 fn compare_query1(world: &mut World, model: &Model, ids: &BTreeMap<usize, EntityId>) {
     let spec = QuerySpec::new();
-    let actual_slots: Vec<usize> = world
-        .query::<Position>(&spec, QueryParams::new())
+    let mut query = world
+        .prepare_query1::<Position>(spec, QueryPolicy::Prepared)
+        .expect("prepare");
+    let actual_slots: Vec<usize> = query
+        .iter(world, QueryWindow::All)
         .expect("query")
         .filter_map(|(entity, _)| {
             ids.iter()
@@ -154,29 +153,15 @@ fn compare_query1(world: &mut World, model: &Model, ids: &BTreeMap<usize, Entity
     assert_eq!(actual_slots, model.query_pos());
 }
 
-fn compare_entity_query(world: &mut World, model: &Model, ids: &BTreeMap<usize, EntityId>) {
-    let actual: Vec<usize> = world
-        .query_ids(&QuerySpec::new(), QueryParams::new())
-        .expect("entities")
-        .filter_map(|entity| {
-            ids.iter()
-                .find_map(|(slot, id)| (*id == entity).then_some(*slot))
-        })
-        .collect();
-    assert_eq!(actual, model.query_entities());
-}
-
 fn compare_cached(
     world: &mut World,
     model: &Model,
     ids: &BTreeMap<usize, EntityId>,
-    cache: &moirai::query::QueryCache,
+    query: &mut PreparedQuery1<Position>,
 ) {
-    let spec = QuerySpec::new();
-    let params = QueryParams::new().membership_cache(cache);
-    let actual_slots: Vec<usize> = world
-        .query::<Position>(&spec, params)
-        .expect("cached")
+    let actual_slots: Vec<usize> = query
+        .iter(world, QueryWindow::All)
+        .expect("materialized")
         .filter_map(|(entity, _)| {
             ids.iter()
                 .find_map(|(slot, id)| (*id == entity).then_some(*slot))
@@ -206,16 +191,14 @@ fn randomized_query_matches_reference_model() {
     for op in trace {
         apply_op(&mut world, &mut ids, &mut model, op);
         compare_query1(&mut world, &model, &ids);
-        compare_entity_query(&mut world, &model, &ids);
-
         if cache.is_none() {
             cache = Some(
                 world
-                    .build_query_cache::<Position>(QuerySpec::new())
-                    .expect("cache"),
+                    .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::DeltaMembership)
+                    .expect("prepare delta membership"),
             );
         }
-        compare_cached(&mut world, &model, &ids, cache.as_ref().expect("cache"));
+        compare_cached(&mut world, &model, &ids, cache.as_mut().expect("query"));
     }
 }
 
@@ -237,8 +220,11 @@ fn query2_randomized_matches_reference_model() {
     for op in trace {
         apply_op(&mut world, &mut ids, &mut model, op);
         let expected = model.query_pos_vel();
-        let actual: Vec<usize> = world
-            .query2::<Position, Velocity>(&QuerySpec::new(), QueryParams::new())
+        let mut query = world
+            .prepare_query2::<Position, Velocity>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare query2");
+        let actual: Vec<usize> = query
+            .iter(&mut world, QueryWindow::All)
             .expect("query2")
             .filter_map(|(entity, _, _)| {
                 ids.iter()

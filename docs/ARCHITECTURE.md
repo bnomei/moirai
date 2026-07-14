@@ -163,16 +163,18 @@ pub use component::{ComponentId, ComponentOptions, StorageKind};
 pub use entity::EntityId;
 pub use event::{EventId, EventOptions, EventReader, EventRetention};
 pub use query::{
-    EntityRef, ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
-    QueryEntities, QueryError, QueryIds, QueryParams, QueryResultCache, QuerySpec,
+    ExactIdPolicy, PreparedQuery1, PreparedQuery2, Query1, Query2, QueryCommands, QueryCursor,
+    QueryEffects, QueryError, QueryPolicy, QuerySpec, QueryWindow,
 };
 pub use operation::StageOperation;
 pub use schedule::{
-    stage, FlushMode, Schedule, ScheduleBuilder, ScheduleError, StageId, System, SystemId, SystemSet,
+    stage, Condition, ConditionError, FlushMode, Schedule, ScheduleBuilder, ScheduleError, StageId,
+    System, SystemId, SystemInitContext, SystemSet,
 };
+pub use revision::{Revision, RevisionExhausted, RevisionKey};
 pub use state::State;
 pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
-pub use world::{Bundle, DynamicBundle, EntityScratch, EntityScratchError, World, WorldBuilder};
+pub use world::{Bundle, DenseEntityScratch, DynamicBundle, EntityScratchError, World, WorldBuilder};
 ```
 
 Low-level registries, raw command variants, storage containers, adapter types, and diagnostics do
@@ -184,11 +186,11 @@ not belong at the root.
 
 ```text
 App, AppBuilder, World, WorldTick,
-EntityId, EntityRef, EntityScratch, EntityScratchError, Commands, Bundle, DynamicBundle,
+EntityId, DenseEntityScratch, EntityScratchError, Commands, Bundle, DynamicBundle,
 ComponentOptions, StorageKind,
 System, SystemSet, FlushMode,
-ExactIdPolicy, QueryCache, QueryCursor, QueryEntities, QueryError, QueryIds, QueryParams,
-QueryResultCache, QuerySpec, StageOperation, State, StateError
+ExactIdPolicy, PreparedQuery1, PreparedQuery2, QueryCursor, QueryError, QueryPolicy, QuerySpec,
+QueryWindow, Revision, RevisionKey, StageOperation, State, StateError
 ```
 
 Do not export adapter names, `Q16`, schedule handles, event readers, or every root name from the
@@ -315,7 +317,8 @@ configure another cap/order explicitly. Fixed update is disabled until AppBuilde
 positive step; a build containing FixedUpdate systems without that configuration fails, and
 `FixedConfig` has no `Default`. Schedule owns the private accumulator.
 `world.fixed_step() -> Option<FixedStep>` exposes the current index/delta only while a fixed system
-runs (first index 1). The pd-asteroids eight-stage order and sea-of-grass stage graph are host
+runs (first index 0). `Condition::fixed_step_mod` supports validated power-of-two cadence phases.
+The pd-asteroids eight-stage order and sea-of-grass stage graph are host
 presets in their respective install functions, not Moirai API.
 
 The f32 update/render convenience validates finite, non-negative, Duration-representable input
@@ -345,11 +348,11 @@ constructs the generic transition system; AppBuilder never chooses its stage imp
   conflicts return a contextual error.
 - `ComponentId` cannot be fabricated with a public unchecked constructor. Raw conversion, if
   needed for diagnostics, is explicitly named and does not imply cross-world stability.
-- `ComponentId`, `EventId`, and query-cache handles retain a private cloned `WorldOwner` token plus
-  a slot/generation where relevant. They are Clone rather than Copy and reject cross-World use.
-  `EventReader` and `QueryCursor` also carry mutable progress, deliberately do not implement Clone,
-  and require an explicit owner-validated `fork` for an independent cursor. Hot execution resolves
-  handles to private dense ids.
+- `ComponentId`, `EventId`, prepared queries, and cursors retain a private cloned `WorldOwner`
+  token and reject cross-World use. `EventReader` and `QueryCursor` carry mutable progress,
+  deliberately do not implement Clone, and require an explicit owner-validated `fork` for an
+  independent cursor. Prepared queries are affine and keep resolved execution state local to one
+  system.
 - `EntityId` is an opaque 16-byte Copy handle with a private `u32` World owner token and packed
   `u32` slot/`u32` generation (initial generation 1). It has no public raw bit conversion.
   Cross-World use is rejected even when slot/generation happen to coincide, and same-World stale
@@ -363,9 +366,10 @@ constructs the generic transition system; AppBuilder never chooses its stage imp
 - World owns a checked monotonic `ChangeTick` independent from WorldTick. Component/resource
   add/change metadata records it, so filters and conditions detect mutations between fixed
   substeps sharing one WorldTick. Mutable access conservatively advances it when granted;
-  structural flushes stamp committed additions/removals. `World::resource_scope` safely marks one
-  resource type as scoped while a callback receives that value and the rest of World; same-type
-  access is rejected rather than aliased.
+  structural flushes stamp committed additions/removals. `World::resource_scope_ref` preserves
+  ticks for immutable access; `World::resource_scope_mut` advances the changed tick exactly once
+  when the resource is present. Both mark one resource type as scoped while a callback receives
+  that value and the rest of World; same-type access is rejected rather than aliased.
 - Typed events are the default: `add_event::<E>`, `send::<E>`, `event_reader::<E>`,
   `System::emits::<E>`, and `System::consumes::<E>`, all under one explicit
   `E: Clone + 'static` broadcast contract. No named/dynamic public event API is published.
@@ -418,20 +422,23 @@ ScheduleBuilder defaults Update stages to Final, while the standard Update opera
 Stage (including after each fixed substep). A structural flush policy attached to a Render stage is
 a build error rather than an ignored option.
 
-`QuerySpec` and `QueryParams` have private fields and builder methods. This lets Moirai add filters
-without a breaking public-field change and prevents invalid combinations. User mistakes return
-`QueryError`; unknown components and unsupported cache/filter combinations do not panic.
+`QuerySpec` has private fields and builder methods. This lets Moirai add filters without a breaking
+public-field change and prevents invalid combinations. User mistakes return `QueryError`; unknown
+components and unsupported policy/filter combinations do not panic.
 
 `QuerySpec::added::<T>` and `changed::<T>` compare component `ChangeTick` metadata over the frozen
-half-open window `(since, captured_now]`, using an explicit `QueryParams::since` or an
-owner/spec-scoped `QueryCursor` created from start or now. A lazy Query1/Query2 traversal advances
-its cursor to `captured_now` only when iteration reaches exhaustion; dropping it early leaves the
-cursor unchanged. Closure traversal advances only after complete success. QueryCache may accelerate
-structural membership and apply those filters at traversal; QueryResultCache rejects moving
-added/changed windows because a materialized structural id list cannot represent them honestly.
+half-open window `(since, captured_now]`, using `QueryWindow::Since` or an owner/spec-scoped
+`QueryCursor` created from start or now. A lazy Query1/Query2 traversal advances its cursor to
+`captured_now` only when iteration reaches exhaustion; dropping it early leaves the cursor
+unchanged. Closure traversal advances only after complete success. `QueryPolicy::Membership`
+materializes structural membership and applies temporal filters during traversal;
+`QueryPolicy::DeltaMembership` maintains membership from per-entity structural mutation logs;
+`QueryPolicy::Result` rejects moving added/changed windows because a materialized result cannot
+represent them honestly.
 
-Keep `Query1`, `Query2`, `QueryCache`, and `QueryResultCache` for source parity. Mutable traversal is
-closure-scoped (`for_each_mut`, `for_each2_mut`). Distinct storage/column indices are sorted and
+Public execution begins with `World::prepare_query1` or `World::prepare_query2`; ad-hoc query and
+cache-handle entry points remain crate-private differential controls. Mutable traversal is
+closure-scoped (`for_each_mut`, `for_each_mut_mut`, and `for_each_mut_read`). Distinct storage/column indices are sorted and
 borrowed with `split_at_mut`; mixed sparse/table access splits World storage fields; erased values
 are then safely downcast. The mandatory sparse/sparse, table/table, sparse/table, and tag-filter
 matrix is covered, while same-type aliasing is rejected. Moirai does not promise a general mutable
@@ -442,11 +449,11 @@ Closure traversal may opt into `query::QueryEffects`, a restricted view over dis
 fields. It can queue structural Commands and send declared events without exposing World/resources
 beside live component references. Its command view is available only in Update operation context;
 Render may still use its declared event view. Resource-dependent traversal uses
-`World::resource_scope`.
+`World::resource_scope_ref` or `World::resource_scope_mut`.
 
 World-owned query entries use the private `WorldOwner` token allocated by a checked `AtomicU32`
-counter. Public cache handles retain a cloned token plus a private slot/generation, so cross-World
-and stale cache use is rejected without exposing public raw keys.
+counter. Prepared queries retain the owner token, so cross-World use is rejected without exposing
+public raw keys.
 
 ### Exhaustion taxonomy
 
@@ -562,7 +569,8 @@ begin_frame(SettleTick) → binding.sample → runtime.loom → binding.apply
 The Wyrd-owned `WyrdDriver<P, B>` owns a bound `wyrd::Runtime`, resolved ports, the host binding, an independent
 `SettleTick`, and a retained fault state. `WyrdBinding` is a real downstream extension trait because
 game code must define how components/resources map to senses and effects. The scheduled driver uses
-`World::resource_scope` and is ordered as one system (for SoG: after actions, before portal travel).
+the appropriate immutable or mutable resource scope and is ordered as one system (for SoG: after
+actions, before portal travel).
 Separate Sample/Loom/Apply systems are an advanced escape hatch, not the default API.
 SettleTick exhaustion is checked before beginning a step and never wraps.
 
@@ -571,7 +579,7 @@ Tick domains must never be conflated:
 | Tick | Advances when | First executed value |
 | --- | --- | ---: |
 | `WorldTick` | each outer `App::update` | 1 (pd parity) |
-| `FixedStep` | each fixed substep | 1 |
+| `FixedStep` | each fixed substep | 0 |
 | `SettleTick` | one atomic Wyrd driver step completes Apply | 0 |
 | Anapao `StepIndex` | replay driver performs a step | 0 |
 

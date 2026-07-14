@@ -99,6 +99,7 @@ fn prepare_query1<T: 'static>(
         &changed_indices,
         &traversal,
         Some(primary_index),
+        None,
         spec.exact_id_policy,
     );
 
@@ -173,13 +174,22 @@ fn prepare_query2<A: 'static, B: 'static>(
 
     let traversal = if let Some(ids) = &spec.exact_ids {
         TraversalSource::Exact { ids: ids.clone() }
-    } else if primary_is_table {
-        TraversalSource::Table {
-            component_index: primary_index,
-        }
     } else {
-        TraversalSource::Sparse {
-            component_index: primary_index,
+        let primary_len = world.query_component_population(primary_index, primary_is_table);
+        let second_len = world.query_component_population(second_index, second_is_table);
+        let (driver_index, driver_is_table) = if second_len < primary_len {
+            (second_index, second_is_table)
+        } else {
+            (primary_index, primary_is_table)
+        };
+        if driver_is_table {
+            TraversalSource::Table {
+                component_index: driver_index,
+            }
+        } else {
+            TraversalSource::Sparse {
+                component_index: driver_index,
+            }
         }
     };
 
@@ -192,6 +202,7 @@ fn prepare_query2<A: 'static, B: 'static>(
         &changed_indices,
         &traversal,
         Some(primary_index),
+        Some(second_index),
         spec.exact_id_policy,
     );
 
@@ -243,6 +254,7 @@ pub(crate) fn resolve_entities(
         &added_indices,
         &changed_indices,
         &traversal,
+        None,
         None,
         spec.exact_id_policy,
     );
@@ -449,11 +461,18 @@ fn fingerprint_plan(
     changed: &[usize],
     traversal: &TraversalSource,
     primary: Option<usize>,
+    secondary: Option<usize>,
     exact_id_policy: Option<ExactIdPolicy>,
 ) -> u64 {
     let mut hasher = FnvHasher::new();
-    primary.is_none().hash(&mut hasher);
+    match (primary, secondary) {
+        (None, None) => 0u8.hash(&mut hasher),
+        (Some(_), None) => 1u8.hash(&mut hasher),
+        (Some(_), Some(_)) => 2u8.hash(&mut hasher),
+        (None, Some(_)) => unreachable!("secondary query component requires a primary"),
+    }
     primary.hash(&mut hasher);
+    secondary.hash(&mut hasher);
     for index in required {
         index.hash(&mut hasher);
     }
@@ -476,13 +495,11 @@ fn fingerprint_plan(
         TraversalSource::All => {
             0u8.hash(&mut hasher);
         }
-        TraversalSource::Sparse { component_index } => {
+        TraversalSource::Sparse { .. } | TraversalSource::Table { .. } => {
+            // Sparse/table traversal and the selected component are physical
+            // execution choices. The semantic identity is already captured by
+            // the primary and normalized filter component sets above.
             1u8.hash(&mut hasher);
-            component_index.hash(&mut hasher);
-        }
-        TraversalSource::Table { component_index } => {
-            2u8.hash(&mut hasher);
-            component_index.hash(&mut hasher);
         }
         TraversalSource::Exact { ids } => {
             3u8.hash(&mut hasher);
@@ -540,6 +557,12 @@ mod tests {
     struct Velocity(#[allow(dead_code)] i32);
 
     #[derive(Clone, Copy)]
+    struct TablePosition(#[allow(dead_code)] i32);
+
+    #[derive(Clone, Copy)]
+    struct TableVelocity(#[allow(dead_code)] i32);
+
+    #[derive(Clone, Copy)]
     struct Player;
 
     #[derive(Clone, Copy)]
@@ -553,6 +576,12 @@ mod tests {
         builder
             .register_component::<Velocity>(ComponentOptions::sparse())
             .expect("vel");
+        builder
+            .register_component::<TablePosition>(ComponentOptions::table())
+            .expect("table pos");
+        builder
+            .register_component::<TableVelocity>(ComponentOptions::table())
+            .expect("table vel");
         builder
             .register_component::<Player>(ComponentOptions::tag())
             .expect("tag");
@@ -640,5 +669,59 @@ mod tests {
             .resolve_query2_plan::<Position, Velocity>(&spec)
             .expect("plan");
         assert!(matches!(plan.traversal, TraversalSource::Exact { .. }));
+    }
+
+    #[test]
+    fn query2_uses_smaller_driver_across_storage_pairs() {
+        let mut world = world();
+        let first = world.spawn().expect("first");
+        for value in 0..3 {
+            let entity = if value == 0 {
+                first
+            } else {
+                world.spawn().expect("entity")
+            };
+            world.insert(entity, Position(value)).expect("sparse A");
+            world.insert(entity, TablePosition(value)).expect("table A");
+        }
+        world.insert(first, Velocity(1)).expect("sparse B");
+        world.insert(first, TableVelocity(1)).expect("table B");
+
+        let sparse_b = world.component_index::<Velocity>().expect("sparse B index");
+        let table_b = world
+            .component_index::<TableVelocity>()
+            .expect("table B index");
+
+        let (ss, _, _) = world
+            .resolve_query2_plan::<Position, Velocity>(&QuerySpec::new())
+            .expect("sparse/sparse");
+        assert!(matches!(
+            ss.traversal,
+            TraversalSource::Sparse { component_index } if component_index == sparse_b
+        ));
+
+        let (st, _, _) = world
+            .resolve_query2_plan::<Position, TableVelocity>(&QuerySpec::new())
+            .expect("sparse/table");
+        assert!(matches!(
+            st.traversal,
+            TraversalSource::Table { component_index } if component_index == table_b
+        ));
+
+        let (ts, _, _) = world
+            .resolve_query2_plan::<TablePosition, Velocity>(&QuerySpec::new())
+            .expect("table/sparse");
+        assert!(matches!(
+            ts.traversal,
+            TraversalSource::Sparse { component_index } if component_index == sparse_b
+        ));
+
+        let (tt, _, _) = world
+            .resolve_query2_plan::<TablePosition, TableVelocity>(&QuerySpec::new())
+            .expect("table/table");
+        assert!(matches!(
+            tt.traversal,
+            TraversalSource::Table { component_index } if component_index == table_b
+        ));
     }
 }

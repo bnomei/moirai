@@ -29,6 +29,10 @@ pub enum BuildError {
     DuplicateSystemLabel {
         label: String,
     },
+    SystemInitialization {
+        system: String,
+        detail: String,
+    },
     CrossOperationEdge {
         from: String,
         to: String,
@@ -112,6 +116,9 @@ impl core::fmt::Display for BuildError {
             Self::UnknownSystemSet { label } => write!(f, "unknown system set '{label}'"),
             Self::DuplicateSystemSet { label } => write!(f, "duplicate system set '{label}'"),
             Self::DuplicateSystemLabel { label } => write!(f, "duplicate system label '{label}'"),
+            Self::SystemInitialization { system, detail } => {
+                write!(f, "system '{system}' initialization failed: {detail}")
+            }
             Self::CrossStageSystemEdge { from, to } => {
                 write!(f, "cross-stage system edge: {from} -> {to}")
             }

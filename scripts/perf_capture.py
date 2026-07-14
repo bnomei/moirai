@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from typing import Any, Sequence
 
 
@@ -189,6 +190,13 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True, help="Filesystem-safe capture label")
     parser.add_argument(
+        "--cohort",
+        help=(
+            "Filesystem-safe identity shared by paired captures from one experiment "
+            "(default: a new random identity)"
+        ),
+    )
+    parser.add_argument(
         "--power-note",
         default="not recorded",
         help="Power source/mode and other thermal context",
@@ -199,11 +207,6 @@ def parse_arguments() -> argparse.Namespace:
         default=pathlib.Path("target/perf-results"),
         help="Ignored directory for capture artifacts",
     )
-    parser.add_argument(
-        "--max-load-one",
-        type=float,
-        help="Reject the capture when the one-minute load average exceeds this value",
-    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command[:1] == ["--"]:
@@ -212,6 +215,17 @@ def parse_arguments() -> argparse.Namespace:
         parser.error("a command is required after --")
     if not args.label or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for character in args.label):
         parser.error("--label may contain only letters, digits, dash, underscore, and dot")
+    if args.cohort is not None and (
+        not args.cohort
+        or any(
+            character
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+            for character in args.cohort
+        )
+    ):
+        parser.error("--cohort may contain only letters, digits, dash, underscore, and dot")
+    if args.cohort is None:
+        args.cohort = uuid.uuid4().hex
     return args
 
 
@@ -223,8 +237,9 @@ def main() -> int:
     args = parse_arguments()
     cwd = pathlib.Path.cwd().resolve()
     captured_at = dt.datetime.now(dt.timezone.utc)
-    timestamp = captured_at.strftime("%Y%m%dT%H%M%SZ")
-    capture_dir = (cwd / args.output_dir / f"{timestamp}-{args.label}").resolve()
+    timestamp = captured_at.strftime("%Y%m%dT%H%M%S%fZ")
+    capture_identity = f"{args.cohort}-{args.label}"
+    capture_dir = (cwd / args.output_dir / f"{timestamp}-{capture_identity}").resolve()
     capture_dir.mkdir(parents=True, exist_ok=False)
 
     environment = {
@@ -233,8 +248,9 @@ def main() -> int:
         if key in RELEVANT_ENVIRONMENT_KEYS or key.startswith(RELEVANT_ENVIRONMENT_PREFIXES)
     }
     metadata: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "label": args.label,
+        "cohort": args.cohort,
         "captured_at_utc": captured_at.isoformat(),
         "working_directory": str(cwd),
         "command_argv": args.command,
@@ -260,32 +276,11 @@ def main() -> int:
         },
         "power_note": args.power_note,
         "load_average_at_start": load_average(),
-        "max_load_one": args.max_load_one,
         "status": "running",
     }
     metadata["git"].update(capture_working_tree(cwd, capture_dir))
     metadata_path = capture_dir / "metadata.json"
     write_json(metadata_path, metadata)
-
-    initial_load = metadata["load_average_at_start"]
-    if (
-        args.max_load_one is not None
-        and initial_load is not None
-        and initial_load[0] > args.max_load_one
-    ):
-        metadata["status"] = "load-rejected"
-        metadata["exit_code"] = 75
-        metadata["error"] = (
-            f"one-minute load average {initial_load[0]:.2f} exceeds "
-            f"the configured maximum {args.max_load_one:.2f}"
-        )
-        metadata["duration_seconds"] = 0.0
-        metadata["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
-        metadata["load_average_at_end"] = load_average()
-        write_json(metadata_path, metadata)
-        print(f"performance capture rejected: {metadata['error']}", file=sys.stderr)
-        print(f"performance capture: {capture_dir}", file=sys.stderr)
-        return 75
 
     started = time.monotonic()
     try:
@@ -297,6 +292,8 @@ def main() -> int:
         )
     except OSError as error:
         result = None
+        (capture_dir / "stdout.log").write_bytes(b"")
+        (capture_dir / "stderr.log").write_text(str(error) + "\n", encoding="utf-8")
         metadata["status"] = "launch-error"
         metadata["error"] = str(error)
         exit_code = 127

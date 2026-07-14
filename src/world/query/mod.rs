@@ -1,8 +1,9 @@
 pub(crate) mod cache;
 pub(crate) mod cached_source;
-mod collect;
+pub(crate) mod collect;
+#[allow(dead_code)]
 mod entities;
-mod filter;
+pub(crate) mod filter;
 mod ids;
 pub(crate) mod mutate;
 pub(crate) mod plan;

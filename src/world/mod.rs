@@ -16,19 +16,19 @@ mod resources;
 mod spawn;
 
 pub use crate::command::Commands;
-pub use access::{EntityScratch, EntityScratchError};
+pub use access::{DenseEntityScratch, EntityScratchError};
 pub use builder::WorldBuilder;
 pub use bundle::{Bundle, BundleWriter, DynamicBundle};
 pub use error::{EventReadError, FlushError, FlushReport, WorldAllocatorError, WorldError};
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
 use alloc::rc::{Rc, Weak};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::{type_name, TypeId};
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
 use crate::command::{CommandQueue, ErasedComponentValue};
 use crate::component::{ComponentId, ComponentRegistry, StorageKind};
@@ -67,6 +67,9 @@ pub struct World {
     query_topology_revision: u64,
     query_entity_revision: u64,
     query_component_revisions: Vec<u64>,
+    query_delta_changes: VecDeque<(u64, EntityId, usize)>,
+    query_delta_next_sequence: u64,
+    query_delta_cursors: Vec<Weak<Cell<u64>>>,
     membership_caches: Vec<crate::world::query::cache::MembershipCacheSlot>,
     result_caches: Vec<crate::world::query::result_cache::ResultCacheSlot>,
     table_archetype_cache: Vec<Option<alloc::vec::Vec<usize>>>,
@@ -114,6 +117,9 @@ impl World {
             query_topology_revision: 1,
             query_entity_revision: 1,
             query_component_revisions: alloc::vec![1; component_count],
+            query_delta_changes: VecDeque::new(),
+            query_delta_next_sequence: 0,
+            query_delta_cursors: Vec::new(),
             membership_caches: Vec::new(),
             result_caches: Vec::new(),
             table_archetype_cache: Vec::new(),
@@ -139,6 +145,61 @@ impl World {
         }
         self.table_archetype_cache.clear();
         self.table_archetype_cache_topology = 0;
+    }
+
+    pub(crate) fn record_component_query_topology(
+        &mut self,
+        entity: EntityId,
+        component_index: usize,
+    ) {
+        self.bump_component_query_topology(component_index);
+        self.prune_query_delta_changes();
+        self.rebase_query_delta_sequences_if_exhausted();
+        let sequence = self.query_delta_next_sequence;
+        self.query_delta_next_sequence += 1;
+        self.query_delta_changes
+            .push_back((sequence, entity, component_index));
+    }
+
+    fn rebase_query_delta_sequences_if_exhausted(&mut self) {
+        if self.query_delta_next_sequence != u64::MAX {
+            return;
+        }
+
+        let retained_start = self
+            .query_delta_changes
+            .front()
+            .map_or(self.query_delta_next_sequence, |(sequence, _, _)| *sequence);
+        assert!(
+            retained_start != 0,
+            "query delta sequence space exhausted while the entire u64 log remains live"
+        );
+        for (sequence, _, _) in &mut self.query_delta_changes {
+            *sequence -= retained_start;
+        }
+        for cursor in self.query_delta_cursors.iter().filter_map(Weak::upgrade) {
+            cursor.set(cursor.get().saturating_sub(retained_start));
+        }
+        self.query_delta_next_sequence -= retained_start;
+    }
+
+    fn prune_query_delta_changes(&mut self) {
+        self.query_delta_cursors
+            .retain(|cursor| cursor.strong_count() != 0);
+        let retain_from = self
+            .query_delta_cursors
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(|cursor| cursor.get())
+            .min()
+            .unwrap_or(self.query_delta_next_sequence);
+        while self
+            .query_delta_changes
+            .front()
+            .is_some_and(|(sequence, _, _)| *sequence < retain_from)
+        {
+            self.query_delta_changes.pop_front();
+        }
     }
 
     pub(crate) fn ensure_table_archetypes(&mut self, component_index: usize) -> &[usize] {
@@ -1075,7 +1136,7 @@ mod tests {
         world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
         world.insert_resource(Score(2)).expect("consume last tick");
 
-        let result = world.resource_scope::<Score, _>(|_, _| ());
+        let result = world.resource_scope_mut::<Score, _>(|_, _| ());
         assert!(matches!(result, Err(WorldError::ChangeTickExhausted)));
         assert_eq!(
             world.resource::<Score>().expect("unchanged"),
@@ -1094,7 +1155,7 @@ mod tests {
         world.insert_resource(Score(1)).expect("seed");
 
         world
-            .resource_scope::<Score, _>(|value, _| {
+            .resource_scope_mut::<Score, _>(|value, _| {
                 if let Some(score) = value {
                     score.0 = 5;
                 }
@@ -1102,6 +1163,75 @@ mod tests {
             .expect("scope");
 
         assert_eq!(world.resource::<Score>().expect("get"), Some(&Score(5)));
+    }
+
+    #[test]
+    fn resource_scope_ref_preserves_ticks_and_mut_scope_marks_present_only() {
+        #[derive(Debug, PartialEq)]
+        struct Score(i32);
+        #[derive(Debug, PartialEq)]
+        struct Other(i32);
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<Score>();
+        builder.register_resource::<Other>();
+        let mut world = builder.build().expect("build");
+        world.insert_resource(Score(1)).expect("seed");
+
+        world
+            .resource_scope_ref::<Score, _>(|value, _| {
+                assert_eq!(value, Some(&Score(1)));
+            })
+            .expect("ref scope");
+        assert_eq!(
+            world.resource_changed_tick::<Score>().expect("tick"),
+            Some(ChangeTick::from_raw(1))
+        );
+
+        world
+            .resource_scope_mut::<Other, _>(|value, _| assert!(value.is_none()))
+            .expect("missing mut scope");
+        world.insert_resource(Other(2)).expect("insert other");
+        assert_eq!(
+            world.resource_changed_tick::<Other>().expect("tick"),
+            Some(ChangeTick::from_raw(2))
+        );
+
+        world
+            .resource_scope_mut::<Score, _>(|value, _| value.expect("score").0 = 3)
+            .expect("mut scope");
+        assert_eq!(
+            world.resource_changed_tick::<Score>().expect("tick"),
+            Some(ChangeTick::from_raw(3))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn resource_scope_ref_restores_exact_ticks_after_unwind() {
+        #[derive(Debug, PartialEq)]
+        struct Score(i32);
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<Score>();
+        let mut world = builder.build().expect("build");
+        world.insert_resource(Score(1)).expect("seed");
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = world.resource_scope_ref::<Score, _>(|value, _| {
+                assert_eq!(value, Some(&Score(1)));
+                panic!("scope panic");
+            });
+        }));
+        assert!(panic.is_err());
+        assert_eq!(
+            world.resource_added_tick::<Score>().expect("added"),
+            Some(ChangeTick::from_raw(1))
+        );
+        assert_eq!(
+            world.resource_changed_tick::<Score>().expect("changed"),
+            Some(ChangeTick::from_raw(1))
+        );
     }
 
     #[test]

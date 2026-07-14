@@ -1,6 +1,6 @@
 use moirai::component::ComponentOptions;
 use moirai::world::{DynamicBundle, WorldBuilder, WorldError};
-use moirai::{EntityScratch, EntityScratchError, State, StateError};
+use moirai::{DenseEntityScratch, EntityScratchError, State, StateError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TableA(i32);
@@ -20,7 +20,7 @@ fn entity_scratch_round_trips_live_values_and_reports_absence() {
     let mut world = WorldBuilder::new().build().expect("build");
     let entity = world.spawn().expect("spawn");
     let missing = world.spawn().expect("spawn missing");
-    let mut scratch = EntityScratch::new(&world);
+    let mut scratch = DenseEntityScratch::new(&world);
 
     assert!(scratch.is_empty());
     assert_eq!(scratch.get(&world, entity).expect("live missing"), None);
@@ -45,7 +45,7 @@ fn entity_scratch_rejects_wrong_world_before_entity_validation() {
     let mut world_a = WorldBuilder::new().build().expect("world a");
     let world_b = WorldBuilder::new().build().expect("world b");
     let entity = world_a.spawn().expect("spawn");
-    let mut scratch = EntityScratch::new(&world_a);
+    let mut scratch = DenseEntityScratch::new(&world_a);
     scratch.insert(&world_a, entity, 1).expect("insert");
 
     assert_eq!(
@@ -70,7 +70,7 @@ fn entity_scratch_rejects_reserved_stale_and_reused_generations() {
         .expect("commands")
         .spawn()
         .expect("reserve");
-    let mut scratch = EntityScratch::new(&world);
+    let mut scratch = DenseEntityScratch::new(&world);
     assert_eq!(
         scratch.insert(&world, reserved, 1),
         Err(EntityScratchError::EntityNotLive { entity: reserved })
@@ -110,7 +110,7 @@ fn entity_scratch_retain_live_removes_stale_and_preserves_live_values() {
     let mut world = WorldBuilder::new().build().expect("build");
     let stale = world.spawn().expect("stale");
     let live = world.spawn().expect("live");
-    let mut scratch = EntityScratch::new(&world);
+    let mut scratch = DenseEntityScratch::new(&world);
     scratch.insert(&world, stale, 1).expect("insert stale");
     scratch.insert(&world, live, 2).expect("insert live");
     world.despawn(stale).expect("despawn");
@@ -136,7 +136,7 @@ fn entity_scratch_values_drop_exactly_once_across_all_ownership_paths() {
     let mut world = WorldBuilder::new().build().expect("build");
     let entity = world.spawn().expect("spawn");
     let drops = Rc::new(Cell::new(0));
-    let mut scratch = EntityScratch::new(&world);
+    let mut scratch = DenseEntityScratch::new(&world);
 
     scratch
         .insert(&world, entity, DropValue(drops.clone()))

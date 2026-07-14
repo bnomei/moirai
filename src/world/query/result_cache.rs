@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::vec::Vec;
 
 use crate::entity::EntityId;
@@ -34,7 +36,7 @@ impl ResultCacheSlot {
 }
 
 impl World {
-    pub fn build_entity_query_result_cache(
+    pub(crate) fn build_entity_query_result_cache(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
@@ -67,7 +69,7 @@ impl World {
         })
     }
 
-    pub fn build_query_result_cache<T: 'static>(
+    pub(crate) fn build_query_result_cache<T: 'static>(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
@@ -100,7 +102,7 @@ impl World {
         })
     }
 
-    pub fn build_query2_result_cache<A: 'static, B: 'static>(
+    pub(crate) fn build_query2_result_cache<A: 'static, B: 'static>(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryResultCache, QueryError> {
@@ -216,7 +218,7 @@ impl World {
     }
 
     #[cfg(any(test, feature = "testkit"))]
-    pub fn invalidate_query_result_cache(&mut self, cache: &QueryResultCache) {
+    pub(crate) fn invalidate_query_result_cache(&mut self, cache: &QueryResultCache) {
         self.invalidate_result_cache_handle(cache);
     }
 

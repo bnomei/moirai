@@ -7,7 +7,8 @@ use super::filter::validate_exact_ids;
 use super::plan::TraversalSource;
 
 impl World {
-    pub fn query2<'w, 'c, A: 'static, B: 'static>(
+    #[allow(dead_code)]
+    pub(crate) fn query2<'w, 'c, A: 'static, B: 'static>(
         &'w mut self,
         spec: &QuerySpec,
         params: QueryParams<'c>,
@@ -55,16 +56,16 @@ impl World {
         )
     }
 
-    pub(crate) fn query2_second<B: 'static>(
+    pub(crate) fn query_component<T: 'static>(
         &self,
         entity: EntityId,
-        second_index: usize,
-        second_is_table: bool,
-    ) -> Option<&B> {
-        if second_is_table {
-            self.archetypes.get_table(entity, second_index as u32)
+        component_index: usize,
+        is_table: bool,
+    ) -> Option<&T> {
+        if is_table {
+            self.archetypes.get_table(entity, component_index as u32)
         } else {
-            self.sparse_store_by_index::<B>(second_index)
+            self.sparse_store_by_index::<T>(component_index)
                 .ok()?
                 .get(entity)
         }

@@ -1,7 +1,7 @@
 //! Query-side effects and deferred commands during schedule execution.
 use moirai::component::ComponentOptions;
 use moirai::event::{EventOptions, EventReaderStart};
-use moirai::query::{QueryParams, QuerySpec};
+use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 use moirai::schedule::{stage, System};
 use moirai::world::{Bundle, BundleWriter, WorldBuilder, WorldError};
 use moirai::{AppBuilder, QueryError};
@@ -40,22 +40,21 @@ fn query_effects_spawn_during_update_commits_on_flush() {
     app_builder
         .add_system(System::new("mutate", stage::UPDATE, |world, _dt| {
             let mut spawned = None;
-            world
-                .for_each_mut_with_effects::<Position>(
-                    &QuerySpec::new(),
-                    QueryParams::new(),
-                    |_, pos, effects| {
-                        pos.0 += 1;
-                        spawned = Some(
-                            effects
-                                .commands()
-                                .expect("commands")
-                                .spawn()
-                                .expect("spawn"),
-                        );
-                        Ok(())
-                    },
-                )
+            let mut query = world
+                .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+                .expect("prepare");
+            query
+                .for_each_mut_with_effects(world, QueryWindow::All, |_, pos, effects| {
+                    pos.0 += 1;
+                    spawned = Some(
+                        effects
+                            .commands()
+                            .expect("commands")
+                            .spawn()
+                            .expect("spawn"),
+                    );
+                    Ok(())
+                })
                 .expect("mutate");
             let entity = spawned.expect("spawned");
             world.insert_resource(Spawned(entity)).expect("track");
@@ -96,15 +95,14 @@ fn query_effects_send_during_update() {
     app_builder
         .add_system(
             System::new("emit", stage::UPDATE, |world, _dt| {
-                world
-                    .for_each_mut_with_effects::<Position>(
-                        &QuerySpec::new(),
-                        QueryParams::new(),
-                        |_, _, effects| {
-                            effects.send(Damage(7)).expect("send");
-                            Ok(())
-                        },
-                    )
+                let mut query = world
+                    .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+                    .expect("prepare");
+                query
+                    .for_each_mut_with_effects(world, QueryWindow::All, |_, _, effects| {
+                        effects.send(Damage(7)).expect("send");
+                        Ok(())
+                    })
                     .expect("mutate");
             })
             .emits::<Damage>(),
@@ -153,15 +151,14 @@ fn query_effects_reject_undeclared_send_before_channel_mutation() {
             "undeclared",
             stage::UPDATE,
             move |world, _dt| {
-                world
-                    .for_each_mut_with_effects::<Position>(
-                        &QuerySpec::new(),
-                        QueryParams::new(),
-                        |_, _, effects| {
-                            saw_rejection.set(effects.send(Damage(3)).is_err());
-                            Ok(())
-                        },
-                    )
+                let mut query = world
+                    .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+                    .expect("prepare");
+                query
+                    .for_each_mut_with_effects(world, QueryWindow::All, |_, _, effects| {
+                        saw_rejection.set(effects.send(Damage(3)).is_err());
+                        Ok(())
+                    })
                     .expect("query");
             },
         ))
@@ -208,19 +205,18 @@ fn query_effects_despawn_during_update() {
                 .expect("resource")
                 .expect("victim")
                 .0;
-            world
-                .for_each_mut_with_effects::<Position>(
-                    &QuerySpec::new(),
-                    QueryParams::new(),
-                    |_, _, effects| {
-                        effects
-                            .commands()
-                            .expect("commands")
-                            .despawn(victim)
-                            .expect("despawn");
-                        Ok(())
-                    },
-                )
+            let mut query = world
+                .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+                .expect("prepare");
+            query
+                .for_each_mut_with_effects(world, QueryWindow::All, |_, _, effects| {
+                    effects
+                        .commands()
+                        .expect("commands")
+                        .despawn(victim)
+                        .expect("despawn");
+                    Ok(())
+                })
                 .expect("mutate");
         }))
         .expect("cull");
@@ -245,15 +241,14 @@ fn query_effects_send_unregistered_event_errors() {
     let entity = world.spawn().expect("spawn");
     world.insert(entity, Position(1)).expect("insert");
 
-    let err = world
-        .for_each_mut_with_effects::<Position>(
-            &QuerySpec::new(),
-            QueryParams::new(),
-            |_, _, effects| {
-                effects.send(Damage(1))?;
-                Ok(())
-            },
-        )
+    let mut query = world
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
+    let err = query
+        .for_each_mut_with_effects(&mut world, QueryWindow::All, |_, _, effects| {
+            effects.send(Damage(1))?;
+            Ok(())
+        })
         .expect_err("unregistered");
 
     assert!(matches!(err, QueryError::WrongQuery { .. }));
@@ -289,21 +284,20 @@ fn query2_effects_spawn_during_update_commits_on_flush() {
     app_builder
         .add_system(System::new("mutate", stage::UPDATE, |world, _dt| {
             let mut spawned = None;
-            world
-                .for_each2_mut_with_effects::<Position, Velocity>(
-                    &QuerySpec::new(),
-                    QueryParams::new(),
-                    |_, _, _, effects| {
-                        spawned = Some(
-                            effects
-                                .commands()
-                                .expect("commands")
-                                .spawn()
-                                .expect("spawn"),
-                        );
-                        Ok(())
-                    },
-                )
+            let mut query = world
+                .prepare_query2::<Position, Velocity>(QuerySpec::new(), QueryPolicy::Prepared)
+                .expect("prepare");
+            query
+                .for_each_mut_mut_with_effects(world, QueryWindow::All, |_, _, _, effects| {
+                    spawned = Some(
+                        effects
+                            .commands()
+                            .expect("commands")
+                            .spawn()
+                            .expect("spawn"),
+                    );
+                    Ok(())
+                })
                 .expect("mutate");
             let entity = spawned.expect("spawned");
             world.insert_resource(Spawned(entity)).expect("track");
@@ -339,14 +333,14 @@ fn query_effects_rejects_commands_during_render() {
         .expect("seed");
     app_builder
         .add_system(System::new("draw", stage::RENDER, |world, _dt| {
-            let result = world.for_each_mut_with_effects::<Position>(
-                &QuerySpec::new(),
-                QueryParams::new(),
-                |_, _, effects| {
+            let mut query = world
+                .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+                .expect("prepare");
+            let result =
+                query.for_each_mut_with_effects(world, QueryWindow::All, |_, _, effects| {
                     let _ = effects.commands()?;
                     Ok(())
-                },
-            );
+                });
             assert!(matches!(result, Err(QueryError::BorrowConflict { .. })));
         }))
         .expect("draw");
@@ -380,19 +374,18 @@ fn query_effects_insert_remove_and_bundle_are_deferred_safely() {
         .expect("seed");
     app_builder
         .add_system(System::new("mutate", stage::UPDATE, |world, _dt| {
-            world
-                .for_each_mut_with_effects::<Position>(
-                    &QuerySpec::new(),
-                    QueryParams::new(),
-                    |entity, position, effects| {
-                        position.0 += 1;
-                        let mut commands = effects.commands()?;
-                        commands.insert(entity, Damage(3))?;
-                        commands.remove::<Velocity>(entity)?;
-                        commands.insert_bundle(entity, (HealthForQuery(4),))?;
-                        Ok(())
-                    },
-                )
+            let mut query = world
+                .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+                .expect("prepare");
+            query
+                .for_each_mut_with_effects(world, QueryWindow::All, |entity, position, effects| {
+                    position.0 += 1;
+                    let mut commands = effects.commands()?;
+                    commands.insert(entity, Damage(3))?;
+                    commands.remove::<Velocity>(entity)?;
+                    commands.insert_bundle(entity, (HealthForQuery(4),))?;
+                    Ok(())
+                })
                 .expect("mutate");
         }))
         .expect("mutate");
@@ -403,9 +396,12 @@ fn query_effects_insert_remove_and_bundle_are_deferred_safely() {
 
     let mut app = app_builder.build().expect("app");
     app.update(1.0 / 60.0).expect("update");
-    let entity = app
+    let mut query = app
         .world_mut()
-        .query::<Position>(&QuerySpec::new(), QueryParams::new())
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
+    let entity = query
+        .iter(app.world_mut(), QueryWindow::All)
         .expect("query")
         .next()
         .expect("entity")
@@ -459,19 +455,18 @@ fn query_bundle_rejection_is_dedicated_and_transactional() {
         .expect("seed");
     builder
         .add_system(System::new("reject", stage::UPDATE, |world, _dt| {
-            world
-                .for_each_mut_with_effects::<Position>(
-                    &QuerySpec::new(),
-                    QueryParams::new(),
-                    |entity, _, effects| {
-                        let error = effects
-                            .commands()?
-                            .insert_bundle(entity, RejectedQueryBundle)
-                            .expect_err("reject");
-                        assert!(matches!(error, QueryError::CommandRejected { .. }));
-                        Ok(())
-                    },
-                )
+            let mut query = world
+                .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+                .expect("prepare");
+            query
+                .for_each_mut_with_effects(world, QueryWindow::All, |entity, _, effects| {
+                    let error = effects
+                        .commands()?
+                        .insert_bundle(entity, RejectedQueryBundle)
+                        .expect_err("reject");
+                    assert!(matches!(error, QueryError::CommandRejected { .. }));
+                    Ok(())
+                })
                 .expect("query");
             assert!(!world.has_pending_commands());
         }))
@@ -479,9 +474,12 @@ fn query_bundle_rejection_is_dedicated_and_transactional() {
 
     let mut app = builder.build().expect("build");
     app.update(1.0 / 60.0).expect("update");
-    let entity = app
+    let mut query = app
         .world_mut()
-        .query::<Position>(&QuerySpec::new(), QueryParams::new())
+        .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
+    let entity = query
+        .iter(app.world_mut(), QueryWindow::All)
         .expect("query")
         .next()
         .expect("entity")

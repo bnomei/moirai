@@ -58,6 +58,7 @@ impl<'a> QueryParams<'a> {
         Ok(ChangeTick::ZERO)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn commit_cursor(
         &mut self,
         fingerprint: u64,

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
@@ -8,11 +10,26 @@ use crate::storage::{SparseStore, TypedSparseStorage};
 use crate::time::ChangeTick;
 use crate::world::World;
 
-use super::collect::{collect_query1_entities, collect_query2_entities};
-use super::filter::{entity_matches, validate_exact_ids};
+use super::collect::{
+    collect_query1_entities, collect_query1_entities_into, collect_query2_entities,
+};
+use super::filter::{entity_matches, entity_matches_temporal, validate_exact_ids};
+
+enum PreparedCandidates<'a> {
+    Borrowed(&'a [EntityId]),
+    Scratch(&'a [EntityId]),
+}
+
+impl PreparedCandidates<'_> {
+    fn as_slice(&self) -> &[EntityId] {
+        match self {
+            Self::Borrowed(ids) | Self::Scratch(ids) => ids,
+        }
+    }
+}
 
 impl World {
-    pub fn for_each_mut<T>(
+    pub(crate) fn for_each_mut<T>(
         &mut self,
         spec: &QuerySpec,
         params: QueryParams<'_>,
@@ -24,7 +41,7 @@ impl World {
         self.for_each_mut_inner(spec, params, |entity, value, _| f(entity, value))
     }
 
-    pub fn for_each_mut_with_effects<T>(
+    pub(crate) fn for_each_mut_with_effects<T>(
         &mut self,
         spec: &QuerySpec,
         params: QueryParams<'_>,
@@ -36,7 +53,7 @@ impl World {
         self.for_each_mut_inner(spec, params, f)
     }
 
-    pub fn for_each2_mut<A, B>(
+    pub(crate) fn for_each2_mut<A, B>(
         &mut self,
         spec: &QuerySpec,
         params: QueryParams<'_>,
@@ -49,7 +66,7 @@ impl World {
         self.for_each2_mut_inner(spec, params, |entity, a, b, _| f(entity, a, b))
     }
 
-    pub fn for_each2_mut_with_effects<A, B>(
+    pub(crate) fn for_each2_mut_with_effects<A, B>(
         &mut self,
         spec: &QuerySpec,
         params: QueryParams<'_>,
@@ -163,6 +180,124 @@ impl World {
 
         params.commit_cursor(plan.fingerprint, self, captured_now)?;
         Ok(())
+    }
+
+    pub(crate) fn for_each_mut_resolved<T: 'static>(
+        &mut self,
+        plan: &super::plan::ResolvedPlan,
+        materialized: Option<(&[EntityId], bool)>,
+        scratch: &mut Vec<EntityId>,
+        since: ChangeTick,
+        captured_now: ChangeTick,
+        mut f: impl FnMut(EntityId, &mut T, &mut QueryEffects<'_>) -> Result<(), QueryError>,
+    ) -> Result<(), QueryError> {
+        let candidates = self.prepared_candidates(plan, materialized, since, captured_now, scratch);
+        self.preflight_change_ticks(candidates.as_slice().len())?;
+        for &entity in candidates.as_slice() {
+            let tick = self.issue_change_tick_query()?;
+            if plan.primary_is_table {
+                self.visit_table_mut(plan.primary_index as u32, entity, tick, |value, effects| {
+                    f(entity, value, effects)
+                })?;
+            } else {
+                self.visit_sparse_mut::<T>(plan.primary_index, entity, tick, |value, effects| {
+                    f(entity, value, effects)
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_each2_mut_resolved<A: 'static, B: 'static>(
+        &mut self,
+        plan: &super::plan::ResolvedPlan,
+        second_index: usize,
+        second_is_table: bool,
+        materialized: Option<(&[EntityId], bool)>,
+        scratch: &mut Vec<EntityId>,
+        since: ChangeTick,
+        captured_now: ChangeTick,
+        mut f: impl FnMut(EntityId, &mut A, &mut B, &mut QueryEffects<'_>) -> Result<(), QueryError>,
+    ) -> Result<(), QueryError> {
+        if plan.primary_index == second_index {
+            return Err(QueryError::DuplicateMutableComponent {
+                name: String::from(type_name::<A>()),
+            });
+        }
+        let candidates = self.prepared_candidates(plan, materialized, since, captured_now, scratch);
+        self.preflight_change_ticks(candidates.as_slice().len())?;
+        for &entity in candidates.as_slice() {
+            let tick = self.issue_change_tick_query()?;
+            self.visit_two_mut::<A, B>(
+                plan.primary_index,
+                plan.primary_is_table,
+                second_index,
+                second_is_table,
+                entity,
+                tick,
+                |a, b, effects| f(entity, a, b, effects),
+            )?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_each2_mut_read_resolved<A: 'static, B: 'static>(
+        &mut self,
+        plan: &super::plan::ResolvedPlan,
+        second_index: usize,
+        second_is_table: bool,
+        materialized: Option<(&[EntityId], bool)>,
+        scratch: &mut Vec<EntityId>,
+        since: ChangeTick,
+        captured_now: ChangeTick,
+        mut f: impl FnMut(EntityId, &mut A, &B, &mut QueryEffects<'_>) -> Result<(), QueryError>,
+    ) -> Result<(), QueryError> {
+        if plan.primary_index == second_index {
+            return Err(QueryError::DuplicateMutableComponent {
+                name: String::from(type_name::<A>()),
+            });
+        }
+        let candidates = self.prepared_candidates(plan, materialized, since, captured_now, scratch);
+        self.preflight_change_ticks(candidates.as_slice().len())?;
+        for &entity in candidates.as_slice() {
+            let tick = self.issue_change_tick_query()?;
+            self.visit_mut_read::<A, B>(
+                plan.primary_index,
+                plan.primary_is_table,
+                second_index,
+                second_is_table,
+                entity,
+                tick,
+                |a, b, effects| f(entity, a, b, effects),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn prepared_candidates<'a>(
+        &self,
+        plan: &super::plan::ResolvedPlan,
+        materialized: Option<(&'a [EntityId], bool)>,
+        since: ChangeTick,
+        captured_now: ChangeTick,
+        scratch: &'a mut Vec<EntityId>,
+    ) -> PreparedCandidates<'a> {
+        let Some((ids, apply_temporal)) = materialized else {
+            collect_query1_entities_into(self, plan, since, captured_now, scratch);
+            return PreparedCandidates::Scratch(scratch);
+        };
+        if !apply_temporal {
+            return PreparedCandidates::Borrowed(ids);
+        }
+        scratch.clear();
+        scratch.extend(
+            ids.iter()
+                .copied()
+                .filter(|&entity| entity_matches_temporal(self, entity, plan, since, captured_now)),
+        );
+        PreparedCandidates::Scratch(scratch)
     }
 
     pub(crate) fn resolve_cached_entities(
@@ -398,6 +533,110 @@ impl World {
             }
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn visit_mut_read<A, B>(
+        &mut self,
+        primary_index: usize,
+        primary_is_table: bool,
+        second_index: usize,
+        second_is_table: bool,
+        entity: EntityId,
+        tick: ChangeTick,
+        mut f: impl FnMut(&mut A, &B, &mut QueryEffects<'_>) -> Result<(), QueryError>,
+    ) -> Result<(), QueryError>
+    where
+        A: 'static,
+        B: 'static,
+    {
+        let run_guard = self.run_guard_state();
+        let owner = self.owner_token();
+        let command_queue = &mut self.command_queue;
+        let allocator = &mut self.allocator;
+        let events = &mut self.events;
+        let mut effects =
+            QueryEffects::from_parts(command_queue, allocator, events, run_guard, owner);
+
+        match (primary_is_table, second_is_table) {
+            (false, false) => {
+                let (store_a, store_b) = split_sparse_stores_mut_read::<A, B>(
+                    &mut self.sparse_stores,
+                    primary_index,
+                    second_index,
+                )?;
+                let a = store_a.get_mut_with_tick(entity, tick).ok_or_else(|| {
+                    QueryError::TraversalAborted {
+                        entity,
+                        detail: alloc::format!("entity missing {}", type_name::<A>()),
+                    }
+                })?;
+                let b = store_b
+                    .get(entity)
+                    .ok_or_else(|| QueryError::TraversalAborted {
+                        entity,
+                        detail: alloc::format!("entity missing {}", type_name::<B>()),
+                    })?;
+                f(a, b, &mut effects)
+            }
+            (true, true) => {
+                let (a, b) = self
+                    .archetypes
+                    .get_mut_read_table::<A, B>(
+                        entity,
+                        primary_index as u32,
+                        second_index as u32,
+                        tick,
+                    )
+                    .ok_or_else(|| QueryError::TraversalAborted {
+                        entity,
+                        detail: String::from("entity missing query2 table components"),
+                    })?;
+                f(a, b, &mut effects)
+            }
+            (false, true) => {
+                let store = self
+                    .sparse_stores
+                    .get_mut(primary_index)
+                    .and_then(|store| store.typed_mut::<A>())
+                    .ok_or_else(|| QueryError::WrongStorageKind {
+                        name: alloc::format!("component {primary_index}"),
+                    })?;
+                let a = store.get_mut_with_tick(entity, tick).ok_or_else(|| {
+                    QueryError::TraversalAborted {
+                        entity,
+                        detail: alloc::format!("entity missing {}", type_name::<A>()),
+                    }
+                })?;
+                let b = self
+                    .archetypes
+                    .get_table::<B>(entity, second_index as u32)
+                    .ok_or_else(|| QueryError::TraversalAborted {
+                        entity,
+                        detail: alloc::format!("entity missing {}", type_name::<B>()),
+                    })?;
+                f(a, b, &mut effects)
+            }
+            (true, false) => {
+                let b = self
+                    .sparse_stores
+                    .get(second_index)
+                    .and_then(|store| store.typed::<B>())
+                    .and_then(|store| store.get(entity))
+                    .ok_or_else(|| QueryError::TraversalAborted {
+                        entity,
+                        detail: alloc::format!("entity missing {}", type_name::<B>()),
+                    })?;
+                let a = self
+                    .archetypes
+                    .get_table_mut::<A>(entity, primary_index as u32, tick)
+                    .ok_or_else(|| QueryError::TraversalAborted {
+                        entity,
+                        detail: alloc::format!("entity missing {}", type_name::<A>()),
+                    })?;
+                f(a, b, &mut effects)
+            }
+        }
+    }
 }
 
 #[allow(clippy::needless_lifetimes)]
@@ -428,6 +667,46 @@ fn split_sparse_stores_mut<'a, A: 'static, B: 'static>(
         let (left, right) = stores.split_at_mut(index_a);
         let b = left[index_b]
             .typed_mut::<B>()
+            .ok_or_else(|| QueryError::WrongStorageKind {
+                name: alloc::format!("component {index_b}"),
+            })?;
+        let a = right[0]
+            .typed_mut::<A>()
+            .ok_or_else(|| QueryError::WrongStorageKind {
+                name: alloc::format!("component {index_a}"),
+            })?;
+        Ok((a, b))
+    }
+}
+
+#[allow(clippy::needless_lifetimes)]
+fn split_sparse_stores_mut_read<'a, A: 'static, B: 'static>(
+    stores: &'a mut [SparseStore],
+    index_a: usize,
+    index_b: usize,
+) -> Result<(&'a mut TypedSparseStorage<A>, &'a TypedSparseStorage<B>), QueryError> {
+    if index_a == index_b {
+        return Err(QueryError::DuplicateMutableComponent {
+            name: String::from("duplicate sparse component index"),
+        });
+    }
+    if index_a < index_b {
+        let (left, right) = stores.split_at_mut(index_b);
+        let a = left[index_a]
+            .typed_mut::<A>()
+            .ok_or_else(|| QueryError::WrongStorageKind {
+                name: alloc::format!("component {index_a}"),
+            })?;
+        let b = right[0]
+            .typed::<B>()
+            .ok_or_else(|| QueryError::WrongStorageKind {
+                name: alloc::format!("component {index_b}"),
+            })?;
+        Ok((a, b))
+    } else {
+        let (left, right) = stores.split_at_mut(index_a);
+        let b = left[index_b]
+            .typed::<B>()
             .ok_or_else(|| QueryError::WrongStorageKind {
                 name: alloc::format!("component {index_b}"),
             })?;

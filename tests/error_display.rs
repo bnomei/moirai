@@ -221,7 +221,7 @@ fn query_error_display_variants() {
     );
     assert_display(
         &QueryError::MovingChangeWindow,
-        "added/changed filters require QueryCache, not QueryResultCache",
+        "added/changed filters require a traversal or membership policy, not Result",
     );
     assert_display(
         &QueryError::UnsupportedCachePolicy {

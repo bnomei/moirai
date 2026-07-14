@@ -56,7 +56,7 @@ Each `PHASE_*.md` is a **delegation-ready spec** (requirements, design, tasks, v
 | [PHASE_2_CORE_STORAGE.md](./PHASE_2_CORE_STORAGE.md) | Checked identity, registration, storage, and Q16 |
 | [PHASE_3_WORLD_LIFECYCLE.md](./PHASE_3_WORLD_LIFECYCLE.md) | World, commands, resources, events |
 | [PHASE_4_SCHEDULE.md](./PHASE_4_SCHEDULE.md) | Safe App/Schedule validation and execution |
-| [PHASE_5_QUERIES.md](./PHASE_5_QUERIES.md) | Queries & dual cache system |
+| [PHASE_5_QUERIES.md](./PHASE_5_QUERIES.md) | Prepared queries and execution policies |
 | [PHASE_6_QUALITY.md](./PHASE_6_QUALITY.md) | Classified parity, coverage, API stability, and Divan |
 | [PHASE_7_INTEGRATIONS.md](./PHASE_7_INTEGRATIONS.md) | Downstream Wyrd/Anapao adapters and host migrations |
 

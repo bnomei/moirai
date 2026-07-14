@@ -5,7 +5,9 @@ use crate::schedule::condition::Condition;
 use crate::schedule::error::BuildError;
 use crate::schedule::owner::{ExecutionLease, ScheduleOwner};
 use crate::schedule::stage::{self, StageDescriptor};
-use crate::schedule::system::{EventRoleKind, FlushMode, System, SystemSet};
+use crate::schedule::system::{
+    EventRoleKind, FlushMode, System, SystemBodySource, SystemInitContext, SystemSet,
+};
 use crate::schedule::Schedule;
 use crate::time::{FixedAccumulator, FixedConfig};
 use crate::world::World;
@@ -357,10 +359,23 @@ impl ScheduleBuilder {
                 .in_set
                 .as_ref()
                 .and_then(|label| set_index_map.get(label).copied());
+            let system_name = system.name.clone();
+            let body = match system.body {
+                SystemBodySource::Ready(body) => body,
+                SystemBodySource::Initialize(initializer) => {
+                    let mut context = SystemInitContext::new(world);
+                    initializer(&mut context).map_err(|detail| {
+                        BuildError::SystemInitialization {
+                            system: system_name.clone(),
+                            detail,
+                        }
+                    })?
+                }
+            };
             compiled_systems.push(CompiledSystem {
-                name: system.name.clone(),
+                name: system_name,
                 stage_index,
-                body: system.body,
+                body,
                 enabled: system.enabled,
                 flush_mode: system.flush_mode,
                 conditions: system.conditions,

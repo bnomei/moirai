@@ -43,10 +43,15 @@ mod operation;
 pub mod prelude;
 pub mod query;
 mod resource;
+mod revision;
 pub mod schedule;
 pub mod state;
 mod storage;
 mod time;
+
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod bench_internals;
 
 mod entity;
 
@@ -71,17 +76,18 @@ pub use event::{
 pub use math::Q16;
 pub use operation::StageOperation;
 pub use query::{
-    EntityRef, ExactIdPolicy, Query1, Query2, QueryCache, QueryCommands, QueryCursor, QueryEffects,
-    QueryEntities, QueryError, QueryIds, QueryParams, QueryResultCache, QuerySpec,
+    ExactIdPolicy, PreparedQuery1, PreparedQuery2, Query1, Query2, QueryCommands, QueryCursor,
+    QueryEffects, QueryError, QueryPolicy, QuerySpec, QueryWindow,
 };
+pub use revision::{Revision, RevisionExhausted, RevisionKey};
 pub use schedule::stage;
 pub use schedule::{
-    Condition, FlushMode, Schedule, ScheduleBuilder, ScheduleError, StageId, System, SystemId,
-    SystemSet,
+    Condition, ConditionError, FlushMode, Schedule, ScheduleBuilder, ScheduleError, StageId,
+    System, SystemId, SystemInitContext, SystemSet,
 };
 pub use state::{apply, State, StateError};
 pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
 pub use world::{
-    Bundle, Commands, DynamicBundle, EntityScratch, EntityScratchError, World, WorldBuilder,
+    Bundle, Commands, DenseEntityScratch, DynamicBundle, EntityScratchError, World, WorldBuilder,
     WorldError,
 };

@@ -1,25 +1,37 @@
+use crate::resource::ScopedResource;
 use crate::time::ChangeTick;
 use crate::world::{World, WorldError};
 
 struct ResourceScopeGuard<'world, R: 'static> {
     world: &'world mut World,
-    resource: Option<R>,
-    tick: ChangeTick,
+    resource: Option<ScopedResource<R>>,
+    changed: Option<ChangeTick>,
     active: bool,
 }
 
 impl<'world, R: 'static> ResourceScopeGuard<'world, R> {
-    fn new(world: &'world mut World, resource: Option<R>, tick: ChangeTick) -> Self {
+    fn new(
+        world: &'world mut World,
+        resource: Option<ScopedResource<R>>,
+        changed: Option<ChangeTick>,
+    ) -> Self {
         Self {
             world,
             resource,
-            tick,
+            changed,
             active: true,
         }
     }
 
-    fn call<T>(&mut self, f: impl FnOnce(Option<&mut R>, &mut World) -> T) -> T {
-        f(self.resource.as_mut(), self.world)
+    fn call_mut<T>(&mut self, f: impl FnOnce(Option<&mut R>, &mut World) -> T) -> T {
+        f(
+            self.resource.as_mut().map(ScopedResource::get_mut),
+            self.world,
+        )
+    }
+
+    fn call_ref<T>(&mut self, f: impl FnOnce(Option<&R>, &mut World) -> T) -> T {
+        f(self.resource.as_ref().map(ScopedResource::get), self.world)
     }
 
     fn restore(&mut self) -> Result<(), WorldError> {
@@ -29,7 +41,9 @@ impl<'world, R: 'static> ResourceScopeGuard<'world, R> {
         self.active = false;
 
         let result = if let Some(resource) = self.resource.take() {
-            self.world.resources.restore_scope::<R>(resource, self.tick)
+            self.world
+                .resources
+                .restore_scope::<R>(resource, self.changed)
         } else {
             self.world.resources.cancel_scope();
             Ok(())
@@ -88,16 +102,33 @@ impl World {
         self.resources.changed_tick::<R>()
     }
 
-    pub fn resource_scope<R: 'static, T>(
+    pub fn resource_scope_mut<R: 'static, T>(
         &mut self,
         f: impl FnOnce(Option<&mut R>, &mut World) -> T,
     ) -> Result<T, WorldError> {
         self.ensure_mutable()?;
-        self.resources.prepare_scope::<R>()?;
-        let tick = self.issue_change_tick()?;
+        let present = self.resources.prepare_scope::<R>()?;
+        let changed = if present {
+            Some(self.issue_change_tick()?)
+        } else {
+            None
+        };
         let taken = self.resources.take_for_scope::<R>()?;
-        let mut guard = ResourceScopeGuard::new(self, taken, tick);
-        let result = guard.call(f);
+        let mut guard = ResourceScopeGuard::new(self, taken, changed);
+        let result = guard.call_mut(f);
+        guard.restore()?;
+        Ok(result)
+    }
+
+    pub fn resource_scope_ref<R: 'static, T>(
+        &mut self,
+        f: impl FnOnce(Option<&R>, &mut World) -> T,
+    ) -> Result<T, WorldError> {
+        self.ensure_mutable()?;
+        self.resources.prepare_scope::<R>()?;
+        let taken = self.resources.take_for_scope::<R>()?;
+        let mut guard = ResourceScopeGuard::new(self, taken, None);
+        let result = guard.call_ref(f);
         guard.restore()?;
         Ok(result)
     }

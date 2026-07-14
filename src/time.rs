@@ -74,13 +74,6 @@ impl WorldTick {
     }
 }
 
-impl FixedStep {
-    pub(crate) fn advance_index(&mut self) -> Result<(), FixedStepError> {
-        self.index = self.index.checked_add(1).ok_or(FixedStepError::Exhausted)?;
-        Ok(())
-    }
-}
-
 impl FixedConfig {
     pub const DEFAULT_MAX_SUBSTEPS: u32 = 8;
 

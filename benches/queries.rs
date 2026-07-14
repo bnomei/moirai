@@ -1,5 +1,5 @@
 use moirai::component::{ComponentId, ComponentOptions};
-use moirai::query::{ExactIdPolicy, QueryParams, QuerySpec};
+use moirai::query::{ExactIdPolicy, QueryPolicy, QuerySpec, QueryWindow};
 use moirai::world::WorldBuilder;
 
 #[derive(Clone, Copy)]
@@ -203,10 +203,10 @@ fn cold_query1_sparse_resolve_including_setup() {
     let spec = QuerySpec::new().without::<BenchVel>();
     let mut sum = 0i32;
     for _ in 0..32 {
-        for (_, pos) in world
-            .query::<BenchPos>(&spec, QueryParams::new())
-            .expect("query")
-        {
+        let mut query = world
+            .prepare_query1::<BenchPos>(spec.clone(), QueryPolicy::Prepared)
+            .expect("prepare");
+        for (_, pos) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             sum += pos.0;
         }
     }
@@ -216,20 +216,16 @@ fn cold_query1_sparse_resolve_including_setup() {
 #[divan::bench]
 fn warm_query1_sparse_including_setup() {
     let mut world = sparse_world(256);
-    let spec = QuerySpec::new();
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
     for _ in 0..8 {
-        for (_, pos) in world
-            .query::<BenchPos>(&spec, QueryParams::new())
-            .expect("query")
-        {
+        for (_, pos) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             divan::black_box(pos.0);
         }
     }
     for _ in 0..128 {
-        for (_, pos) in world
-            .query::<BenchPos>(&spec, QueryParams::new())
-            .expect("query")
-        {
+        for (_, pos) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             divan::black_box(pos.0);
         }
     }
@@ -238,20 +234,16 @@ fn warm_query1_sparse_including_setup() {
 #[divan::bench]
 fn warm_query2_sparse_including_setup() {
     let mut world = sparse_world(256);
-    let spec = QuerySpec::new();
+    let mut query = world
+        .prepare_query2::<BenchPos, BenchVel>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
     for _ in 0..8 {
-        for (_, pos, vel) in world
-            .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())
-            .expect("query2")
-        {
+        for (_, pos, vel) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             divan::black_box((pos.0, vel.0));
         }
     }
     for _ in 0..128 {
-        for (_, pos, vel) in world
-            .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())
-            .expect("query2")
-        {
+        for (_, pos, vel) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             divan::black_box((pos.0, vel.0));
         }
     }
@@ -260,23 +252,16 @@ fn warm_query2_sparse_including_setup() {
 #[divan::bench]
 fn warm_query_cache_hit_including_setup() {
     let mut world = sparse_world(256);
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<BenchPos>(spec.clone())
-        .expect("cache");
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare");
     for _ in 0..8 {
-        for (_, pos) in world
-            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
-            .expect("query")
-        {
+        for (_, pos) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             divan::black_box(pos.0);
         }
     }
     for _ in 0..128 {
-        for (_, pos) in world
-            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
-            .expect("query")
-        {
+        for (_, pos) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             divan::black_box(pos.0);
         }
     }
@@ -285,18 +270,20 @@ fn warm_query_cache_hit_including_setup() {
 #[divan::bench]
 fn closure_mutation_sparse_including_setup() {
     let mut world = sparse_world(256);
-    let spec = QuerySpec::new();
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
     for _ in 0..8 {
-        world
-            .for_each_mut::<BenchPos>(&spec, QueryParams::new(), |_entity, pos| {
+        query
+            .for_each_mut(&mut world, QueryWindow::All, |_entity, pos| {
                 pos.0 += 1;
                 Ok(())
             })
             .expect("mut");
     }
     for _ in 0..64 {
-        world
-            .for_each_mut::<BenchPos>(&spec, QueryParams::new(), |_entity, pos| {
+        query
+            .for_each_mut(&mut world, QueryWindow::All, |_entity, pos| {
                 pos.0 += 1;
                 Ok(())
             })
@@ -307,12 +294,11 @@ fn closure_mutation_sparse_including_setup() {
 #[divan::bench]
 fn mixed_query2_warm_including_setup() {
     let mut world = mixed_world(256);
-    let spec = QuerySpec::new();
+    let mut query = world
+        .prepare_query2::<BenchPos, BenchTable>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
     for _ in 0..64 {
-        for (_, pos, table) in world
-            .query2::<BenchPos, BenchTable>(&spec, QueryParams::new())
-            .expect("query2")
-        {
+        for (_, pos, table) in query.iter(&mut world, QueryWindow::All).expect("iterate") {
             divan::black_box((pos.0, table.0));
         }
     }
@@ -321,19 +307,23 @@ fn mixed_query2_warm_including_setup() {
 #[divan::bench(args = [1, 4, 16, 64, 256])]
 fn exact_id_query_construction(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let ids = world
-        .query_ids(&QuerySpec::new(), QueryParams::new())
+    let mut all = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare ids");
+    let ids = all
+        .iter(&mut world, QueryWindow::All)
         .expect("ids")
+        .map(|(entity, _)| entity)
         .collect();
     let spec = QuerySpec::new().exact_ids(ids, ExactIdPolicy::SkipUnavailable);
     let _ = world
-        .query::<BenchPos>(&spec, QueryParams::new())
+        .prepare_query1::<BenchPos>(spec.clone(), QueryPolicy::Prepared)
         .expect("warm exact plan");
 
     bencher.bench_local(|| {
         let query = world
-            .query::<BenchPos>(divan::black_box(&spec), QueryParams::new())
-            .expect("exact query");
+            .prepare_query1::<BenchPos>(divan::black_box(spec.clone()), QueryPolicy::Prepared)
+            .expect("exact prepare");
         divan::black_box(query);
     });
 }
@@ -341,18 +331,22 @@ fn exact_id_query_construction(bencher: divan::Bencher, count: usize) {
 #[divan::bench(args = [1, 4, 16, 64, 256])]
 fn exact_id_query_full_exhaustion(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let ids = world
-        .query_ids(&QuerySpec::new(), QueryParams::new())
+    let mut all = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare ids");
+    let ids = all
+        .iter(&mut world, QueryWindow::All)
         .expect("ids")
+        .map(|(entity, _)| entity)
         .collect();
     let spec = QuerySpec::new().exact_ids(ids, ExactIdPolicy::SkipUnavailable);
-    let _ = world
-        .query::<BenchPos>(&spec, QueryParams::new())
-        .expect("warm exact plan");
+    let mut query = world
+        .prepare_query1::<BenchPos>(spec, QueryPolicy::Prepared)
+        .expect("prepare exact");
 
     bencher.bench_local(|| {
-        let sum: i32 = world
-            .query::<BenchPos>(divan::black_box(&spec), QueryParams::new())
+        let sum: i32 = query
+            .iter(&mut world, QueryWindow::All)
             .expect("exact query")
             .map(|(_, pos)| pos.0)
             .sum();
@@ -363,18 +357,13 @@ fn exact_id_query_full_exhaustion(bencher: divan::Bencher, count: usize) {
 #[divan::bench(args = [0, 1, 16, 256, 4096])]
 fn query_ids_result_cache_hit(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_entity_query_result_cache(spec.clone())
-        .expect("result cache");
-    let _ = world
-        .query_ids(&spec, QueryParams::new().result_cache(&cache))
-        .expect("warm result cache")
-        .count();
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Result)
+        .expect("prepare result query");
 
     bencher.bench_local(|| {
-        let count = world
-            .query_ids(&spec, QueryParams::new().result_cache(&cache))
+        let count = query
+            .iter(&mut world, QueryWindow::All)
             .expect("cached ids")
             .count();
         divan::black_box(count)
@@ -384,14 +373,13 @@ fn query_ids_result_cache_hit(bencher: divan::Bencher, count: usize) {
 #[divan::bench(args = [0, 1, 16, 256, 4_096])]
 fn typed_membership_cache_full_exhaustion(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<BenchPos>(spec.clone())
-        .expect("membership cache");
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare membership query");
 
     bencher.bench_local(|| {
-        let sum: i32 = world
-            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
+        let sum: i32 = query
+            .iter(&mut world, QueryWindow::All)
             .expect("cached typed query")
             .map(|(_, pos)| pos.0)
             .sum();
@@ -402,14 +390,13 @@ fn typed_membership_cache_full_exhaustion(bencher: divan::Bencher, count: usize)
 #[divan::bench(args = [0, 1, 16, 256, 4_096])]
 fn typed_result_cache_full_exhaustion(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_result_cache::<BenchPos>(spec.clone())
-        .expect("result cache");
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Result)
+        .expect("prepare result query");
 
     bencher.bench_local(|| {
-        let sum: i32 = world
-            .query::<BenchPos>(&spec, QueryParams::new().result_cache(&cache))
+        let sum: i32 = query
+            .iter(&mut world, QueryWindow::All)
             .expect("result-cached typed query")
             .map(|(_, pos)| pos.0)
             .sum();
@@ -420,14 +407,13 @@ fn typed_result_cache_full_exhaustion(bencher: divan::Bencher, count: usize) {
 #[divan::bench(args = [0, 1, 16, 256, 4_096])]
 fn typed_membership_cache_first_item(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<BenchPos>(spec.clone())
-        .expect("membership cache");
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare membership query");
 
     bencher.bench_local(|| {
-        let first = world
-            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
+        let first = query
+            .iter(&mut world, QueryWindow::All)
             .expect("cached typed query")
             .next()
             .map(|(_, pos)| pos.0);
@@ -438,15 +424,13 @@ fn typed_membership_cache_first_item(bencher: divan::Bencher, count: usize) {
 #[divan::bench(args = [0, 1, 64, 4096])]
 fn query1_sparse_scan_isolated(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let spec = QuerySpec::new();
-    let _ = world
-        .query::<BenchPos>(&spec, QueryParams::new())
-        .expect("warm plan")
-        .count();
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
 
     bencher.bench_local(|| {
-        let sum: i32 = world
-            .query::<BenchPos>(&spec, QueryParams::new())
+        let sum: i32 = query
+            .iter(&mut world, QueryWindow::All)
             .expect("query")
             .map(|(_, pos)| pos.0)
             .sum();
@@ -457,15 +441,13 @@ fn query1_sparse_scan_isolated(bencher: divan::Bencher, count: usize) {
 #[divan::bench(args = [0, 1, 64, 4096])]
 fn query2_sparse_probe_isolated(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let spec = QuerySpec::new();
-    let _ = world
-        .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())
-        .expect("warm plan")
-        .count();
+    let mut query = world
+        .prepare_query2::<BenchPos, BenchVel>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
 
     bencher.bench_local(|| {
-        let sum: i32 = world
-            .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())
+        let sum: i32 = query
+            .iter(&mut world, QueryWindow::All)
             .expect("query2")
             .map(|(_, pos, vel)| pos.0 + vel.0)
             .sum();
@@ -476,15 +458,13 @@ fn query2_sparse_probe_isolated(bencher: divan::Bencher, count: usize) {
 #[divan::bench(args = [0, 1, 64, 4096])]
 fn query2_mixed_probe_isolated(bencher: divan::Bencher, count: usize) {
     let mut world = mixed_world(count);
-    let spec = QuerySpec::new();
-    let _ = world
-        .query2::<BenchPos, BenchTable>(&spec, QueryParams::new())
-        .expect("warm plan")
-        .count();
+    let mut query = world
+        .prepare_query2::<BenchPos, BenchTable>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare");
 
     bencher.bench_local(|| {
-        let sum: i32 = world
-            .query2::<BenchPos, BenchTable>(&spec, QueryParams::new())
+        let sum: i32 = query
+            .iter(&mut world, QueryWindow::All)
             .expect("query2")
             .map(|(_, pos, table)| pos.0 + table.0)
             .sum();
@@ -500,14 +480,13 @@ fn query2_empty_warm_plan(bencher: divan::Bencher, selector_count: usize) {
     for selector in selector_ids.into_iter().take(selector_count) {
         spec = spec.without_id(selector);
     }
-    let _ = world
-        .query2::<BenchPos, BenchVel>(&spec, QueryParams::new())
-        .expect("warm plan")
-        .count();
+    let mut query = world
+        .prepare_query2::<BenchPos, BenchVel>(spec, QueryPolicy::Prepared)
+        .expect("prepare");
 
     bencher.bench_local(|| {
-        let count = world
-            .query2::<BenchPos, BenchVel>(divan::black_box(&spec), QueryParams::new())
+        let count = query
+            .iter(&mut world, QueryWindow::All)
             .expect("query2")
             .count();
         divan::black_box(count)
@@ -517,18 +496,13 @@ fn query2_empty_warm_plan(bencher: divan::Bencher, selector_count: usize) {
 #[divan::bench(args = [256, 4096])]
 fn membership_cache_stable_hit(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<BenchPos>(spec.clone())
-        .expect("cache");
-    let _ = world
-        .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
-        .expect("warm cache")
-        .count();
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare membership query");
 
     bencher.bench_local(|| {
-        let count = world
-            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
+        let count = query
+            .iter(&mut world, QueryWindow::All)
             .expect("cached query")
             .count();
         divan::black_box(count)
@@ -539,10 +513,9 @@ fn membership_cache_stable_hit(bencher: divan::Bencher, count: usize) {
 fn membership_cache_unrelated_invalidation(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world_with_noise(count);
     let churn = world.spawn().expect("churn entity");
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<BenchPos>(spec.clone())
-        .expect("cache");
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare membership query");
     let mut present = false;
 
     bencher.bench_local(|| {
@@ -552,8 +525,8 @@ fn membership_cache_unrelated_invalidation(bencher: divan::Bencher, count: usize
             let _ = world.insert(churn, BenchNoise).expect("insert noise");
         }
         present = !present;
-        let count = world
-            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
+        let count = query
+            .iter(&mut world, QueryWindow::All)
             .expect("cached query")
             .count();
         divan::black_box(count)
@@ -564,10 +537,9 @@ fn membership_cache_unrelated_invalidation(bencher: divan::Bencher, count: usize
 fn membership_cache_relevant_invalidation(bencher: divan::Bencher, count: usize) {
     let mut world = sparse_world(count);
     let churn = world.spawn().expect("churn entity");
-    let spec = QuerySpec::new();
-    let cache = world
-        .build_query_cache::<BenchPos>(spec.clone())
-        .expect("cache");
+    let mut query = world
+        .prepare_query1::<BenchPos>(QuerySpec::new(), QueryPolicy::Membership)
+        .expect("prepare membership query");
     let mut present = false;
 
     bencher.bench_local(|| {
@@ -579,8 +551,8 @@ fn membership_cache_relevant_invalidation(bencher: divan::Bencher, count: usize)
                 .expect("insert position");
         }
         present = !present;
-        let count = world
-            .query::<BenchPos>(&spec, QueryParams::new().membership_cache(&cache))
+        let count = query
+            .iter(&mut world, QueryWindow::All)
             .expect("cached query")
             .count();
         divan::black_box(count)
@@ -590,15 +562,13 @@ fn membership_cache_relevant_invalidation(bencher: divan::Bencher, count: usize)
 #[divan::bench(args = [0, 4, 16])]
 fn empty_table_cache_warm_hit(bencher: divan::Bencher, archetype_count: usize) {
     let mut world = empty_table_world(archetype_count);
-    let spec = QuerySpec::new();
-    let _ = world
-        .query::<BenchNever>(&spec, QueryParams::new())
-        .expect("warm empty table query")
-        .count();
+    let mut query = world
+        .prepare_query1::<BenchNever>(QuerySpec::new(), QueryPolicy::Prepared)
+        .expect("prepare empty table query");
 
     bencher.bench_local(|| {
-        let count = world
-            .query::<BenchNever>(&spec, QueryParams::new())
+        let count = query
+            .iter(&mut world, QueryWindow::All)
             .expect("empty table query")
             .count();
         divan::black_box(count)

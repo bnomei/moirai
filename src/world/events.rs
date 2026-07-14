@@ -177,7 +177,7 @@ impl World {
         if !is_new {
             return Ok(());
         }
-        self.bump_component_query_topology(component_index);
+        self.record_component_query_topology(entity, component_index);
         match self.events.lifecycle.emit_added(
             &mut self.events.storage,
             &self.owner,
@@ -209,7 +209,7 @@ impl World {
         if self.lifecycle_events_suppressed {
             return Ok(());
         }
-        self.bump_component_query_topology(component_index);
+        self.record_component_query_topology(entity, component_index);
         match self.events.lifecycle.emit_removed(
             &mut self.events.storage,
             &self.owner,

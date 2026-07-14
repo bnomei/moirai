@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::vec::Vec;
 
 use crate::entity::EntityId;
@@ -85,7 +87,10 @@ impl QueryTopologySnapshot {
 }
 
 impl World {
-    pub fn build_entity_query_cache(&mut self, spec: QuerySpec) -> Result<QueryCache, QueryError> {
+    pub(crate) fn build_entity_query_cache(
+        &mut self,
+        spec: QuerySpec,
+    ) -> Result<QueryCache, QueryError> {
         let plan = self.resolve_entity_plan(&spec)?;
         if spec.exact_ids.is_some() {
             validate_exact_ids(self, &plan)?;
@@ -105,7 +110,7 @@ impl World {
         })
     }
 
-    pub fn build_query_cache<T: 'static>(
+    pub(crate) fn build_query_cache<T: 'static>(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryCache, QueryError> {
@@ -128,7 +133,7 @@ impl World {
         })
     }
 
-    pub fn build_query2_cache<A: 'static, B: 'static>(
+    pub(crate) fn build_query2_cache<A: 'static, B: 'static>(
         &mut self,
         spec: QuerySpec,
     ) -> Result<QueryCache, QueryError> {
@@ -231,7 +236,7 @@ impl World {
     }
 
     #[cfg(any(test, feature = "testkit"))]
-    pub fn invalidate_query_cache(&mut self, cache: &QueryCache) {
+    pub(crate) fn invalidate_query_cache(&mut self, cache: &QueryCache) {
         self.invalidate_membership_cache_handle(cache);
     }
 

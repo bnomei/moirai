@@ -157,6 +157,40 @@ impl ArchetypeStorage {
         }
     }
 
+    pub(crate) fn get_mut_read_table<TA: 'static, TB: 'static>(
+        &mut self,
+        entity: EntityId,
+        index_a: u32,
+        index_b: u32,
+        tick: ChangeTick,
+    ) -> Option<(&mut TA, &TB)> {
+        if index_a == index_b {
+            return None;
+        }
+        let location = self.location(entity)?;
+        let archetype = location.archetype as usize;
+        if !self.signatures[archetype].contains(index_a)
+            || !self.signatures[archetype].contains(index_b)
+        {
+            return None;
+        }
+        let row = location.row as usize;
+        let col_a = self.column_position(archetype, index_a);
+        let col_b = self.column_position(archetype, index_b);
+        let columns = &mut self.columns[archetype];
+        if col_a < col_b {
+            let (left, right) = columns.split_at_mut(col_b);
+            let a = left[col_a].get_value_mut(row, tick)?.downcast_mut::<TA>()?;
+            let b = right[0].get_value(row)?.downcast_ref::<TB>()?;
+            Some((a, b))
+        } else {
+            let (left, right) = columns.split_at_mut(col_a);
+            let b = left[col_b].get_value(row)?.downcast_ref::<TB>()?;
+            let a = right[0].get_value_mut(row, tick)?.downcast_mut::<TA>()?;
+            Some((a, b))
+        }
+    }
+
     pub fn get_table_mut<T: 'static>(
         &mut self,
         entity: EntityId,
@@ -221,6 +255,29 @@ impl ArchetypeStorage {
             .filter(|(_, signature)| signature.contains(component_index))
             .map(|(index, _)| index)
             .collect()
+    }
+
+    pub(crate) fn component_population(&self, component_index: u32) -> usize {
+        self.signatures
+            .iter()
+            .zip(&self.entity_slots)
+            .filter(|(signature, _)| signature.contains(component_index))
+            .map(|(_, slots)| slots.len())
+            .sum()
+    }
+
+    pub(crate) fn entity_slot_slices_with_component(
+        &self,
+        component_index: u32,
+    ) -> impl Iterator<Item = &[u32]> {
+        self.signatures
+            .iter()
+            .zip(&self.entity_slots)
+            .filter_map(move |(signature, slots)| {
+                signature
+                    .contains(component_index)
+                    .then_some(slots.as_slice())
+            })
     }
 
     pub(crate) fn entity_slots(&self, archetype: usize) -> &[u32] {
