@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use moirai::{stage, AppBuilder, StageOperation, System};
+use moirai::{stage, AppBuilder, AppError, StageOperation, System};
 
 #[test]
 fn update_plan_runs_selected_stages_in_compiled_order() {
@@ -62,4 +62,18 @@ fn planned_update_skips_fixed_accumulation_when_fixed_stage_is_not_selected() {
     app.update_plan(0.050, &update_only).expect("update only");
     app.update_plan(0.0, &fixed_only).expect("fixed only");
     assert_eq!(*fixed_runs.borrow(), 0);
+}
+
+#[test]
+fn update_plan_rejects_a_plan_from_another_schedule_before_running() {
+    let first = AppBuilder::new().build().expect("first app");
+    let update = first.schedule().stage_id(stage::UPDATE).expect("update id");
+    let foreign_plan = first.schedule().update_plan([update]).expect("plan");
+    let mut second = AppBuilder::new().build().expect("second app");
+
+    assert!(matches!(
+        second.update_plan(0.0, &foreign_plan),
+        Err(AppError::InvalidUpdatePlan(_))
+    ));
+    assert_eq!(second.world().world_tick().raw(), 0);
 }

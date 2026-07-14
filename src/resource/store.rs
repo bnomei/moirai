@@ -1,5 +1,4 @@
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
@@ -15,10 +14,6 @@ pub(crate) struct ResourceStore {
     entries: Vec<Option<ResourceEntry>>,
     locked: Vec<TypeId>,
     scoped: Option<TypeId>,
-    #[allow(clippy::type_complexity)]
-    state_transition_readers: BTreeMap<TypeId, fn(&dyn Any) -> Option<ChangeTick>>,
-    #[allow(clippy::type_complexity)]
-    state_pending_readers: BTreeMap<TypeId, fn(&dyn Any) -> bool>,
 }
 
 pub(crate) struct ScopedResource<R> {
@@ -55,8 +50,6 @@ impl ResourceStore {
             entries: Vec::new(),
             locked: Vec::new(),
             scoped: None,
-            state_transition_readers: BTreeMap::new(),
-            state_pending_readers: BTreeMap::new(),
             registered_names: Vec::new(),
         }
     }
@@ -74,20 +67,7 @@ impl ResourceStore {
     }
 
     pub fn register_state<S: Eq + 'static>(&mut self) {
-        let type_id = TypeId::of::<crate::state::State<S>>();
         self.register::<crate::state::State<S>>();
-        self.state_transition_readers
-            .insert(type_id, |value: &dyn Any| {
-                value
-                    .downcast_ref::<crate::state::State<S>>()
-                    .and_then(|state| state.transition_tick())
-            });
-        self.state_pending_readers
-            .insert(type_id, |value: &dyn Any| {
-                value
-                    .downcast_ref::<crate::state::State<S>>()
-                    .is_some_and(|state| state.pending().is_some())
-            });
     }
 
     pub fn contains<R: 'static>(&self) -> bool {
@@ -299,38 +279,6 @@ impl ResourceStore {
         Ok(self.entries[index].as_ref().map(|entry| entry.changed))
     }
 
-    pub fn transition_tick_for(&self, type_id: TypeId) -> Result<Option<ChangeTick>, WorldError> {
-        let index = self
-            .registered
-            .iter()
-            .position(|id| *id == type_id)
-            .ok_or_else(|| WorldError::UnregisteredResource {
-                name: String::from("<resource>"),
-            })?;
-        let Some(entry) = self.entries[index].as_ref() else {
-            return Ok(None);
-        };
-        let reader = self.state_transition_readers.get(&type_id).copied();
-        Ok(reader.and_then(|read| read(entry.value.as_ref())))
-    }
-
-    pub fn state_pending_for(&self, type_id: TypeId) -> Result<bool, WorldError> {
-        let index = self
-            .registered
-            .iter()
-            .position(|id| *id == type_id)
-            .ok_or_else(|| WorldError::UnregisteredResource {
-                name: String::from("<resource>"),
-            })?;
-        let Some(entry) = self.entries[index].as_ref() else {
-            return Ok(false);
-        };
-        Ok(self
-            .state_pending_readers
-            .get(&type_id)
-            .is_some_and(|read| read(entry.value.as_ref())))
-    }
-
     pub fn cancel_scope(&mut self) {
         self.scoped = None;
     }
@@ -430,12 +378,6 @@ mod tests {
                 .expect("changed for"),
             Some(tick)
         );
-        assert_eq!(
-            default_store
-                .transition_tick_for(type_id)
-                .expect("transition"),
-            None
-        );
         assert!(default_store
             .type_name(type_id)
             .is_some_and(|name| name.ends_with("Score")));
@@ -501,15 +443,5 @@ mod tests {
             store.changed_tick_for(TypeId::of::<i32>()),
             Err(WorldError::UnregisteredResource { .. })
         ));
-        assert!(matches!(
-            store.transition_tick_for(TypeId::of::<i32>()),
-            Err(WorldError::UnregisteredResource { .. })
-        ));
-        assert_eq!(
-            store
-                .transition_tick_for(TypeId::of::<Score>())
-                .expect("registered"),
-            None
-        );
     }
 }

@@ -22,6 +22,7 @@ use core::any::TypeId;
 
 use crate::operation::StageOperation;
 use crate::schedule::compiled::CompiledSchedule;
+use crate::schedule::owner::ScheduleOwner;
 use crate::time::{ChangeTick, FixedStep};
 use crate::world::World;
 
@@ -212,7 +213,18 @@ pub struct Schedule {
 /// follows the compiled stage order, never the caller's input order.
 #[derive(Clone, Debug)]
 pub struct UpdatePlan {
+    owner: ScheduleOwner,
     stages: Vec<usize>,
+}
+
+impl UpdatePlan {
+    pub(crate) fn validate_owner(&self, owner: &ScheduleOwner) -> Result<(), ScheduleError> {
+        if self.owner.same(owner) {
+            Ok(())
+        } else {
+            Err(ScheduleError::OwnerMismatch)
+        }
+    }
 }
 
 impl Schedule {
@@ -292,7 +304,10 @@ impl Schedule {
             }
             selected.push(index);
         }
-        Ok(UpdatePlan { stages: selected })
+        Ok(UpdatePlan {
+            owner: self.compiled.owner.clone(),
+            stages: selected,
+        })
     }
 
     pub(crate) fn run_stage(
@@ -363,6 +378,10 @@ impl Schedule {
 
     pub(crate) fn plan_contains_stage(&self, plan: &UpdatePlan, stage_index: usize) -> bool {
         plan.stages.contains(&stage_index)
+    }
+
+    pub(crate) fn validate_update_plan(&self, plan: &UpdatePlan) -> Result<(), ScheduleError> {
+        plan.validate_owner(&self.compiled.owner)
     }
 
     pub(crate) fn set_count(&self) -> usize {

@@ -242,7 +242,9 @@ mod tests {
         let transition_order = Rc::clone(&order);
         let enter_order = Rc::clone(&order);
         let mut builder = AppBuilder::new();
-        builder.insert_state(Mode::Menu);
+        // State lifecycle helpers also support the ordinary resource builder
+        // path; hosts need not use the `insert_state` convenience.
+        builder.insert_resource(State::new(Mode::Menu));
         builder
             .add_system(on_exit::<Mode>("exit", stage::UPDATE, move |world, _| {
                 let state = world

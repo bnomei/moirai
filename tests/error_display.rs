@@ -374,6 +374,10 @@ fn app_error_display_variants() {
     assert_display(&AppError::WorldTickExhausted, "world tick exhausted");
     assert_display(&AppError::FixedStepExhausted, "fixed step exhausted");
     assert_display(
+        &AppError::InvalidUpdatePlan(moirai::ScheduleError::OwnerMismatch),
+        "invalid update plan",
+    );
+    assert_display(
         &AppError::Fault(moirai::AppFault {
             stage: None,
             system: None,

@@ -32,6 +32,7 @@ pub enum AppError {
     TerminalFault,
     WorldTickExhausted,
     FixedStepExhausted,
+    InvalidUpdatePlan(ScheduleError),
     Fault(AppFault),
 }
 
@@ -137,6 +138,11 @@ impl App {
         plan: Option<&UpdatePlan>,
         observe: impl FnOnce(&World) -> R,
     ) -> Result<R, AppError> {
+        if let Some(plan) = plan {
+            self.schedule
+                .validate_update_plan(plan)
+                .map_err(AppError::InvalidUpdatePlan)?;
+        }
         self.ensure_ready()?;
         validate_delta(delta_seconds)?;
         emit(
@@ -718,6 +724,7 @@ impl core::fmt::Display for AppError {
             Self::TerminalFault => f.write_str("terminal app fault"),
             Self::WorldTickExhausted => f.write_str("world tick exhausted"),
             Self::FixedStepExhausted => f.write_str("fixed step exhausted"),
+            Self::InvalidUpdatePlan(_) => f.write_str("invalid update plan"),
             Self::Fault(_) => f.write_str("app execution fault"),
         }
     }
