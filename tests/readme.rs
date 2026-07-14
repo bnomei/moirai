@@ -12,8 +12,12 @@ fn readme_presents_the_public_crate_without_local_planning_links() {
         "README should state the default runtime environment"
     );
     assert!(
-        readme.contains("moirai/examples/index.html"),
+        readme.contains("docs.rs/moirai-for-games/latest/moirai/examples/index.html"),
         "README should point readers at the canonical Rustdoc examples"
+    );
+    assert!(
+        readme.contains("cargo add moirai-for-games --rename moirai"),
+        "README should install the published package under the public moirai crate name"
     );
     for local_path in ["docs/", "specs/", ".orchid/", "PHASE_", "ROADMAP.md"] {
         assert!(

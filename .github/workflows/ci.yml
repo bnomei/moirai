@@ -120,8 +120,8 @@ jobs:
           shared-key: ci-${{ runner.os }}-${{ runner.arch }}
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
-      - run: cargo test --doc --package moirai --all-features --locked
-      - run: RUSTDOCFLAGS="-D warnings" cargo doc --package moirai --no-deps --all-features --locked
+      - run: cargo test --doc --package moirai-for-games --all-features --locked
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --package moirai-for-games --no-deps --all-features --locked
 
   coverage:
     name: Production coverage union

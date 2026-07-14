@@ -23,8 +23,8 @@ echo "== msrv =="
 cargo +1.75 check --lib --no-default-features
 
 echo "== docs =="
-cargo test --doc --package moirai --all-features --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --package moirai --no-deps --all-features --locked
+cargo test --doc --package moirai-for-games --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --package moirai-for-games --no-deps --all-features --locked
 
 echo "== bench compile =="
 cargo bench --no-run

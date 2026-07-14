@@ -1,9 +1,9 @@
 # Moirai
 
-[![Crates.io Version](https://img.shields.io/crates/v/moirai)](https://crates.io/crates/moirai)
-[![Crates.io Downloads](https://img.shields.io/crates/d/moirai)](https://crates.io/crates/moirai)
+[![Crates.io Version](https://img.shields.io/crates/v/moirai-for-games)](https://crates.io/crates/moirai-for-games)
+[![Crates.io Downloads](https://img.shields.io/crates/d/moirai-for-games)](https://crates.io/crates/moirai-for-games)
 [![CI](https://img.shields.io/github/actions/workflow/status/bnomei/moirai/ci.yml?branch=main&label=CI)](https://github.com/bnomei/moirai/actions/workflows/ci.yml)
-[![docs.rs](https://img.shields.io/docsrs/moirai)](https://docs.rs/moirai)
+[![docs.rs](https://img.shields.io/docsrs/moirai-for-games)](https://docs.rs/moirai-for-games)
 [![MSRV](https://img.shields.io/badge/MSRV-1.75-blue)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -42,14 +42,14 @@ async runtime.
 Add Moirai to your project:
 
 ```bash
-cargo add moirai
+cargo add moirai-for-games --rename moirai
 ```
 
 This writes a dependency entry like:
 
 ```toml
 [dependencies]
-moirai = "0.1"
+moirai = { package = "moirai-for-games", version = "0.1" }
 ```
 
 ### Run your first app
@@ -131,7 +131,7 @@ state.
 
 ## Learn through tiered examples
 
-[`moirai::examples`](https://docs.rs/moirai/latest/moirai/examples/index.html) is the canonical
+[`moirai::examples`](https://docs.rs/moirai-for-games/latest/moirai/examples/index.html) is the canonical
 learning path. Its 17 lessons are stable-Rust doctests that use the same public API available to
 applications.
 
@@ -142,7 +142,7 @@ applications.
 | **C** | Prepared queries, filters, change cursors, and controlled side effects | 4 |
 | **D** | System locals, diagnostics, dense scratch data, Q16 values, deterministic replay | 5 |
 
-Start with [A01: Run your first app](https://docs.rs/moirai/latest/moirai/examples/tier_a/a01_first_app/index.html)
+Start with [A01: Run your first app](https://docs.rs/moirai-for-games/latest/moirai/examples/tier_a/a01_first_app/index.html)
 and follow each lesson's **Next** link. The final replay lesson requires the `testkit` feature and is
 included in docs.rs builds.
 
@@ -187,7 +187,7 @@ Run the standard public checks:
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --package moirai --no-deps --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --package moirai-for-games --no-deps --all-features --locked
 ```
 
 The complete repository gate also checks the feature matrix, production source coverage, MSRV,
@@ -202,9 +202,9 @@ The complete gate requires a current Rust toolchain plus the Rust 1.75 toolchain
 
 ## Reference and next steps
 
-- [API reference](https://docs.rs/moirai)
-- [Tiered executable examples](https://docs.rs/moirai/latest/moirai/examples/index.html)
-- [Crates.io package](https://crates.io/crates/moirai)
+- [API reference](https://docs.rs/moirai-for-games)
+- [Tiered executable examples](https://docs.rs/moirai-for-games/latest/moirai/examples/index.html)
+- [Crates.io package](https://crates.io/crates/moirai-for-games)
 - [Changelog](CHANGELOG.md)
 
 ## License

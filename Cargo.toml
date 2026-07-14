@@ -1,17 +1,32 @@
 [package]
-name = "moirai"
+name = "moirai-for-games"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 description = "A small deterministic no_std ECS for constrained and headless games"
 readme = "README.md"
+homepage = "https://github.com/bnomei/moirai"
 repository = "https://github.com/bnomei/moirai"
-documentation = "https://docs.rs/moirai"
+documentation = "https://docs.rs/moirai-for-games"
 license = "MIT"
+keywords = ["ecs", "gamedev", "no-std", "deterministic", "embedded"]
+categories = ["game-development", "no-std", "embedded"]
+exclude = [
+    ".github/**",
+    ".gitignore",
+    "AGENTS.md",
+    "deny.toml",
+    "rust-toolchain.toml",
+]
 autobenches = false
 
 [package.metadata.docs.rs]
-all-features = true
+no-default-features = true
+features = ["std", "testkit"]
+
+[lib]
+name = "moirai"
+path = "src/lib.rs"
 
 [features]
 default = []
