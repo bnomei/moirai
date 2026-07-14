@@ -8,11 +8,11 @@ use moirai::event::{EventOptions, EventReaderStart};
 use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 use moirai::schedule::FlushMode;
 use moirai::schedule::{stage, Condition, ScheduleBuilder, System, SystemSet};
-use moirai::state::{apply, State};
+use moirai::state::{apply, on_exit, State};
 use moirai::world::WorldBuilder;
-use moirai::FixedConfig;
 use moirai::StageOperation;
 use moirai::{AppBuilder, AppError, BuildError};
+use moirai::{FixedConfig, FixedDebtPolicy};
 
 static UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -826,6 +826,46 @@ fn state_changed_runs_after_explicit_apply() {
         .expect("request");
     app.update(1.0 / 60.0).expect("update");
     assert_eq!(RAN.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn on_exit_runs_once_for_a_pending_request_across_fixed_substeps() {
+    static EXITS: AtomicU32 = AtomicU32::new(0);
+    EXITS.store(0, Ordering::SeqCst);
+
+    let fixed = FixedConfig::new(Duration::from_millis(1))
+        .expect("fixed")
+        .with_max_substeps(4)
+        .expect("substeps");
+    let mut builder = AppBuilder::new();
+    builder.insert_state(1u8).fixed(fixed);
+    builder
+        .add_system(on_exit::<u8>("exit", stage::FIXED_UPDATE, |_world, _dt| {
+            EXITS.fetch_add(1, Ordering::SeqCst);
+        }))
+        .expect("exit");
+    builder
+        .add_system(apply::<u8>("apply", stage::UPDATE))
+        .expect("apply");
+    let mut app = builder.build().expect("build");
+
+    app.world_mut()
+        .resource_mut::<State<u8>>()
+        .expect("state")
+        .expect("present")
+        .request(2)
+        .expect("request");
+    app.update(0.003).expect("first update");
+    assert_eq!(EXITS.load(Ordering::SeqCst), 1);
+
+    app.world_mut()
+        .resource_mut::<State<u8>>()
+        .expect("state")
+        .expect("present")
+        .request(1)
+        .expect("second request");
+    app.update(0.003).expect("second update");
+    assert_eq!(EXITS.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -1914,4 +1954,67 @@ fn fixed_step_mod_observes_zero_based_binary_phases() {
     app.update(0.004).expect("first four steps");
     app.update(0.004).expect("second four steps");
     assert_eq!(&*observed.borrow(), &[0, 4]);
+}
+
+#[test]
+fn fixed_step_mod_matches_internal_phase_of_coalesced_range() {
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let observed_steps = Rc::clone(&observed);
+    let fixed = FixedConfig::new(Duration::from_millis(1))
+        .expect("fixed")
+        .with_max_substeps(2)
+        .expect("substeps")
+        .with_debt_policy(FixedDebtPolicy::Coalesce);
+    let mut builder = AppBuilder::new();
+    builder.schedule_builder().fixed(fixed);
+    builder
+        .add_system(
+            System::new("cadenced", stage::FIXED_UPDATE, move |world, _dt| {
+                observed_steps
+                    .borrow_mut()
+                    .push(world.fixed_step().expect("fixed step").index);
+            })
+            .run_if(Condition::fixed_step_mod(4, 1).expect("cadence")),
+        )
+        .expect("system");
+
+    let mut app = builder.build().expect("app");
+    app.update(0.004)
+        .expect("one coalesced range of four steps");
+
+    assert_eq!(&*observed.borrow(), &[0]);
+}
+
+#[test]
+fn fixed_step_mod_set_matches_internal_phase_of_coalesced_range_once() {
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let observed_steps = Rc::clone(&observed);
+    let fixed = FixedConfig::new(Duration::from_millis(1))
+        .expect("fixed")
+        .with_max_substeps(2)
+        .expect("substeps")
+        .with_debt_policy(FixedDebtPolicy::Coalesce);
+    let set = SystemSet::new("cadenced");
+    let mut builder = AppBuilder::new();
+    builder.schedule_builder().fixed(fixed);
+    builder.register_set(set.clone()).expect("set");
+    builder
+        .set_run_if(&set, Condition::fixed_step_mod(4, 1).expect("cadence"))
+        .expect("set condition");
+    builder
+        .add_system(
+            System::new("member", stage::FIXED_UPDATE, move |world, _dt| {
+                observed_steps
+                    .borrow_mut()
+                    .push(world.fixed_step().expect("fixed step").index);
+            })
+            .in_set(&set),
+        )
+        .expect("system");
+
+    let mut app = builder.build().expect("app");
+    app.update(0.004)
+        .expect("one coalesced range of four steps");
+
+    assert_eq!(&*observed.borrow(), &[0]);
 }

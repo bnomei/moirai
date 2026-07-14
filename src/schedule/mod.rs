@@ -39,9 +39,11 @@ pub(crate) struct RunContext {
     resource_added_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     resource_changed_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     state_transition_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
+    state_pending_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     set_resource_added_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     set_resource_changed_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     set_state_transition_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
+    set_state_pending_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     set_gate_cache: Vec<Option<bool>>,
 }
 
@@ -56,9 +58,11 @@ impl RunContext {
             resource_added_cursors: BTreeMap::new(),
             resource_changed_cursors: BTreeMap::new(),
             state_transition_cursors: BTreeMap::new(),
+            state_pending_cursors: BTreeMap::new(),
             set_resource_added_cursors: BTreeMap::new(),
             set_resource_changed_cursors: BTreeMap::new(),
             set_state_transition_cursors: BTreeMap::new(),
+            set_state_pending_cursors: BTreeMap::new(),
             set_gate_cache: vec![None; set_count],
         }
     }
@@ -109,6 +113,13 @@ impl RunContext {
             .unwrap_or(ChangeTick::ZERO)
     }
 
+    pub(crate) fn state_pending_cursor(&self, system_index: usize, type_id: TypeId) -> ChangeTick {
+        self.state_pending_cursors
+            .get(&(system_index, type_id))
+            .copied()
+            .unwrap_or(ChangeTick::ZERO)
+    }
+
     pub(crate) fn set_resource_added_cursor(
         &mut self,
         system_index: usize,
@@ -136,6 +147,16 @@ impl RunContext {
         tick: ChangeTick,
     ) {
         self.state_transition_cursors
+            .insert((system_index, type_id), tick);
+    }
+
+    pub(crate) fn set_state_pending_cursor(
+        &mut self,
+        system_index: usize,
+        type_id: TypeId,
+        tick: ChangeTick,
+    ) {
+        self.state_pending_cursors
             .insert((system_index, type_id), tick);
     }
 
@@ -200,6 +221,27 @@ impl RunContext {
             .get(&(set_index, type_id))
             .copied()
             .unwrap_or(ChangeTick::ZERO)
+    }
+
+    pub(crate) fn state_pending_cursor_for_set(
+        &self,
+        set_index: usize,
+        type_id: TypeId,
+    ) -> ChangeTick {
+        self.set_state_pending_cursors
+            .get(&(set_index, type_id))
+            .copied()
+            .unwrap_or(ChangeTick::ZERO)
+    }
+
+    pub(crate) fn set_state_pending_cursor_for_set(
+        &mut self,
+        set_index: usize,
+        type_id: TypeId,
+        tick: ChangeTick,
+    ) {
+        self.set_state_pending_cursors
+            .insert((set_index, type_id), tick);
     }
 }
 

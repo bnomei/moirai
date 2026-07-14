@@ -12,6 +12,8 @@ use crate::time::ChangeTick;
 pub enum StateError {
     /// A different pending target is already queued.
     ConflictingTransition,
+    /// The state transition request counter cannot represent another request.
+    RequestCounterExhausted,
 }
 
 /// Host-owned state resource with explicit current, previous, and pending boundaries.
@@ -19,6 +21,7 @@ pub struct State<S: Eq + 'static> {
     current: S,
     previous: Option<S>,
     pending: Option<S>,
+    pending_request_tick: ChangeTick,
     transition_tick: Option<ChangeTick>,
 }
 
@@ -29,6 +32,7 @@ impl<S: Eq + 'static> State<S> {
             current: initial,
             previous: None,
             pending: None,
+            pending_request_tick: ChangeTick::ZERO,
             transition_tick: None,
         }
     }
@@ -53,6 +57,10 @@ impl<S: Eq + 'static> State<S> {
         self.transition_tick
     }
 
+    pub(crate) fn pending_request_tick(&self) -> Option<ChangeTick> {
+        self.pending.as_ref().map(|_| self.pending_request_tick)
+    }
+
     /// Queues `next` for commit by [`apply`]; idempotent when already current or pending.
     pub fn request(&mut self, next: S) -> Result<(), StateError> {
         if let Some(pending) = &self.pending {
@@ -64,6 +72,9 @@ impl<S: Eq + 'static> State<S> {
         if self.current == next {
             return Ok(());
         }
+        self.pending_request_tick
+            .advance()
+            .map_err(|_| StateError::RequestCounterExhausted)?;
         self.pending = Some(next);
         Ok(())
     }
@@ -110,7 +121,7 @@ pub fn on_exit<S: Eq + 'static>(
     body: impl FnMut(&mut crate::world::World, f32) + 'static,
 ) -> crate::schedule::System {
     crate::schedule::System::new(name, stage_label, body)
-        .run_if(crate::schedule::Condition::state_pending::<S>())
+        .run_if(crate::schedule::Condition::state_pending_once::<S>())
         .requires_resource::<State<S>>()
 }
 
@@ -141,6 +152,9 @@ impl core::fmt::Display for StateError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::ConflictingTransition => f.write_str("conflicting state transition request"),
+            Self::RequestCounterExhausted => {
+                f.write_str("state transition request counter exhausted")
+            }
         }
     }
 }
