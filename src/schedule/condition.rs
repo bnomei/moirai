@@ -19,6 +19,7 @@ struct StateProbe {
     type_id: TypeId,
     transition_tick: fn(&World) -> Option<ChangeTick>,
     pending: fn(&World) -> bool,
+    pending_request_tick: fn(&World) -> Option<ChangeTick>,
 }
 
 impl StateProbe {
@@ -38,6 +39,13 @@ impl StateProbe {
                     .ok()
                     .flatten()
                     .is_some_and(|state| state.pending().is_some())
+            },
+            pending_request_tick: |world| {
+                world
+                    .resource::<State<S>>()
+                    .ok()
+                    .flatten()
+                    .and_then(State::pending_request_tick)
             },
         }
     }
@@ -67,6 +75,7 @@ enum ConditionKind {
     ResourceChanged(TypeId),
     StateChanged(StateProbe),
     StatePending(StateProbe),
+    StatePendingOnce(StateProbe),
     FixedStepMod { mask: u64, phase: u64 },
     And(Box<ConditionKind>, Box<ConditionKind>),
     Or(Box<ConditionKind>, Box<ConditionKind>),
@@ -107,6 +116,11 @@ impl Condition {
     /// Runs while a state transition has been requested but not yet applied.
     pub fn state_pending<S: Eq + 'static>() -> Self {
         Self(ConditionKind::StatePending(StateProbe::of::<S>()))
+    }
+
+    /// Passes once per distinct pending state request until the system cursor advances.
+    pub(crate) fn state_pending_once<S: Eq + 'static>() -> Self {
+        Self(ConditionKind::StatePendingOnce(StateProbe::of::<S>()))
     }
 
     /// Runs on one phase of a power-of-two fixed-step cadence.
@@ -223,6 +237,10 @@ fn evaluate_kind(
             context.state_transition_cursor(system_index, probe.type_id),
         ),
         ConditionKind::StatePending(probe) => (probe.pending)(world),
+        ConditionKind::StatePendingOnce(probe) => state_tick_advanced(
+            (probe.pending_request_tick)(world),
+            context.state_pending_cursor(system_index, probe.type_id),
+        ),
         ConditionKind::FixedStepMod { mask, phase } => context
             .fixed_step
             .is_some_and(|step| step.index & mask == *phase),
@@ -261,6 +279,10 @@ fn evaluate_kind_for_set(
             context.state_transition_cursor_for_set(set_index, probe.type_id),
         ),
         ConditionKind::StatePending(probe) => (probe.pending)(world),
+        ConditionKind::StatePendingOnce(probe) => state_tick_advanced(
+            (probe.pending_request_tick)(world),
+            context.state_pending_cursor_for_set(set_index, probe.type_id),
+        ),
         ConditionKind::FixedStepMod { mask, phase } => context
             .fixed_step
             .is_some_and(|step| step.index & mask == *phase),
@@ -298,6 +320,11 @@ fn advance_kind_cursors(
                 context.set_state_transition_cursor(system_index, probe.type_id, tick);
             }
         }
+        ConditionKind::StatePendingOnce(probe) => {
+            if let Some(tick) = (probe.pending_request_tick)(world) {
+                context.set_state_pending_cursor(system_index, probe.type_id, tick);
+            }
+        }
         ConditionKind::And(left, right) | ConditionKind::Or(left, right) => {
             advance_kind_cursors(left, world, system_index, context);
             advance_kind_cursors(right, world, system_index, context);
@@ -326,6 +353,11 @@ fn advance_kind_set_cursors(
         ConditionKind::StateChanged(probe) => {
             if let Some(tick) = (probe.transition_tick)(world) {
                 context.set_state_transition_cursor_for_set(set_index, probe.type_id, tick);
+            }
+        }
+        ConditionKind::StatePendingOnce(probe) => {
+            if let Some(tick) = (probe.pending_request_tick)(world) {
+                context.set_state_pending_cursor_for_set(set_index, probe.type_id, tick);
             }
         }
         ConditionKind::And(left, right) | ConditionKind::Or(left, right) => {

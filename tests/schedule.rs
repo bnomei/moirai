@@ -8,7 +8,7 @@ use moirai::event::{EventOptions, EventReaderStart};
 use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 use moirai::schedule::FlushMode;
 use moirai::schedule::{stage, Condition, ScheduleBuilder, System, SystemSet};
-use moirai::state::{apply, State};
+use moirai::state::{apply, on_exit, State};
 use moirai::world::WorldBuilder;
 use moirai::FixedConfig;
 use moirai::StageOperation;
@@ -826,6 +826,46 @@ fn state_changed_runs_after_explicit_apply() {
         .expect("request");
     app.update(1.0 / 60.0).expect("update");
     assert_eq!(RAN.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn on_exit_runs_once_for_a_pending_request_across_fixed_substeps() {
+    static EXITS: AtomicU32 = AtomicU32::new(0);
+    EXITS.store(0, Ordering::SeqCst);
+
+    let fixed = FixedConfig::new(Duration::from_millis(1))
+        .expect("fixed")
+        .with_max_substeps(4)
+        .expect("substeps");
+    let mut builder = AppBuilder::new();
+    builder.insert_state(1u8).fixed(fixed);
+    builder
+        .add_system(on_exit::<u8>("exit", stage::FIXED_UPDATE, |_world, _dt| {
+            EXITS.fetch_add(1, Ordering::SeqCst);
+        }))
+        .expect("exit");
+    builder
+        .add_system(apply::<u8>("apply", stage::UPDATE))
+        .expect("apply");
+    let mut app = builder.build().expect("build");
+
+    app.world_mut()
+        .resource_mut::<State<u8>>()
+        .expect("state")
+        .expect("present")
+        .request(2)
+        .expect("request");
+    app.update(0.003).expect("first update");
+    assert_eq!(EXITS.load(Ordering::SeqCst), 1);
+
+    app.world_mut()
+        .resource_mut::<State<u8>>()
+        .expect("state")
+        .expect("present")
+        .request(1)
+        .expect("second request");
+    app.update(0.003).expect("second update");
+    assert_eq!(EXITS.load(Ordering::SeqCst), 2);
 }
 
 #[test]
