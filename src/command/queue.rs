@@ -526,9 +526,12 @@ mod tests {
     use super::*;
     use crate::component::ComponentOptions;
     use crate::world::WorldBuilder;
+    use alloc::vec;
 
     #[derive(Clone, Copy)]
     struct Health(#[allow(dead_code)] i32);
+
+    struct Marker;
 
     fn world_with_health() -> World {
         let mut builder = WorldBuilder::new();
@@ -660,5 +663,67 @@ mod tests {
         let mut live = LiveSet::new(&world, &mut scratch);
         live.insert(entity);
         assert!(live.contains(entity));
+    }
+
+    #[test]
+    fn configured_enqueue_helpers_cover_tags_values_and_errors() {
+        let owner = WorldOwner::new();
+        let entity = EntityId::from_parts(1, 1);
+        let mut queue = CommandQueue::configured(
+            owner.clone(),
+            vec![(Some(TypeId::of::<Health>()), false), (None, true)],
+        );
+
+        assert!(queue.owner().same(&owner));
+        queue
+            .enqueue_insert(entity, Health(1))
+            .expect("typed value");
+        queue
+            .enqueue_dynamic_insert(entity, 0, Box::new(Health(2)))
+            .expect("dynamic value");
+        queue.enqueue_tag(entity, 1).expect("tag");
+        queue.enqueue_remove::<Health>(entity).expect("remove");
+        assert_eq!(queue.ops.len(), 4);
+
+        assert!(matches!(
+            queue.enqueue_insert(entity, 3_u32),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+        assert!(matches!(
+            queue.enqueue_dynamic_insert(entity, 99, Box::new(Health(3))),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+        assert!(matches!(
+            queue.enqueue_dynamic_insert(entity, 1, Box::new(Health(4))),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+        assert!(matches!(
+            queue.enqueue_dynamic_insert(entity, 0, Box::new(3_u32)),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+        assert!(matches!(
+            queue.enqueue_tag(entity, 0),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+        assert!(matches!(
+            queue.enqueue_remove::<u32>(entity),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+
+        let mut typed_tag =
+            CommandQueue::configured(owner, vec![(Some(TypeId::of::<Marker>()), true)]);
+        typed_tag
+            .enqueue_insert(entity, Marker)
+            .expect("typed tag insert");
+        assert!(matches!(typed_tag.ops[0], CommandOp::InsertTag { .. }));
+
+        let scratch = typed_tag.take_preflight_scratch();
+        typed_tag.restore_preflight_scratch(scratch);
+        assert_eq!(typed_tag.preflight_scratch.retained_bytes(), 0);
+
+        let mut oversized = PreflightScratch::default();
+        oversized.transitions.reserve(MAX_RETAINED_COMMAND_BYTES);
+        typed_tag.restore_preflight_scratch(oversized);
+        assert_eq!(typed_tag.preflight_scratch.retained_bytes(), 0);
     }
 }

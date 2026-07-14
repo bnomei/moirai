@@ -189,6 +189,15 @@ mod tests {
     #[derive(Clone, Copy)]
     struct Marker(u8);
 
+    #[derive(Clone, Copy)]
+    struct Other;
+
+    #[derive(Clone, Copy)]
+    struct RequiredTag;
+
+    #[derive(Clone, Copy)]
+    struct BlockedTag;
+
     fn sparse_plan(primary: usize) -> ResolvedPlan {
         ResolvedPlan {
             fingerprint: 1,
@@ -310,5 +319,114 @@ mod tests {
             ChangeTick::ZERO,
             ChangeTick::from_raw(1)
         ));
+    }
+
+    #[test]
+    fn covered_structural_matching_still_enforces_uncovered_filters_and_tags() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        builder
+            .register_component::<Other>(ComponentOptions::sparse())
+            .expect("other");
+        let required_tag = builder
+            .register_component::<RequiredTag>(ComponentOptions::tag())
+            .expect("required tag");
+        let blocked_tag = builder
+            .register_component::<BlockedTag>(ComponentOptions::tag())
+            .expect("blocked tag");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Marker(1)).expect("marker");
+        world.add_tag(entity, &required_tag).expect("required tag");
+
+        let marker = world.component_index::<Marker>().expect("marker index");
+        let other = world.component_index::<Other>().expect("other index");
+        let mut plan = sparse_plan(marker);
+        plan.required_indices.push(other);
+        plan.with_tag_indices.push(required_tag.index());
+        plan.without_tag_indices.push(blocked_tag.index());
+
+        assert!(entity_matches_structural_with_covered(
+            &world,
+            entity,
+            &plan,
+            &[marker, other],
+        ));
+        assert!(!entity_matches_structural_with_covered(
+            &world,
+            entity,
+            &plan,
+            &[marker],
+        ));
+        world
+            .remove_tag(entity, &required_tag)
+            .expect("remove required");
+        assert!(!entity_matches_structural_with_covered(
+            &world,
+            entity,
+            &plan,
+            &[marker, other],
+        ));
+        world
+            .add_tag(entity, &required_tag)
+            .expect("restore required");
+        world.add_tag(entity, &blocked_tag).expect("blocked tag");
+        assert!(!entity_matches_with_covered(
+            &world,
+            entity,
+            &plan,
+            ChangeTick::ZERO,
+            world.change_tick(),
+            &[marker, other],
+        ));
+        world.remove_tag(entity, &blocked_tag).expect("unblock");
+        plan.without_indices.push(other);
+        world.insert(entity, Other).expect("other");
+        assert!(!entity_matches_structural_with_covered(
+            &world,
+            entity,
+            &plan,
+            &[marker, other],
+        ));
+
+        let stale = entity.with_generation(entity.generation().wrapping_add(1));
+        assert!(!entity_matches_structural_with_covered(
+            &world,
+            stale,
+            &plan,
+            &[marker, other],
+        ));
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        assert!(!entity_matches_structural_with_covered(
+            &world,
+            reserved,
+            &plan,
+            &[marker, other],
+        ));
+    }
+
+    #[test]
+    fn duplicate_validation_skips_repeated_unavailable_ids() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        let mut world = builder.build().expect("build");
+        let stale = world.spawn().expect("spawn");
+        world.despawn(stale).expect("despawn");
+        assert!(validate_exact_id_duplicates(&world, &[stale, stale]).is_ok());
+
+        let reserved = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        assert!(validate_exact_id_duplicates(&world, &[reserved, reserved]).is_ok());
     }
 }

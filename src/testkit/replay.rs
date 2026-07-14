@@ -197,4 +197,16 @@ mod tests {
         let snapshots: alloc::vec::Vec<_> = report.snapshots().copied().collect();
         assert_eq!(snapshots, alloc::vec![0, 1]);
     }
+
+    #[test]
+    fn final_only_skips_intermediate_records() {
+        let config = ReplayConfig::new(3, 3, CapturePolicy::FinalOnly).expect("config");
+        let report = run_replay(config, |_| CountingDriver { remaining: 3 }).expect("replay");
+
+        assert_eq!(report.step_snapshots().len(), 1);
+        assert_eq!(
+            report.snapshots().copied().collect::<Vec<_>>(),
+            alloc::vec![2]
+        );
+    }
 }

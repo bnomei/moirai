@@ -272,6 +272,7 @@ mod tests {
     use super::*;
     use crate::component::ComponentOptions;
     use crate::world::WorldBuilder;
+    use alloc::vec;
 
     #[derive(Clone, Copy)]
     struct Health(i32);
@@ -328,6 +329,40 @@ mod tests {
     }
 
     #[test]
+    fn deferred_dynamic_bundle_queues_validated_erased_value() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("health");
+        let mut world = builder.build().expect("world");
+        let health = world.component_id::<Health>().expect("id");
+        let entity = world
+            .commands()
+            .expect("commands")
+            .spawn()
+            .expect("reserve");
+        let mut dynamic = DynamicBundle::new();
+        dynamic
+            .push_entry(health, Some(Box::new(Health(7))))
+            .expect("entry");
+        dynamic
+            .write(&mut BundleWriter::deferred(&mut world, entity))
+            .expect("deferred dynamic");
+
+        let mut wrong = DynamicBundle::new();
+        wrong
+            .push_entry(
+                world.component_id::<Health>().expect("health id"),
+                Some(Box::new(7_u32)),
+            )
+            .expect("wrong entry");
+        assert!(matches!(
+            wrong.write(&mut BundleWriter::deferred(&mut world, entity)),
+            Err(WorldError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
     fn tuple_bundle_writes_components() {
         let mut builder = WorldBuilder::new();
         builder
@@ -342,5 +377,52 @@ mod tests {
             world.get::<Health>(entity).expect("get").map(|h| h.0),
             Some(4)
         );
+    }
+
+    #[test]
+    fn query_bundle_writer_validates_and_enqueues_all_component_shapes() {
+        let mut builder = WorldBuilder::new();
+        let health = builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("health");
+        let marker = builder
+            .register_component::<Marker>(ComponentOptions::tag())
+            .expect("marker");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("entity");
+        let mut queue = crate::command::CommandQueue::configured(
+            world.owner.clone(),
+            vec![
+                (Some(core::any::TypeId::of::<Health>()), false),
+                (None, true),
+            ],
+        );
+
+        let mut writer = BundleWriter::query(&world.allocator, &mut queue, entity);
+        assert_eq!(writer.test_entity(), entity);
+        assert!(writer.world_owner().same(world.owner()));
+        assert!(!writer.is_tag_component(&health));
+        assert!(writer.is_tag_component(&marker));
+        writer.insert(Health(1)).expect("typed insert");
+        writer
+            .insert_dynamic(health, Box::new(Health(2)))
+            .expect("dynamic insert");
+        writer.insert_tag_id(marker).expect("tag insert");
+
+        let stale = EntityId::from_parts(99, 1);
+        let mut stale_writer = BundleWriter::query(&world.allocator, &mut queue, stale);
+        assert!(matches!(
+            stale_writer.insert(Health(3)),
+            Err(WorldError::StaleEntity { .. })
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "query bundle writer has no world")]
+    fn query_bundle_test_world_rejects_world_access() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let entity = world.spawn().expect("entity");
+        let mut queue = crate::command::CommandQueue::configured(world.owner.clone(), vec![]);
+        BundleWriter::query(&world.allocator, &mut queue, entity).test_world();
     }
 }

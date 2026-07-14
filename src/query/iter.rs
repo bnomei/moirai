@@ -146,10 +146,14 @@ impl<'w, 'c, T: 'static> Query1<'w, 'c, T> {
         if self.cursor_committed {
             return;
         }
-        if let Some(cursor) = self.cursor.as_mut() {
-            if cursor.validate(self.world, self.params_fingerprint).is_ok() {
-                cursor.commit(self.captured_now);
-            }
+        let world = self.world;
+        let fingerprint = self.params_fingerprint;
+        let cursor = self
+            .cursor
+            .as_mut()
+            .filter(|cursor| cursor.validate(world, fingerprint).is_ok());
+        if let Some(cursor) = cursor {
+            cursor.commit(self.captured_now);
         }
         self.cursor_committed = true;
     }
@@ -267,9 +271,11 @@ impl<'w, 'c, T: 'static> Iterator for Query1<'w, 'c, T> {
                         } else {
                             self.world.query1_match_cached::<T>(entity, &self.plan)
                         };
-                        if let Some(value) = value {
-                            return Some((entity, value));
-                        }
+                        let value = match value {
+                            Some(value) => value,
+                            None => continue,
+                        };
+                        return Some((entity, value));
                     }
                     self.state = Query1State::Done;
                 }
@@ -293,9 +299,11 @@ impl<'w, 'c, T: 'static> Iterator for Query1<'w, 'c, T> {
                             continue;
                         }
                         let value = self.world.query1_match_cached::<T>(entity, &self.plan);
-                        if let Some(value) = value {
-                            return Some((entity, value));
-                        }
+                        let value = match value {
+                            Some(value) => value,
+                            None => continue,
+                        };
+                        return Some((entity, value));
                     }
                     self.state = Query1State::Done;
                 }
@@ -418,10 +426,14 @@ impl<'w, 'c, A: 'static, B: 'static> Query2<'w, 'c, A, B> {
         if self.cursor_committed {
             return;
         }
-        if let Some(cursor) = self.cursor.as_mut() {
-            if cursor.validate(self.world, self.params_fingerprint).is_ok() {
-                cursor.commit(self.captured_now);
-            }
+        let world = self.world;
+        let fingerprint = self.params_fingerprint;
+        let cursor = self
+            .cursor
+            .as_mut()
+            .filter(|cursor| cursor.validate(world, fingerprint).is_ok());
+        if let Some(cursor) = cursor {
+            cursor.commit(self.captured_now);
         }
         self.cursor_committed = true;
     }
@@ -552,7 +564,7 @@ enum CandidateFilter {
 
 impl<'w, 'c, A: 'static, B: 'static> Drop for Query2<'w, 'c, A, B> {
     fn drop(&mut self) {
-        if matches!(self.state, Query2State::Done) {
+        if let Query2State::Done = self.state {
             self.commit_cursor_if_needed();
         }
     }
@@ -562,7 +574,7 @@ impl<'w, 'c, A: 'static, B: 'static> Drop for Query2<'w, 'c, A, B> {
 mod tests {
     use super::*;
     use crate::component::ComponentOptions;
-    use crate::query::{QueryError, QuerySpec};
+    use crate::query::{ExactIdPolicy, QueryError, QueryParams, QuerySpec};
     use crate::world::query::plan::{ResolvedPlan, TraversalSource};
     use crate::world::WorldBuilder;
     use alloc::rc::Rc;
@@ -686,5 +698,295 @@ mod tests {
         .expect("query2");
         assert_eq!(iter.next().map(|(_, pos, _)| pos.0), Some(2));
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn query1_source_covered_path_applies_remaining_filters() {
+        let mut world = sparse_world();
+        let partial = world.spawn().expect("partial");
+        let matched = world.spawn().expect("matched");
+        world.insert(partial, Pos(1)).expect("partial pos");
+        world.insert(partial, Vel(3)).expect("partial vel");
+        world.insert(matched, Pos(2)).expect("matched pos");
+        let plan = world
+            .resolve_query1_plan::<Pos>(&QuerySpec::new().without::<Vel>())
+            .expect("plan");
+        let pos_index = world.component_index::<Pos>().expect("pos index");
+        let mut iter: Query1<'_, '_, Pos> = Query1::new(
+            &world,
+            plan,
+            crate::time::ChangeTick::ZERO,
+            world.change_tick(),
+            None,
+            None,
+            None,
+            Some(pos_index),
+        )
+        .expect("query1");
+
+        assert_eq!(
+            iter.next().map(|(entity, pos)| (entity, pos.0)),
+            Some((matched, 2))
+        );
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn exact_query1_skips_ids_missing_the_component() {
+        let mut world = sparse_world();
+        let missing = world.spawn().expect("missing");
+        let matched = world.spawn().expect("matched");
+        world.insert(matched, Pos(4)).expect("matched pos");
+        let spec = QuerySpec::new().exact_ids(
+            alloc::vec![missing, matched],
+            ExactIdPolicy::SkipUnavailable,
+        );
+        let values: alloc::vec::Vec<_> = world
+            .query::<Pos>(&spec, QueryParams::new())
+            .expect("query")
+            .map(|(_, pos)| pos.0)
+            .collect();
+        assert_eq!(values, alloc::vec![4]);
+    }
+
+    #[test]
+    fn cached_query1_applies_temporal_filter_on_valid_membership() {
+        let mut world = sparse_world();
+        let entity = world.spawn().expect("entity");
+        world.insert(entity, Pos(1)).expect("pos");
+        let since = world.change_tick();
+        world.get_mut::<Pos>(entity).expect("get").expect("pos").0 = 2;
+        let spec = QuerySpec::new().changed::<Pos>();
+        let cache = world.build_query_cache::<Pos>(spec.clone()).expect("cache");
+
+        assert_eq!(
+            world
+                .query::<Pos>(
+                    &spec,
+                    QueryParams::new().since(since).membership_cache(&cache),
+                )
+                .expect("cached query")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn cached_and_borrowed_query1_return_valid_members() {
+        use crate::world::query::cached_source::QueryCachedSource;
+
+        let mut world = sparse_world();
+        let entity = world.spawn().expect("entity");
+        let stale = world.spawn().expect("stale");
+        let missing = world.spawn().expect("missing");
+        world.insert(entity, Pos(7)).expect("pos");
+        world.insert(stale, Pos(8)).expect("stale pos");
+        let spec = QuerySpec::new();
+        let plan = world.resolve_query1_plan::<Pos>(&spec).expect("plan");
+        let cache = world.build_query_cache::<Pos>(spec).expect("cache");
+        world.remove::<Pos>(stale).expect("remove stale pos");
+        let mut cached: Query1<'_, '_, Pos> = Query1::new(
+            &world,
+            plan.clone(),
+            crate::time::ChangeTick::ZERO,
+            world.change_tick(),
+            None,
+            Some(QueryCachedSource::Membership(cache)),
+            None,
+            None,
+        )
+        .expect("cached");
+        assert_eq!(
+            cached.next().map(|(id, value)| (id, value.0)),
+            Some((entity, 7))
+        );
+        assert!(cached.next().is_none());
+        drop(cached);
+
+        let ids = [missing, entity];
+        let mut borrowed: Query1<'_, '_, Pos> = Query1::new_prepared(
+            &world,
+            plan,
+            crate::time::ChangeTick::ZERO,
+            world.change_tick(),
+            None,
+            Some((&ids, false)),
+            None,
+        )
+        .expect("borrowed");
+        assert_eq!(
+            borrowed.next().map(|(id, value)| (id, value.0)),
+            Some((entity, 7))
+        );
+        assert!(borrowed.next().is_none());
+    }
+
+    #[test]
+    fn exhausted_typed_iterators_commit_their_cursors_and_drop_done() {
+        let mut world = sparse_world();
+        let entity = world.spawn().expect("entity");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, Vel(2)).expect("vel");
+
+        let q1_spec = QuerySpec::new().changed::<Pos>();
+        let mut q1_cursor = crate::query::QueryCursor::from_spec_start::<Pos>(&mut world, &q1_spec)
+            .expect("Q1 cursor");
+        let q1_before = q1_cursor.since();
+        {
+            let mut query = world
+                .query::<Pos>(&q1_spec, QueryParams::new().cursor(&mut q1_cursor))
+                .expect("Q1");
+            assert!(query.next().is_some());
+            assert!(query.next().is_none());
+        }
+        assert!(q1_cursor.since() > q1_before);
+
+        let q2_spec = QuerySpec::new().changed::<Pos>();
+        let mut q2_cursor =
+            crate::query::QueryCursor::from_spec2_start::<Pos, Vel>(&mut world, &q2_spec)
+                .expect("Q2 cursor");
+        let q2_before = q2_cursor.since();
+        {
+            let mut query = world
+                .query2::<Pos, Vel>(&q2_spec, QueryParams::new().cursor(&mut q2_cursor))
+                .expect("Q2");
+            assert!(query.next().is_some());
+            assert!(query.next().is_none());
+        }
+        assert!(q2_cursor.since() > q2_before);
+
+        let mut partial_cursor =
+            crate::query::QueryCursor::from_spec2_start::<Pos, Vel>(&mut world, &q2_spec)
+                .expect("partial Q2 cursor");
+        let partial_before = partial_cursor.since();
+        {
+            let mut query = world
+                .query2::<Pos, Vel>(&q2_spec, QueryParams::new().cursor(&mut partial_cursor))
+                .expect("partial Q2");
+            assert!(query.next().is_some());
+        }
+        assert_eq!(partial_cursor.since(), partial_before);
+    }
+
+    #[test]
+    fn query2_rejects_entity_only_plan_and_stale_cache() {
+        use crate::world::query::cached_source::QueryCachedSource;
+
+        let mut world = sparse_world();
+        let all_plan = Rc::new(ResolvedPlan {
+            fingerprint: 9,
+            primary_index: 0,
+            primary_is_table: false,
+            traversal: TraversalSource::All,
+            required_indices: alloc::vec![],
+            without_indices: alloc::vec![],
+            with_tag_indices: alloc::vec![],
+            without_tag_indices: alloc::vec![],
+            added_indices: alloc::vec![],
+            changed_indices: alloc::vec![],
+            exact_id_policy: None,
+        });
+        assert!(matches!(
+            Query2::<Pos, Vel>::new(
+                &world,
+                all_plan,
+                crate::time::ChangeTick::ZERO,
+                world.change_tick(),
+                None,
+                None,
+                None,
+                1,
+                false,
+            ),
+            Err(QueryError::WrongQuery { .. })
+        ));
+
+        let entity = world.spawn().expect("entity");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, Vel(2)).expect("vel");
+        let spec = QuerySpec::new();
+        let (plan, second_index, second_is_table) =
+            world.resolve_query2_plan::<Pos, Vel>(&spec).expect("plan");
+        let cache = world.build_query2_cache::<Pos, Vel>(spec).expect("cache");
+        {
+            let mut cached = Query2::<Pos, Vel>::new(
+                &world,
+                plan.clone(),
+                crate::time::ChangeTick::ZERO,
+                world.change_tick(),
+                None,
+                Some(QueryCachedSource::Membership(cache.clone())),
+                None,
+                second_index,
+                second_is_table,
+            )
+            .expect("cached iterator");
+            assert_eq!(cached.next().map(|(id, _, _)| id), Some(entity));
+            assert!(cached.next().is_none());
+        }
+        let stale = cache.clone();
+        world.invalidate_query_cache(&cache);
+        let mut iter = Query2::<Pos, Vel>::new(
+            &world,
+            plan,
+            crate::time::ChangeTick::ZERO,
+            world.change_tick(),
+            None,
+            Some(QueryCachedSource::Membership(stale)),
+            None,
+            second_index,
+            second_is_table,
+        )
+        .expect("iterator");
+        assert!(iter.next().is_none());
+        assert!(matches!(iter.state, Query2State::Done));
+    }
+
+    #[test]
+    fn borrowed_query2_selects_temporal_and_trusted_filters() {
+        let mut world = sparse_world();
+        let matched = world.spawn().expect("matched");
+        world.insert(matched, Pos(1)).expect("pos");
+        world.insert(matched, Vel(2)).expect("vel");
+        let since = world.change_tick();
+        world.get_mut::<Pos>(matched).expect("get").expect("pos").0 = 3;
+        let spec = QuerySpec::new().changed::<Pos>();
+        let (plan, second_index, second_is_table) =
+            world.resolve_query2_plan::<Pos, Vel>(&spec).expect("plan");
+        let temporal_ids = [matched];
+        let mut temporal = Query2::<Pos, Vel>::new_prepared(
+            &world,
+            plan.clone(),
+            since,
+            world.change_tick(),
+            None,
+            Some((&temporal_ids, true)),
+            None,
+            second_index,
+            second_is_table,
+        )
+        .expect("temporal iterator");
+        assert_eq!(temporal.next().map(|(id, _, _)| id), Some(matched));
+        assert!(temporal.next().is_none());
+        drop(temporal);
+
+        let missing_primary = world.spawn().expect("missing primary");
+        world
+            .insert(missing_primary, Vel(4))
+            .expect("secondary only");
+        let trusted_ids = [missing_primary];
+        let mut trusted = Query2::<Pos, Vel>::new_prepared(
+            &world,
+            plan,
+            crate::time::ChangeTick::ZERO,
+            world.change_tick(),
+            None,
+            Some((&trusted_ids, false)),
+            None,
+            second_index,
+            second_is_table,
+        )
+        .expect("trusted iterator");
+        assert!(trusted.next().is_none());
     }
 }

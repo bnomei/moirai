@@ -624,6 +624,21 @@ mod tests {
         builder.build().expect("world")
     }
 
+    fn delta_state(world: &mut World, plan: &ResolvedPlan) -> DeltaSet {
+        let ids = collect_query1_structural_members(world, plan);
+        let reverse = build_reverse(&ids);
+        let topology = QueryTopologySnapshot::capture(world, plan);
+        let cursor = world.register_query_delta_cursor();
+        DeltaSet {
+            topology,
+            ids,
+            reverse,
+            changed: Vec::new(),
+            changed_reverse: Vec::new(),
+            cursor,
+        }
+    }
+
     #[test]
     fn reverse_indexed_delta_handles_add_remove_and_slot_reuse() {
         let mut world = world();
@@ -632,13 +647,7 @@ mod tests {
         let plan = world
             .resolve_query1_plan::<A>(&QuerySpec::new())
             .expect("plan");
-        let mut state =
-            match Materialization::build(&mut world, &plan, QueryPolicy::DeltaMembership)
-                .expect("delta")
-            {
-                Materialization::DeltaMembership(state) => state,
-                _ => unreachable!(),
-            };
+        let mut state = delta_state(&mut world, &plan);
 
         let second = world.spawn().expect("second");
         world.insert(second, A(2)).expect("A2");
@@ -1142,6 +1151,197 @@ mod tests {
         assert!(matches!(
             query.iter(&mut world, QueryWindow::Cursor(&mut wrong)),
             Err(QueryError::WrongQuery { .. })
+        ));
+    }
+
+    #[test]
+    fn query_window_constructors_resolve_the_requested_window() {
+        let mut world = world();
+        let spec = QuerySpec::new();
+        let plan = world.resolve_query1_plan::<A>(&spec).expect("plan");
+
+        let (since, cursor) = QueryWindow::all()
+            .into_parts(&world, plan.fingerprint)
+            .expect("all");
+        assert_eq!(since, ChangeTick::ZERO);
+        assert!(cursor.is_none());
+
+        let requested = ChangeTick::from_raw(17);
+        let (since, cursor) = QueryWindow::since(requested)
+            .into_parts(&world, plan.fingerprint)
+            .expect("since");
+        assert_eq!(since, requested);
+        assert!(cursor.is_none());
+
+        let mut query_cursor =
+            QueryCursor::from_spec_start::<A>(&mut world, &spec).expect("cursor");
+        let expected = query_cursor.since();
+        let (since, cursor) = QueryWindow::cursor(&mut query_cursor)
+            .into_parts(&world, plan.fingerprint)
+            .expect("cursor window");
+        assert_eq!(since, expected);
+        assert!(cursor.is_some());
+    }
+
+    #[test]
+    fn delta_update_keeps_an_existing_matching_entity_in_place() {
+        let mut world = world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, A(1)).expect("A");
+        let plan = world
+            .resolve_query1_plan::<A>(&QuerySpec::new())
+            .expect("plan");
+        let mut state = delta_state(&mut world, &plan);
+        let before = state.ids.clone();
+
+        update_delta_entity(&mut state, &world, &plan, entity);
+
+        assert_eq!(state.ids, before);
+        assert_eq!(state.reverse[entity.slot() as usize], Some(0));
+    }
+
+    #[test]
+    fn mutation_executors_commit_query_cursors() {
+        let mut world = world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, A(1)).expect("A");
+        world.insert(entity, B(2)).expect("B");
+
+        let q1_spec = QuerySpec::new().changed::<A>();
+        let mut query1 = world
+            .prepare_query1::<A>(q1_spec.clone(), QueryPolicy::Prepared)
+            .expect("prepare Q1");
+        let mut cursor1 =
+            QueryCursor::from_spec_start::<A>(&mut world, &q1_spec).expect("Q1 cursor");
+        let before1 = cursor1.since();
+        query1
+            .for_each_mut(&mut world, QueryWindow::cursor(&mut cursor1), |_, a| {
+                a.0 += 1;
+                Ok(())
+            })
+            .expect("Q1 mutation");
+        assert!(cursor1.since() > before1);
+
+        let q2_spec = QuerySpec::new().changed::<A>();
+        let mut query2 = world
+            .prepare_query2::<A, B>(q2_spec.clone(), QueryPolicy::Prepared)
+            .expect("prepare Q2");
+        let mut mut_mut_cursor =
+            QueryCursor::from_spec2_start::<A, B>(&mut world, &q2_spec).expect("mut/mut cursor");
+        let mut mut_read_cursor =
+            QueryCursor::from_spec2_start::<A, B>(&mut world, &q2_spec).expect("mut/read cursor");
+        let before_mut_mut = mut_mut_cursor.since();
+        let before_mut_read = mut_read_cursor.since();
+        query2
+            .for_each_mut_mut(
+                &mut world,
+                QueryWindow::cursor(&mut mut_mut_cursor),
+                |_, a, b| {
+                    a.0 += 1;
+                    b.0 += 1;
+                    Ok(())
+                },
+            )
+            .expect("Q2 mut/mut");
+        query2
+            .for_each_mut_read(
+                &mut world,
+                QueryWindow::cursor(&mut mut_read_cursor),
+                |_, a, b| {
+                    a.0 += b.0;
+                    Ok(())
+                },
+            )
+            .expect("Q2 mut/read");
+        assert!(mut_mut_cursor.since() > before_mut_mut);
+        assert!(mut_read_cursor.since() > before_mut_read);
+    }
+
+    #[test]
+    fn mut_read_propagates_callback_errors_without_committing_cursor() {
+        let mut world = world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, A(1)).expect("A");
+        world.insert(entity, B(2)).expect("B");
+        let spec = QuerySpec::new().changed::<A>();
+        let mut query = world
+            .prepare_query2::<A, B>(spec.clone(), QueryPolicy::Prepared)
+            .expect("prepare");
+        let mut cursor = QueryCursor::from_spec2_start::<A, B>(&mut world, &spec).expect("cursor");
+        let before = cursor.since();
+
+        let error = query
+            .for_each_mut_read(&mut world, QueryWindow::cursor(&mut cursor), |_, _, _| {
+                Err(QueryError::WrongOwner)
+            })
+            .expect_err("callback error");
+
+        assert!(matches!(error, QueryError::WrongOwner));
+        assert_eq!(cursor.since(), before);
+    }
+
+    #[test]
+    fn prepared_queries_reject_a_foreign_world() {
+        let mut owner = world();
+        let mut query1 = owner
+            .prepare_query1::<A>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("Q1");
+        let mut query2 = owner
+            .prepare_query2::<A, B>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("Q2");
+        let mut foreign = world();
+
+        assert!(matches!(
+            query1.iter(&mut foreign, QueryWindow::All),
+            Err(QueryError::WrongOwner)
+        ));
+        assert!(matches!(
+            query2.iter(&mut foreign, QueryWindow::All),
+            Err(QueryError::WrongOwner)
+        ));
+    }
+
+    #[test]
+    fn traversal_equality_is_variant_and_payload_sensitive() {
+        let first = EntityId::from_parts(1, 1);
+        let second = EntityId::from_parts(2, 1);
+
+        assert!(same_traversal(&TraversalSource::All, &TraversalSource::All));
+        assert!(same_traversal(
+            &TraversalSource::Sparse { component_index: 3 },
+            &TraversalSource::Sparse { component_index: 3 }
+        ));
+        assert!(!same_traversal(
+            &TraversalSource::Sparse { component_index: 3 },
+            &TraversalSource::Sparse { component_index: 4 }
+        ));
+        assert!(same_traversal(
+            &TraversalSource::Table { component_index: 5 },
+            &TraversalSource::Table { component_index: 5 }
+        ));
+        assert!(!same_traversal(
+            &TraversalSource::Table { component_index: 5 },
+            &TraversalSource::Table { component_index: 6 }
+        ));
+        assert!(same_traversal(
+            &TraversalSource::Exact {
+                ids: alloc::vec![first, second]
+            },
+            &TraversalSource::Exact {
+                ids: alloc::vec![first, second]
+            }
+        ));
+        assert!(!same_traversal(
+            &TraversalSource::Exact {
+                ids: alloc::vec![first]
+            },
+            &TraversalSource::Exact {
+                ids: alloc::vec![second]
+            }
+        ));
+        assert!(!same_traversal(
+            &TraversalSource::All,
+            &TraversalSource::Sparse { component_index: 0 }
         ));
     }
 }

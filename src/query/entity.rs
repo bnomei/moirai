@@ -48,10 +48,14 @@ impl QueryIds<'_, '_> {
         if self.cursor_committed {
             return;
         }
-        if let Some(cursor) = self.cursor.as_mut() {
-            if cursor.validate(self.world, self.fingerprint).is_ok() {
-                cursor.commit(self.captured_now);
-            }
+        let world = self.world;
+        let fingerprint = self.fingerprint;
+        let cursor = self
+            .cursor
+            .as_mut()
+            .filter(|cursor| cursor.validate(world, fingerprint).is_ok());
+        if let Some(cursor) = cursor {
+            cursor.commit(self.captured_now);
         }
         self.cursor_committed = true;
     }
@@ -107,3 +111,59 @@ impl<'w> Iterator for QueryEntities<'w, '_> {
 }
 
 impl ExactSizeIterator for QueryEntities<'_, '_> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::query::{QueryCursor, QueryParams, QuerySpec};
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Position;
+
+    #[derive(Clone, Copy)]
+    struct Unregistered;
+
+    #[test]
+    fn entity_ref_has_reports_unregistered_component() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("position");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position).expect("position");
+        let entity_ref = EntityRef {
+            world: &world,
+            entity,
+        };
+
+        assert!(matches!(
+            entity_ref.has::<Unregistered>(),
+            Err(WorldError::UnregisteredComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn exhausted_query_ids_commit_the_entity_cursor() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("position");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position).expect("position");
+        let spec = QuerySpec::new().added::<Position>();
+        let mut cursor = QueryCursor::for_entities_from_start(&mut world, &spec).expect("cursor");
+        let before = cursor.since();
+
+        let ids = world
+            .query_ids(&spec, QueryParams::new().cursor(&mut cursor))
+            .expect("ids")
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, alloc::vec![entity]);
+        assert!(cursor.since() > before);
+    }
+}

@@ -51,10 +51,10 @@ impl QueryTopologySnapshot {
         components.extend_from_slice(&plan.without_indices);
         components.extend_from_slice(&plan.with_tag_indices);
         components.extend_from_slice(&plan.without_tag_indices);
-        if let TraversalSource::Sparse { component_index }
-        | TraversalSource::Table { component_index } = plan.traversal
-        {
-            components.push(component_index);
+        match plan.traversal {
+            TraversalSource::Sparse { component_index }
+            | TraversalSource::Table { component_index } => components.push(component_index),
+            TraversalSource::All | TraversalSource::Exact { .. } => (),
         }
         components.sort_unstable();
         components.dedup();
@@ -312,6 +312,33 @@ mod tests {
     struct FrameEvent(#[allow(dead_code)] u8);
 
     #[test]
+    fn topology_snapshot_tracks_the_physical_traversal_component() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let plan = world
+            .resolve_query1_plan::<Position>(&QuerySpec::new())
+            .expect("plan");
+        let index = world.component_index::<Position>().expect("index");
+
+        let snapshot = QueryTopologySnapshot::capture(&world, &plan);
+
+        assert!(snapshot
+            .component_revisions
+            .iter()
+            .any(|&(component, _)| component == index));
+
+        let all_plan = world
+            .resolve_entity_plan(&QuerySpec::new())
+            .expect("all plan");
+        let all_snapshot = QueryTopologySnapshot::capture(&world, &all_plan);
+        assert!(all_snapshot.entity_revision.is_some());
+        assert!(all_snapshot.component_revisions.is_empty());
+    }
+
+    #[test]
     fn stale_cache_handle_is_rejected() {
         let mut builder = WorldBuilder::new();
         builder
@@ -360,6 +387,114 @@ mod tests {
 
     #[derive(Clone, Copy)]
     struct Velocity(#[allow(dead_code)] i32);
+
+    #[test]
+    fn entity_membership_cache_builds_and_rejects_exact_ids() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position(1)).expect("insert");
+
+        let cache = world
+            .build_entity_query_cache(QuerySpec::new().with::<Position>())
+            .expect("entity cache");
+        let plan = world
+            .resolve_entity_plan(&QuerySpec::new().with::<Position>())
+            .expect("plan");
+        assert_eq!(
+            world
+                .refresh_membership_cache(&cache, &plan)
+                .expect("members"),
+            &[entity]
+        );
+
+        let exact =
+            QuerySpec::new().exact_ids(vec![entity], crate::query::ExactIdPolicy::SkipUnavailable);
+        assert!(matches!(
+            world.build_entity_query_cache(exact),
+            Err(QueryError::UnsupportedCachePolicy { .. })
+        ));
+    }
+
+    #[test]
+    fn membership_cache_distinguishes_irrelevant_and_relevant_topology_changes() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register position");
+        builder
+            .register_component::<Velocity>(ComponentOptions::sparse())
+            .expect("register velocity");
+        let mut world = builder.build().expect("build");
+        let first = world.spawn().expect("first");
+        world.insert(first, Position(1)).expect("position");
+        let unrelated = world.spawn().expect("unrelated");
+
+        let spec = QuerySpec::new();
+        let cache = world
+            .build_query_cache::<Position>(spec.clone())
+            .expect("cache");
+        let plan = world.resolve_query1_plan::<Position>(&spec).expect("plan");
+        let original_members = world
+            .membership_cache_slot(cache.slot as usize)
+            .members
+            .clone();
+
+        world
+            .insert(unrelated, Velocity(1))
+            .expect("irrelevant topology change");
+        let irrelevant_revision = world.query_topology_revision;
+        assert_eq!(
+            world
+                .refresh_membership_cache(&cache, &plan)
+                .expect("refresh after irrelevant change"),
+            original_members.as_slice()
+        );
+        assert_eq!(
+            world
+                .membership_cache_slot(cache.slot as usize)
+                .topology
+                .observed_global_revision(),
+            irrelevant_revision
+        );
+
+        world
+            .insert(unrelated, Position(2))
+            .expect("relevant topology change");
+        let plan = world.resolve_query1_plan::<Position>(&spec).expect("plan");
+        assert_eq!(
+            world
+                .refresh_membership_cache(&cache, &plan)
+                .expect("refresh after relevant change"),
+            &[first, unrelated]
+        );
+    }
+
+    #[test]
+    fn membership_cache_validation_rejects_foreign_owner() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("register");
+        let mut world = builder.build().expect("build");
+        let cache = world
+            .build_query_cache::<Position>(QuerySpec::new())
+            .expect("cache");
+        let foreign = QueryCache {
+            owner: crate::world::WorldOwner::new(),
+            slot: cache.slot,
+            generation: cache.generation,
+        };
+        let fingerprint = world.membership_cache_slot(cache.slot as usize).fingerprint;
+
+        assert!(matches!(
+            world.validate_membership_cache(&foreign, fingerprint),
+            Err(QueryError::WrongOwner)
+        ));
+    }
 
     #[test]
     fn membership_cache_rejects_exact_id_specs() {

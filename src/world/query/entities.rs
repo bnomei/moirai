@@ -174,4 +174,31 @@ mod tests {
             .for_each(drop);
         assert!(cursor.since() > before);
     }
+
+    #[test]
+    fn internal_entity_queries_exercise_membership_and_result_cache_sources() {
+        let mut world = build_world();
+        let first = world.spawn().expect("first");
+        let second = world.spawn().expect("second");
+        world.insert(first, Position(1)).expect("first position");
+        world.insert(second, Position(2)).expect("second position");
+        let spec = QuerySpec::new().with::<Position>();
+        let membership = world
+            .build_entity_query_cache(spec.clone())
+            .expect("membership cache");
+        let result = world
+            .build_entity_query_result_cache(spec.clone())
+            .expect("result cache");
+
+        let membership_ids = world
+            .query_ids(&spec, QueryParams::new().membership_cache(&membership))
+            .expect("membership ids")
+            .collect::<alloc::vec::Vec<_>>();
+        let result_ids = world
+            .query_ids(&spec, QueryParams::new().result_cache(&result))
+            .expect("result ids")
+            .collect::<alloc::vec::Vec<_>>();
+        assert_eq!(membership_ids, alloc::vec![first, second]);
+        assert_eq!(result_ids, membership_ids);
+    }
 }

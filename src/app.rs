@@ -657,6 +657,7 @@ mod tests {
     use crate::schedule::{stage, ScheduleBuilder, System};
     use crate::time::FixedConfig;
     use crate::world::WorldBuilder;
+    use alloc::vec::Vec;
     use core::time::Duration;
 
     #[test]
@@ -678,6 +679,57 @@ mod tests {
         let mut app = App::from_parts(world, schedule).expect("app");
         assert!(matches!(app.update(1.0), Err(AppError::FixedStepExhausted)));
         assert!(app.is_faulted());
+    }
+
+    #[test]
+    fn later_faults_preserve_the_first_terminal_fault() {
+        let mut app = AppBuilder::default().build().expect("app");
+        let first = AppFault {
+            stage: Some(String::from("first-stage")),
+            system: Some(String::from("first-system")),
+            detail: Some(String::from("first-detail")),
+        };
+        app.fault = Some(first.clone());
+
+        app.record_exhaustion_fault("later exhaustion");
+        assert_eq!(app.fault(), Some(&first));
+
+        app.record_fault(&RunOutcome {
+            fault_stage: Some(String::from("later-stage")),
+            fault_system: Some(String::from("later-system")),
+            fault_detail: Some(String::from("later-detail")),
+        });
+        assert_eq!(app.fault(), Some(&first));
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn unwind_cleanup_preserves_an_existing_fault() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let mut context = RunContext::new();
+        let mut faulted = false;
+        let first = AppFault {
+            stage: Some(String::from("first-stage")),
+            system: Some(String::from("first-system")),
+            detail: Some(String::from("first-detail")),
+        };
+        let mut fault = Some(first.clone());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_terminal_unwind_cleanup(
+                &mut world,
+                &mut context,
+                &mut faulted,
+                &mut fault,
+                StageOperation::Update,
+                |_world, _context| panic!("test panic"),
+            );
+        }));
+
+        assert!(result.is_err());
+        assert!(faulted);
+        assert_eq!(fault, Some(first));
+        assert!(world.run_guard_is_idle());
     }
 
     #[test]
@@ -708,5 +760,65 @@ mod tests {
         assert!(app.run_context.fixed_step.is_none());
         assert!(app.world.run_guard_is_idle());
         assert!(!app.world.has_pending_commands());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn panic_fault_can_be_recorded_directly_without_prior_fault() {
+        let mut app = AppBuilder::default().build().expect("app");
+        app.record_panic_fault();
+        assert!(app.is_faulted());
+        assert_eq!(
+            app.fault().and_then(|fault| fault.detail.as_deref()),
+            Some("panic during execution")
+        );
+    }
+
+    #[test]
+    fn builder_set_order_after_delegates_and_default_constructs() {
+        let before = SystemSet::new("before");
+        let after = SystemSet::new("after");
+        let mut builder = AppBuilder::default();
+        builder.insert_resource(Vec::<&'static str>::new());
+        builder.register_set(before.clone()).expect("before set");
+        builder.register_set(after.clone()).expect("after set");
+        builder
+            .add_system(
+                System::new("after", stage::UPDATE, |world, _dt| {
+                    world
+                        .resource_mut::<Vec<&'static str>>()
+                        .expect("trace access")
+                        .expect("trace resource")
+                        .push("after");
+                })
+                .in_set(&after),
+            )
+            .expect("after system");
+        builder
+            .add_system(
+                System::new("before", stage::UPDATE, |world, _dt| {
+                    world
+                        .resource_mut::<Vec<&'static str>>()
+                        .expect("trace access")
+                        .expect("trace resource")
+                        .push("before");
+                })
+                .in_set(&before),
+            )
+            .expect("before system");
+        builder
+            .order_set_after(&after, &before)
+            .expect("order after");
+
+        let mut app = builder.build().expect("app");
+        app.update(0.0).expect("update");
+        assert_eq!(
+            app.world()
+                .resource::<Vec<&'static str>>()
+                .expect("trace access")
+                .expect("trace resource")
+                .as_slice(),
+            ["before", "after"]
+        );
     }
 }

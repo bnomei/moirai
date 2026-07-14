@@ -83,3 +83,32 @@ impl core::fmt::Display for QueryError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for QueryError {}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::world::WorldBuilder;
+    use alloc::string::ToString;
+
+    #[test]
+    fn display_covers_entity_and_command_diagnostics() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<u8>(ComponentOptions::sparse())
+            .expect("component");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("entity");
+
+        assert!(QueryError::DuplicateExactId { entity }
+            .to_string()
+            .contains("duplicate entity"));
+        assert_eq!(
+            QueryError::CommandRejected {
+                detail: String::from("stale target"),
+            }
+            .to_string(),
+            "query command rejected: stale target"
+        );
+    }
+}

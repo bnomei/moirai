@@ -265,6 +265,126 @@ mod tests {
     }
 
     #[test]
+    fn entity_result_cache_builds_and_rejects_temporal_and_exact_specs() {
+        let mut world = world_with_entity();
+        let cache = world
+            .build_entity_query_result_cache(QuerySpec::new().with::<Pos>())
+            .expect("entity result cache");
+        assert_eq!(world.result_cache_slot(cache.slot as usize).ids.len(), 1);
+
+        assert!(matches!(
+            world.build_entity_query_result_cache(QuerySpec::new().added::<Pos>()),
+            Err(QueryError::MovingChangeWindow)
+        ));
+
+        let entity = world.spawn().expect("spawn");
+        let exact =
+            QuerySpec::new().exact_ids(vec![entity], crate::query::ExactIdPolicy::SkipUnavailable);
+        assert!(matches!(
+            world.build_entity_query_result_cache(exact),
+            Err(QueryError::ExactIdOrderConflict)
+        ));
+    }
+
+    #[test]
+    fn typed_result_cache_rejects_exact_order_and_builds_query2_results() {
+        #[derive(Clone, Copy)]
+        struct Vel;
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Pos>(ComponentOptions::sparse())
+            .expect("pos");
+        builder
+            .register_component::<Vel>(ComponentOptions::sparse())
+            .expect("vel");
+        let mut world = builder.build().expect("build");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, Vel).expect("vel");
+
+        let exact =
+            QuerySpec::new().exact_ids(vec![entity], crate::query::ExactIdPolicy::SkipUnavailable);
+        assert!(matches!(
+            world.build_query_result_cache::<Pos>(exact),
+            Err(QueryError::ExactIdOrderConflict)
+        ));
+
+        let cache = world
+            .build_query2_result_cache::<Pos, Vel>(QuerySpec::new())
+            .expect("query2 result cache");
+        assert_eq!(
+            world.result_cache_slot(cache.slot as usize).ids,
+            vec![entity]
+        );
+    }
+
+    #[test]
+    fn result_cache_distinguishes_irrelevant_topology_changes() {
+        #[derive(Clone, Copy)]
+        struct Vel;
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Pos>(ComponentOptions::sparse())
+            .expect("pos");
+        builder
+            .register_component::<Vel>(ComponentOptions::sparse())
+            .expect("vel");
+        let mut world = builder.build().expect("build");
+        let first = world.spawn().expect("first");
+        world.insert(first, Pos(1)).expect("pos");
+        let unrelated = world.spawn().expect("unrelated");
+
+        let spec = QuerySpec::new();
+        let cache = world
+            .build_query_result_cache::<Pos>(spec.clone())
+            .expect("cache");
+        let plan = world.resolve_query1_plan::<Pos>(&spec).expect("plan");
+        let original_ids = world.result_cache_slot(cache.slot as usize).ids.clone();
+        world.insert(unrelated, Vel).expect("irrelevant topology");
+        let irrelevant_revision = world.query_topology_revision;
+
+        assert_eq!(
+            world
+                .refresh_result_cache(
+                    &cache,
+                    &plan,
+                    crate::time::ChangeTick::ZERO,
+                    world.change_tick(),
+                )
+                .expect("refresh"),
+            original_ids.as_slice()
+        );
+        assert_eq!(
+            world
+                .result_cache_slot(cache.slot as usize)
+                .topology
+                .observed_global_revision(),
+            irrelevant_revision
+        );
+    }
+
+    #[test]
+    fn result_cache_validation_rejects_foreign_owner() {
+        let mut world = world_with_entity();
+        let cache = world
+            .build_query_result_cache::<Pos>(QuerySpec::new())
+            .expect("cache");
+        let foreign = QueryResultCache {
+            owner: crate::world::WorldOwner::new(),
+            slot: cache.slot,
+            generation: cache.generation,
+        };
+        let fingerprint = world.result_cache_slot(cache.slot as usize).fingerprint;
+
+        assert!(matches!(
+            world.validate_result_cache(&foreign, fingerprint),
+            Err(QueryError::WrongOwner)
+        ));
+    }
+
+    #[test]
     fn allocate_reuses_retired_slot() {
         let mut world = world_with_entity();
         let first = world

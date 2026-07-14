@@ -9,6 +9,9 @@ use super::record::{MetricSample, StepRecord};
 use super::report::{ReplayFailure, ReplayReport};
 use super::step::StepIndex;
 
+type RecordValidation<S> =
+    Result<(ReplayReport<S>, StepRecord<S>), ReplayFailure<ReplayRunError<AppError>, S>>;
+
 /// Capture replay evidence through `App::update_with` after final flush and before frame clearing.
 #[allow(clippy::result_large_err)]
 pub fn replay_app<S>(
@@ -57,16 +60,8 @@ where
             }
         };
 
-        if record.step() != step {
-            return Err(ReplayFailure::new(
-                step,
-                report,
-                ReplayRunError::StepMismatch {
-                    reported: record.step(),
-                    expected: step,
-                },
-            ));
-        }
+        let (next_report, record) = validate_record_step(step, report, record)?;
+        report = next_report;
 
         let is_last = step.raw().wrapping_add(1) >= config.steps();
         if config.should_capture(is_last) {
@@ -89,6 +84,29 @@ where
     }
 
     Ok(report)
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_record_step<S>(
+    expected: StepIndex,
+    report: ReplayReport<S>,
+    record: StepRecord<S>,
+) -> RecordValidation<S>
+where
+    S: Eq,
+{
+    if record.step() == expected {
+        Ok((report, record))
+    } else {
+        Err(ReplayFailure::new(
+            expected,
+            report,
+            ReplayRunError::StepMismatch {
+                reported: record.step(),
+                expected,
+            },
+        ))
+    }
 }
 
 fn capture_app_step<S>(
@@ -138,5 +156,22 @@ mod tests {
         assert!(matches!(failure.source(), &ReplayRunError::StepOverflow));
         assert_eq!(failure.step().raw(), u32::MAX);
         assert_eq!(failure.partial_report().step_snapshots().len(), 1);
+    }
+
+    #[test]
+    fn record_step_validation_reports_mismatch_with_partial_report() {
+        let config = ReplayConfig::new(2, 1, CapturePolicy::EveryStep).expect("config");
+        let report = ReplayReport::new(config);
+        let expected = StepIndex::FIRST;
+        let reported = StepIndex::from_raw_for_test(1);
+        let record = StepRecord::new(reported, None, Tick(0), Vec::new());
+        let failure = validate_record_step(expected, report, record).expect_err("mismatch");
+        assert!(matches!(
+            failure.source(),
+            ReplayRunError::StepMismatch {
+                reported: actual,
+                expected: wanted,
+            } if *actual == reported && *wanted == expected
+        ));
     }
 }

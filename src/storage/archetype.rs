@@ -524,6 +524,14 @@ mod tests {
     }
 
     #[test]
+    fn signature_add_and_remove_are_sorted_and_idempotent() {
+        let signature = Signature::empty().with_added(3).with_added(1).with_added(3);
+        assert_eq!(signature.components, vec![1, 3]);
+        assert_eq!(signature.clone().with_removed(1).components, vec![3]);
+        assert_eq!(signature.clone().with_removed(2), signature);
+    }
+
+    #[test]
     fn insert_replace_and_remove_table_paths() {
         let mut storage = table_storage();
         let tick = ChangeTick::from_raw(1);
@@ -566,6 +574,43 @@ mod tests {
             .expect("pair");
         assert_eq!(health.0, 1);
         assert_eq!(mana.0, 4);
+    }
+
+    #[test]
+    fn mutable_read_table_pair_covers_both_column_orders() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(2);
+        let id = entity(30);
+        storage.insert_table(id, 0, Health(5), tick);
+        assert!(storage
+            .get_mut_read_table::<Health, Health>(id, 0, 0, tick)
+            .is_none());
+        assert!(storage
+            .get_mut_read_table::<Health, Mana>(id, 0, 1, tick)
+            .is_none());
+        storage.insert_table(id, 1, Mana(6), tick);
+
+        let (health, mana) = storage
+            .get_mut_read_table::<Health, Mana>(id, 0, 1, tick)
+            .expect("forward");
+        health.0 += mana.0;
+        let (mana, health) = storage
+            .get_mut_read_table::<Mana, Health>(id, 1, 0, tick)
+            .expect("reverse");
+        mana.0 += health.0;
+        assert_eq!(storage.get_table::<Health>(id, 0), Some(&Health(11)));
+        assert_eq!(storage.get_table::<Mana>(id, 1), Some(&Mana(17)));
+    }
+
+    #[test]
+    fn placing_empty_signature_clears_existing_and_missing_locations() {
+        let mut storage = table_storage();
+        let tick = ChangeTick::from_raw(3);
+        let present = entity(31);
+        storage.insert_table(present, 0, Health(1), tick);
+        assert_eq!(storage.place_entity(present, &Signature::empty()), 0);
+        assert!(storage.location(present).is_none());
+        assert_eq!(storage.place_entity(entity(32), &Signature::empty()), 0);
     }
 
     #[test]

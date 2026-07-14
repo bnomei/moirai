@@ -89,7 +89,7 @@ impl WorldBuilder {
                 self.sparse_factories[id.index()] =
                     Some(Box::new(|| SparseStore::new_typed::<T>()));
             }
-        } else if options.storage() == StorageKind::Table {
+        } else {
             self.table_factories[id.index()] = Some(table_column_factory::<T>());
         }
         self.register_component_lifecycle(id.index())?;
@@ -171,9 +171,11 @@ impl WorldBuilder {
         };
         for index in 0..registry_len {
             let event_id = EventId::new(self.owner.clone(), index as u32);
-            if let Some(options) = events.registry.options(&event_id) {
-                events.storage.ensure_channel(index, options.retention());
-            }
+            let options = events
+                .registry
+                .options(&event_id)
+                .expect("registered event index has options");
+            events.storage.ensure_channel(index, options.retention());
         }
         events.lifecycle.ensure_storage_channels(
             &mut events.storage,
@@ -240,10 +242,29 @@ impl WorldBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::component::ComponentOptions;
+    use crate::event::EventOptions;
 
     #[test]
     fn default_builder_constructs() {
         let _ = WorldBuilder::default();
+    }
+
+    #[test]
+    fn table_component_and_manual_event_build_storage_factories() {
+        struct TableValue;
+        #[derive(Clone)]
+        struct Tick;
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<TableValue>(ComponentOptions::table())
+            .expect("table");
+        builder
+            .add_event::<Tick>(EventOptions::manual())
+            .expect("event");
+        let world = builder.build().expect("world");
+        assert!(world.component_id::<TableValue>().is_ok());
     }
 
     #[test]

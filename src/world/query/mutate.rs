@@ -734,6 +734,27 @@ mod tests {
         Ok(())
     }
 
+    fn noop_for_each2<A, B>(_: EntityId, _: &mut A, _: &mut B) -> Result<(), QueryError> {
+        Ok(())
+    }
+
+    fn noop_for_each2_mut_read_effects<A, B>(
+        _: EntityId,
+        _: &mut A,
+        _: &B,
+        _: &mut QueryEffects<'_>,
+    ) -> Result<(), QueryError> {
+        Ok(())
+    }
+
+    fn noop_visit_mut_read<A, B>(
+        _: &mut A,
+        _: &B,
+        _: &mut QueryEffects<'_>,
+    ) -> Result<(), QueryError> {
+        Ok(())
+    }
+
     #[derive(Clone, Copy)]
     struct Pos(i32);
 
@@ -1469,5 +1490,472 @@ mod tests {
             world.get::<Pos>(entity).expect("get").expect("present").0,
             3
         );
+    }
+
+    #[test]
+    fn adhoc_effect_wrappers_cover_table_q1_uncached_q2_and_duplicate_mutable_error() {
+        let mut world = mixed_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, TableComp(2)).expect("table");
+        world
+            .for_each_mut_with_effects::<TableComp>(
+                &QuerySpec::new(),
+                QueryParams::new(),
+                |_, table, _| {
+                    table.0 += 1;
+                    Ok(())
+                },
+            )
+            .expect("table q1");
+        world
+            .for_each2_mut_with_effects::<Pos, TableComp>(
+                &QuerySpec::new(),
+                QueryParams::new(),
+                |_, pos, table, _| {
+                    pos.0 += table.0;
+                    table.0 += 1;
+                    Ok(())
+                },
+            )
+            .expect("uncached q2");
+        assert_eq!(world.get::<Pos>(entity).expect("get").expect("pos").0, 4);
+        assert!(matches!(
+            world.for_each2_mut::<Pos, Pos>(&QuerySpec::new(), QueryParams::new(), noop_for_each2,),
+            Err(QueryError::DuplicateMutableComponent { .. })
+        ));
+        world
+            .for_each2_mut::<Pos, TableComp>(&QuerySpec::new(), QueryParams::new(), noop_for_each2)
+            .expect("execute noop callback");
+    }
+
+    #[test]
+    fn adhoc_mutation_uses_result_cache_for_q1_and_q2() {
+        let mut world = pos_vel_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, Vel(2)).expect("vel");
+        let spec = QuerySpec::new();
+        let q1_result = world
+            .build_query_result_cache::<Pos>(spec.clone())
+            .expect("q1 result");
+        world
+            .for_each_mut::<Pos>(
+                &spec,
+                QueryParams::new().result_cache(&q1_result),
+                |_, pos| {
+                    pos.0 += 1;
+                    Ok(())
+                },
+            )
+            .expect("q1 mutate");
+        let q2_result = world
+            .build_query2_result_cache::<Pos, Vel>(spec.clone())
+            .expect("q2 result");
+        world
+            .for_each2_mut::<Pos, Vel>(
+                &spec,
+                QueryParams::new().result_cache(&q2_result),
+                |_, pos, vel| {
+                    pos.0 += vel.0;
+                    Ok(())
+                },
+            )
+            .expect("q2 mutate");
+        assert_eq!(world.get::<Pos>(entity).expect("get").expect("pos").0, 4);
+    }
+
+    #[test]
+    fn prepared_resolved_q2_mut_mut_and_mut_read_execute_and_reject_duplicate_types() {
+        use crate::query::{QueryPolicy, QueryWindow};
+
+        let mut world = pos_vel_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, Vel(2)).expect("vel");
+        let mut mut_mut = world
+            .prepare_query2::<Pos, Vel>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare mut mut");
+        mut_mut
+            .for_each_mut_mut(&mut world, QueryWindow::All, |_, pos, vel| {
+                pos.0 += vel.0;
+                vel.0 += 1;
+                Ok(())
+            })
+            .expect("mut mut");
+        let mut mut_read = world
+            .prepare_query2::<Pos, Vel>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare mut read");
+        mut_read
+            .for_each_mut_read_with_effects(
+                &mut world,
+                QueryWindow::All,
+                noop_for_each2_mut_read_effects,
+            )
+            .expect("mut read");
+        assert_eq!(world.get::<Pos>(entity).expect("get").expect("pos").0, 3);
+
+        let plan = world
+            .resolve_query1_plan::<Pos>(&QuerySpec::new())
+            .expect("plan");
+        let mut scratch = Vec::new();
+        let now = world.change_tick();
+        assert!(matches!(
+            world.for_each2_mut_read_resolved::<Pos, Pos>(
+                &plan,
+                plan.primary_index,
+                plan.primary_is_table,
+                None,
+                &mut scratch,
+                ChangeTick::ZERO,
+                now,
+                noop_for_each2_mut_read_effects,
+            ),
+            Err(QueryError::DuplicateMutableComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn visit_mut_read_covers_all_storage_pairings() {
+        let mut world = sparse_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, Vel(2)).expect("vel");
+        let pos = world.component_index::<Pos>().expect("pos index");
+        let vel = world.component_index::<Vel>().expect("vel index");
+        let tick = world.issue_change_tick_query().expect("tick");
+        let mut sparse_sparse_visits = 0;
+        world
+            .visit_mut_read::<Pos, Vel>(pos, false, vel, false, entity, tick, |pos, vel, _| {
+                sparse_sparse_visits += 1;
+                pos.0 += vel.0;
+                Ok(())
+            })
+            .expect("sparse sparse");
+        assert_eq!(sparse_sparse_visits, 1);
+        assert_eq!(world.get::<Pos>(entity).expect("get").expect("pos").0, 3);
+        assert_eq!(world.get::<Vel>(entity).expect("get").expect("vel").0, 2);
+
+        let mut world = mixed_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(3)).expect("pos");
+        world.insert(entity, TableComp(4)).expect("table");
+        let pos = world.component_index::<Pos>().expect("pos index");
+        let table = world.component_index::<TableComp>().expect("table index");
+        let tick = world.issue_change_tick_query().expect("tick");
+        let mut sparse_table_visits = 0;
+        world
+            .visit_mut_read::<Pos, TableComp>(
+                pos,
+                false,
+                table,
+                true,
+                entity,
+                tick,
+                |pos, table, _| {
+                    sparse_table_visits += 1;
+                    pos.0 += table.0;
+                    Ok(())
+                },
+            )
+            .expect("sparse table");
+        let tick = world.issue_change_tick_query().expect("tick");
+        let mut table_sparse_visits = 0;
+        world
+            .visit_mut_read::<TableComp, Pos>(
+                table,
+                true,
+                pos,
+                false,
+                entity,
+                tick,
+                |table, pos, _| {
+                    table_sparse_visits += 1;
+                    table.0 += pos.0;
+                    Ok(())
+                },
+            )
+            .expect("table sparse");
+        assert_eq!(sparse_table_visits, 1);
+        assert_eq!(table_sparse_visits, 1);
+        assert_eq!(world.get::<Pos>(entity).expect("get").expect("pos").0, 7);
+        assert_eq!(
+            world
+                .get::<TableComp>(entity)
+                .expect("get")
+                .expect("table")
+                .0,
+            11
+        );
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Pos>(ComponentOptions::table())
+            .expect("pos");
+        builder
+            .register_component::<Vel>(ComponentOptions::table())
+            .expect("vel");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(5)).expect("pos");
+        world.insert(entity, Vel(6)).expect("vel");
+        let pos = world.component_index::<Pos>().expect("pos index");
+        let vel = world.component_index::<Vel>().expect("vel index");
+        let tick = world.issue_change_tick_query().expect("tick");
+        let mut table_table_visits = 0;
+        world
+            .visit_mut_read::<Pos, Vel>(pos, true, vel, true, entity, tick, |pos, vel, _| {
+                table_table_visits += 1;
+                pos.0 += vel.0;
+                Ok(())
+            })
+            .expect("table table");
+        assert_eq!(table_table_visits, 1);
+        assert_eq!(world.get::<Pos>(entity).expect("get").expect("pos").0, 11);
+        assert_eq!(world.get::<Vel>(entity).expect("get").expect("vel").0, 6);
+
+        let tick = world.issue_change_tick_query().expect("tick");
+        world
+            .visit_mut_read::<Pos, Vel>(pos, true, vel, true, entity, tick, noop_visit_mut_read)
+            .expect("table table noop callback");
+    }
+
+    #[test]
+    fn prepared_resolved_q2_propagates_mut_mut_and_mut_read_callback_errors() {
+        use crate::query::{QueryPolicy, QueryWindow};
+
+        let mut world = pos_vel_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("pos");
+        world.insert(entity, Vel(2)).expect("vel");
+
+        let mut mut_mut = world
+            .prepare_query2::<Pos, Vel>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare mut mut");
+        assert!(matches!(
+            mut_mut.for_each_mut_mut(&mut world, QueryWindow::All, |entity, _, _| {
+                Err(QueryError::TraversalAborted {
+                    entity,
+                    detail: String::from("mut-mut callback stopped"),
+                })
+            }),
+            Err(QueryError::TraversalAborted { detail, .. })
+                if detail == "mut-mut callback stopped"
+        ));
+
+        let mut mut_read = world
+            .prepare_query2::<Pos, Vel>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare mut read");
+        assert!(matches!(
+            mut_read.for_each_mut_read(&mut world, QueryWindow::All, |entity, _, _| {
+                Err(QueryError::TraversalAborted {
+                    entity,
+                    detail: String::from("mut-read callback stopped"),
+                })
+            }),
+            Err(QueryError::TraversalAborted { detail, .. })
+                if detail == "mut-read callback stopped"
+        ));
+    }
+
+    #[test]
+    fn split_sparse_stores_mut_read_covers_duplicate_and_wrong_type_branches() {
+        let mut world = sparse_world();
+        let pos = world.component_index::<Pos>().expect("pos");
+        assert!(matches!(
+            split_sparse_stores_mut_read::<Pos, Pos>(&mut world.sparse_stores, pos, pos),
+            Err(QueryError::DuplicateMutableComponent { .. })
+        ));
+
+        let (mut world, tag, pos) = pos_and_tag_world();
+        assert!(matches!(
+            split_sparse_stores_mut_read::<Tag, Pos>(&mut world.sparse_stores, tag, pos),
+            Err(QueryError::WrongStorageKind { .. })
+        ));
+        assert!(matches!(
+            split_sparse_stores_mut_read::<Pos, Tag>(&mut world.sparse_stores, pos, tag),
+            Err(QueryError::WrongStorageKind { .. })
+        ));
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("pos");
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<Tag, Pos>(
+                tag,
+                false,
+                pos,
+                false,
+                entity,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::WrongStorageKind { .. })
+        ));
+
+        let mut world = sparse_world();
+        let pos = world.component_index::<Pos>().expect("pos");
+        let vel = world.component_index::<Vel>().expect("vel");
+        split_sparse_stores_mut_read::<Vel, Pos>(&mut world.sparse_stores, vel, pos)
+            .expect("reverse-index success");
+
+        let (mut world, pos, tag) = pos_first_tag_world();
+        assert!(matches!(
+            split_sparse_stores_mut_read::<Pos, Tag>(&mut world.sparse_stores, pos, tag),
+            Err(QueryError::WrongStorageKind { .. })
+        ));
+        assert!(matches!(
+            split_sparse_stores_mut_read::<Tag, Pos>(&mut world.sparse_stores, tag, pos),
+            Err(QueryError::WrongStorageKind { .. })
+        ));
+    }
+
+    #[test]
+    fn visit_mut_read_reports_missing_components_for_every_storage_pairing() {
+        let mut world = sparse_world();
+        let pos_only = world.spawn().expect("pos only");
+        world.insert(pos_only, Pos(1)).expect("pos");
+        let vel_only = world.spawn().expect("vel only");
+        world.insert(vel_only, Vel(2)).expect("vel");
+        let pos = world.component_index::<Pos>().expect("pos index");
+        let vel = world.component_index::<Vel>().expect("vel index");
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<Pos, Vel>(
+                pos,
+                false,
+                vel,
+                false,
+                pos_only,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::TraversalAborted { .. })
+        ));
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<Pos, Vel>(
+                pos,
+                false,
+                vel,
+                false,
+                vel_only,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::TraversalAborted { .. })
+        ));
+
+        let mut world = mixed_world();
+        let sparse_only = world.spawn().expect("sparse only");
+        world.insert(sparse_only, Pos(3)).expect("pos");
+        let table_only = world.spawn().expect("table only");
+        world.insert(table_only, TableComp(4)).expect("table");
+        let pos = world.component_index::<Pos>().expect("pos index");
+        let table = world.component_index::<TableComp>().expect("table index");
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<Pos, TableComp>(
+                pos,
+                false,
+                table,
+                true,
+                sparse_only,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::TraversalAborted { .. })
+        ));
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<Pos, TableComp>(
+                pos,
+                false,
+                table,
+                true,
+                table_only,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::TraversalAborted { .. })
+        ));
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<TableComp, Pos>(
+                table,
+                true,
+                pos,
+                false,
+                table_only,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::TraversalAborted { .. })
+        ));
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<TableComp, Pos>(
+                table,
+                true,
+                pos,
+                false,
+                sparse_only,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::TraversalAborted { .. })
+        ));
+
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Tag>(ComponentOptions::tag())
+            .expect("tag");
+        builder
+            .register_component::<TableComp>(ComponentOptions::table())
+            .expect("table");
+        let mut wrong_storage = builder.build().expect("world");
+        let entity = wrong_storage.spawn().expect("spawn");
+        wrong_storage.insert(entity, TableComp(9)).expect("table");
+        let table = wrong_storage
+            .component_index::<TableComp>()
+            .expect("table index");
+        let tick = wrong_storage.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            wrong_storage.visit_mut_read::<Tag, TableComp>(
+                tag.index(),
+                false,
+                table,
+                true,
+                entity,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::WrongStorageKind { .. })
+        ));
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Pos>(ComponentOptions::table())
+            .expect("pos");
+        builder
+            .register_component::<Vel>(ComponentOptions::table())
+            .expect("vel");
+        let mut world = builder.build().expect("world");
+        let pos_only = world.spawn().expect("spawn");
+        world.insert(pos_only, Pos(5)).expect("pos");
+        let pos = world.component_index::<Pos>().expect("pos index");
+        let vel = world.component_index::<Vel>().expect("vel index");
+        let tick = world.issue_change_tick_query().expect("tick");
+        assert!(matches!(
+            world.visit_mut_read::<Pos, Vel>(
+                pos,
+                true,
+                vel,
+                true,
+                pos_only,
+                tick,
+                noop_visit_mut_read,
+            ),
+            Err(QueryError::TraversalAborted { .. })
+        ));
     }
 }

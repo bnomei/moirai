@@ -660,6 +660,16 @@ mod tests {
     }
 
     #[test]
+    fn unregistered_without_tag_filter_is_rejected() {
+        let mut world = world();
+        let spec = QuerySpec::new().without_tag::<Ghost>();
+        assert!(matches!(
+            world.resolve_query1_plan::<Position>(&spec),
+            Err(QueryError::UnregisteredComponent { .. })
+        ));
+    }
+
+    #[test]
     fn query2_exact_ids_use_exact_traversal() {
         let mut world = world();
         let entity = world.spawn().expect("spawn");
@@ -723,5 +733,97 @@ mod tests {
             tt.traversal,
             TraversalSource::Table { component_index } if component_index == table_b
         ));
+    }
+
+    #[test]
+    fn entity_specs_resolve_dynamic_ids_and_storage_traversal() {
+        let mut builder = WorldBuilder::new();
+        let sparse = builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("sparse");
+        let table = builder
+            .register_component::<TablePosition>(ComponentOptions::table())
+            .expect("table");
+        let tag = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+
+        let sparse_plan = world
+            .resolve_entity_plan(
+                &QuerySpec::new()
+                    .with_id(sparse.clone())
+                    .without_tag_id(tag.clone())
+                    .added_id(sparse),
+            )
+            .expect("sparse dynamic plan");
+        assert!(matches!(
+            sparse_plan.traversal,
+            TraversalSource::Sparse { .. }
+        ));
+        assert_eq!(sparse_plan.added_indices.len(), 1);
+
+        let table_plan = world
+            .resolve_entity_plan(&QuerySpec::new().with_id(table.clone()).changed_id(table))
+            .expect("table dynamic plan");
+        assert!(matches!(
+            table_plan.traversal,
+            TraversalSource::Table { .. }
+        ));
+
+        let tag_plan = world
+            .resolve_entity_plan(&QuerySpec::new().with_tag_id(tag))
+            .expect("tag dynamic plan");
+        assert!(matches!(tag_plan.traversal, TraversalSource::Sparse { .. }));
+    }
+
+    #[test]
+    fn dynamic_component_ids_reject_foreign_stale_and_overlapping_selectors() {
+        let mut builder = WorldBuilder::new();
+        let player = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("player");
+        let mut world = builder.build().expect("build");
+
+        let mut foreign_builder = WorldBuilder::new();
+        let foreign = foreign_builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("foreign");
+        assert!(matches!(
+            world.resolve_entity_plan(&QuerySpec::new().with_id(foreign)),
+            Err(QueryError::WrongOwner)
+        ));
+
+        let stale = ComponentId::new(world.owner_token(), 999);
+        assert!(matches!(
+            world.resolve_entity_plan(&QuerySpec::new().with_id(stale)),
+            Err(QueryError::UnregisteredComponent { .. })
+        ));
+
+        assert!(matches!(
+            world.resolve_entity_plan(
+                &QuerySpec::new()
+                    .with_id(player.clone())
+                    .without_tag_id(player)
+            ),
+            Err(QueryError::ConflictingFilters { .. })
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "secondary query component requires a primary")]
+    fn fingerprint_rejects_secondary_without_primary() {
+        let _ = fingerprint_plan(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &TraversalSource::All,
+            None,
+            Some(0),
+            None,
+        );
     }
 }

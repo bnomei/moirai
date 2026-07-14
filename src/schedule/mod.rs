@@ -13,8 +13,6 @@ pub use error::{BuildError, ScheduleError};
 pub(crate) use owner::ExecutionLease;
 pub(crate) use runner::RunOutcome;
 pub use stage::StageId;
-#[cfg(test)]
-pub(crate) use system::SystemBodySource;
 pub use system::{FlushMode, System, SystemId, SystemInitContext, SystemSet};
 
 use alloc::collections::BTreeMap;
@@ -348,7 +346,9 @@ pub(crate) fn stage_flush_mode_for_test(schedule: &Schedule, label: &str) -> Opt
 
 #[cfg(test)]
 mod default_tests {
-    use super::{RunContext, Schedule};
+    use super::{stage_flush_mode_for_test, RunContext, Schedule};
+    use crate::schedule::FlushMode;
+    use crate::world::WorldBuilder;
 
     #[test]
     fn defaults_construct() {
@@ -367,5 +367,24 @@ mod default_tests {
         context.set_gate(3, true);
         assert_eq!(context.set_gate_cache.len(), 4);
         assert_eq!(context.set_gate_cached(3), Some(true));
+    }
+
+    #[test]
+    fn schedule_test_accessors_resolve_standard_stages() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let schedule = Schedule::standard_builder()
+            .build(&mut world)
+            .expect("schedule");
+        assert!(schedule
+            .stage_index(crate::schedule::stage::UPDATE)
+            .is_some());
+        assert_eq!(
+            schedule.stage_flush_mode_for_test(crate::schedule::stage::UPDATE),
+            Some(FlushMode::Stage)
+        );
+        assert_eq!(
+            stage_flush_mode_for_test(&schedule, crate::schedule::stage::RENDER),
+            Some(FlushMode::Final)
+        );
     }
 }

@@ -309,3 +309,170 @@ fn plan_depends_on_component(plan: &ResolvedPlan, component_index: usize) -> boo
         || plan.with_tag_indices.contains(&component_index)
         || plan.without_tag_indices.contains(&component_index)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::query::{ExactIdPolicy, QueryParams, QuerySpec};
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Sparse(i32);
+
+    #[derive(Clone, Copy)]
+    struct Table(i32);
+
+    fn world() -> World {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Sparse>(ComponentOptions::sparse())
+            .expect("sparse");
+        builder
+            .register_component::<Table>(ComponentOptions::table())
+            .expect("table");
+        builder.build().expect("world")
+    }
+
+    #[test]
+    fn internal_query1_executes_sparse_table_exact_and_cache_sources() {
+        let mut world = world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Sparse(3)).expect("sparse");
+        world.insert(entity, Table(4)).expect("table");
+
+        assert_eq!(
+            world
+                .query::<Sparse>(&QuerySpec::new(), QueryParams::new())
+                .expect("sparse query")
+                .map(|(_, value)| value.0)
+                .collect::<alloc::vec::Vec<_>>(),
+            alloc::vec![3]
+        );
+        assert_eq!(
+            world
+                .query::<Table>(&QuerySpec::new(), QueryParams::new())
+                .expect("table query")
+                .map(|(_, value)| value.0)
+                .collect::<alloc::vec::Vec<_>>(),
+            alloc::vec![4]
+        );
+
+        let exact =
+            QuerySpec::new().exact_ids(alloc::vec![entity], ExactIdPolicy::ErrorOnUnavailable);
+        assert_eq!(
+            world
+                .query::<Sparse>(&exact, QueryParams::new())
+                .expect("exact query")
+                .count(),
+            1
+        );
+
+        let spec = QuerySpec::new();
+        let membership = world
+            .build_query_cache::<Sparse>(spec.clone())
+            .expect("membership");
+        let result = world
+            .build_query_result_cache::<Sparse>(spec.clone())
+            .expect("result");
+        assert_eq!(
+            world
+                .query::<Sparse>(&spec, QueryParams::new().membership_cache(&membership))
+                .expect("membership query")
+                .count(),
+            1
+        );
+        assert_eq!(
+            world
+                .query::<Sparse>(&spec, QueryParams::new().result_cache(&result))
+                .expect("result query")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn query1_private_match_helpers_cover_both_storage_kinds_and_covered_requirements() {
+        let mut world = world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Sparse(5)).expect("sparse");
+        world.insert(entity, Table(6)).expect("table");
+        let now = world.change_tick();
+
+        let sparse_plan = world
+            .resolve_query1_plan::<Sparse>(&QuerySpec::new())
+            .expect("sparse plan");
+        let sparse_store = world
+            .sparse_store_by_index::<Sparse>(sparse_plan.primary_index)
+            .expect("sparse store");
+        assert_eq!(
+            world
+                .query1_match_sparse(entity, &sparse_plan, ChangeTick::ZERO, now, sparse_store)
+                .map(|value| value.0),
+            Some(5)
+        );
+        assert_eq!(
+            world
+                .query1_match_cached::<Sparse>(entity, &sparse_plan)
+                .map(|value| value.0),
+            Some(5)
+        );
+        assert_eq!(
+            world
+                .query1_match_any_storage::<Sparse>(entity, &sparse_plan, ChangeTick::ZERO, now,)
+                .map(|value| value.0),
+            Some(5)
+        );
+
+        let sparse_index = world.component_index::<Sparse>().expect("sparse index");
+        let table_plan = world
+            .resolve_query1_plan::<Table>(&QuerySpec::new().with::<Sparse>())
+            .expect("table plan");
+        assert_eq!(
+            world
+                .query1_match_table::<Table>(
+                    entity,
+                    &table_plan,
+                    ChangeTick::ZERO,
+                    now,
+                    Some(sparse_index),
+                )
+                .map(|value| value.0),
+            Some(6)
+        );
+        assert_eq!(
+            world
+                .query1_match_cached::<Table>(entity, &table_plan)
+                .map(|value| value.0),
+            Some(6)
+        );
+        assert_eq!(
+            world
+                .query1_match_any_storage::<Table>(entity, &table_plan, ChangeTick::ZERO, now,)
+                .map(|value| value.0),
+            Some(6)
+        );
+
+        let missing = world.spawn().expect("missing");
+        assert!(world
+            .query1_match_any_storage::<Sparse>(missing, &sparse_plan, ChangeTick::ZERO, now,)
+            .is_none());
+        assert!(world
+            .query1_match_table::<Table>(
+                missing,
+                &table_plan,
+                ChangeTick::ZERO,
+                now,
+                Some(sparse_index),
+            )
+            .is_none());
+
+        let all_plan = world
+            .resolve_entity_plan(&QuerySpec::new())
+            .expect("entity plan");
+        assert!(matches!(
+            world.query1_state::<Sparse>(&all_plan, None, None),
+            Err(QueryError::WrongQuery { .. })
+        ));
+    }
+}

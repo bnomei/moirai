@@ -16,6 +16,9 @@ cargo test --features testkit
 cargo test --all-features
 cargo test --release --features std allocation -- --test-threads=1
 
+echo "== production coverage union =="
+scripts/verify_coverage_union.sh
+
 echo "== msrv =="
 cargo +1.75 check --lib --no-default-features
 

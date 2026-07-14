@@ -143,3 +143,39 @@ impl World {
         self.resources.unlock::<R>();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::WorldBuilder;
+
+    struct Primary;
+    struct Other;
+
+    #[test]
+    fn restore_failure_cancels_the_scope_sentinel() {
+        let mut builder = WorldBuilder::new();
+        builder.insert_resource(Primary);
+        builder.insert_resource(Other);
+        let mut world = builder.build().expect("world");
+        let primary = world
+            .resources
+            .take_for_scope::<Primary>()
+            .expect("primary scope");
+        let mut guard = ResourceScopeGuard::new(&mut world, primary, None);
+
+        guard.world.resources.cancel_scope();
+        let other = guard
+            .world
+            .resources
+            .take_for_scope::<Other>()
+            .expect("other scope");
+        assert!(guard.restore().is_err());
+        assert!(!guard
+            .world
+            .resources
+            .prepare_scope::<Other>()
+            .expect("scope sentinel cleared"));
+        drop(other);
+    }
+}

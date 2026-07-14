@@ -71,3 +71,80 @@ impl World {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::component::ComponentOptions;
+    use crate::query::{QueryParams, QuerySpec};
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Sparse(i32);
+
+    #[derive(Clone, Copy)]
+    struct Table(i32);
+
+    #[test]
+    fn internal_query2_executes_uncached_membership_result_and_table_driver_paths() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Sparse>(ComponentOptions::sparse())
+            .expect("sparse");
+        builder
+            .register_component::<Table>(ComponentOptions::table())
+            .expect("table");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Sparse(2)).expect("sparse");
+        world.insert(entity, Table(3)).expect("table");
+        let sparse_only = world.spawn().expect("sparse only");
+        world.insert(sparse_only, Sparse(7)).expect("extra sparse");
+        let spec = QuerySpec::new();
+
+        let values = world
+            .query2::<Sparse, Table>(&spec, QueryParams::new())
+            .expect("uncached")
+            .map(|(_, sparse, table)| sparse.0 + table.0)
+            .collect::<alloc::vec::Vec<_>>();
+        assert_eq!(values, alloc::vec![5]);
+
+        let membership = world
+            .build_query2_cache::<Sparse, Table>(spec.clone())
+            .expect("membership");
+        let result = world
+            .build_query2_result_cache::<Sparse, Table>(spec.clone())
+            .expect("result");
+        assert_eq!(
+            world
+                .query2::<Sparse, Table>(&spec, QueryParams::new().membership_cache(&membership),)
+                .expect("membership query")
+                .count(),
+            1
+        );
+        assert_eq!(
+            world
+                .query2::<Sparse, Table>(&spec, QueryParams::new().result_cache(&result))
+                .expect("result query")
+                .count(),
+            1
+        );
+
+        let sparse_index = world.component_index::<Sparse>().expect("sparse index");
+        let table_index = world.component_index::<Table>().expect("table index");
+        assert_eq!(
+            world
+                .query_component::<Sparse>(entity, sparse_index, false)
+                .map(|value| value.0),
+            Some(2)
+        );
+        assert_eq!(
+            world
+                .query_component::<Table>(entity, table_index, true)
+                .map(|value| value.0),
+            Some(3)
+        );
+        assert!(world
+            .query_component::<Sparse>(entity, table_index, false)
+            .is_none());
+    }
+}

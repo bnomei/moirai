@@ -351,6 +351,8 @@ impl System {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::component::ComponentOptions;
+    use crate::event::EventOptions;
     use crate::schedule::ScheduleError;
     use crate::world::WorldBuilder;
 
@@ -388,5 +390,53 @@ mod tests {
             .flush_after()
             .disabled()
             .name();
+    }
+
+    #[test]
+    fn init_context_exposes_registered_runtime_state_and_prepared_queries() {
+        struct Position;
+        struct Velocity;
+        #[derive(Clone)]
+        struct Tick;
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("position");
+        builder
+            .register_component::<Velocity>(ComponentOptions::sparse())
+            .expect("velocity");
+        builder.insert_resource(7_u32);
+        builder
+            .add_event::<Tick>(EventOptions::manual())
+            .expect("event");
+        let mut world = builder.build().expect("world");
+        let mut context = SystemInitContext::new(&mut world);
+
+        assert!(context.contains_resource::<u32>());
+        assert_eq!(context.resource::<u32>().expect("resource"), Some(&7));
+        context
+            .event_reader::<Tick>(EventReaderStart::FromNow)
+            .expect("event reader");
+        context
+            .on_add_reader::<Position>(EventReaderStart::FromNow)
+            .expect("add reader");
+        context
+            .on_remove_reader::<Position>(EventReaderStart::FromNow)
+            .expect("remove reader");
+        context
+            .prepare_query1::<Position>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("query1");
+        context
+            .prepare_query2::<Position, Velocity>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("query2");
+    }
+
+    #[test]
+    fn duplicate_event_role_is_suppressed() {
+        let system = System::new("writer", "Update", |_world, _dt| {})
+            .emits::<u32>()
+            .emits::<u32>();
+        assert_eq!(system.event_roles.len(), 1);
     }
 }

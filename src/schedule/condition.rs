@@ -323,6 +323,7 @@ mod tests {
     use crate::schedule::RunContext;
     use crate::time::ChangeTick;
     use crate::world::WorldBuilder;
+    use alloc::string::ToString;
 
     #[derive(Clone)]
     struct Score(#[allow(dead_code)] i32);
@@ -344,6 +345,19 @@ mod tests {
                 phase: 4,
             })
         );
+        assert_eq!(
+            ConditionError::ZeroPeriod.to_string(),
+            "fixed-step cadence period must be nonzero"
+        );
+        assert!(ConditionError::PeriodNotPowerOfTwo { period: 3 }
+            .to_string()
+            .contains('3'));
+        assert!(ConditionError::PhaseOutOfRange {
+            period: 4,
+            phase: 4
+        }
+        .to_string()
+        .contains('4'));
     }
 
     #[test]
@@ -516,5 +530,44 @@ mod tests {
         let and = Condition::resource_added::<Score>().and(Condition::resource_changed::<Score>());
         and.advance_cursors(&world, 0, &mut RunContext::new());
         and.advance_set_cursors(&world, 0, &mut context);
+    }
+
+    #[test]
+    fn advancing_absent_temporal_values_leaves_cursors_at_zero() {
+        use crate::state::State;
+        use core::any::TypeId;
+
+        let mut builder = WorldBuilder::new();
+        builder.register_resource::<Score>();
+        builder.register_state::<u8>();
+        let world = builder.build().expect("build");
+        let mut context = RunContext::with_set_capacity(1);
+
+        let score = TypeId::of::<Score>();
+        let state = TypeId::of::<State<u8>>();
+        for condition in [
+            Condition::resource_added::<Score>(),
+            Condition::resource_changed::<Score>(),
+            Condition::state_changed::<u8>(),
+        ] {
+            condition.advance_cursors(&world, 0, &mut context);
+            condition.advance_set_cursors(&world, 0, &mut context);
+        }
+
+        assert_eq!(context.resource_added_cursor(0, score), ChangeTick::ZERO);
+        assert_eq!(context.resource_changed_cursor(0, score), ChangeTick::ZERO);
+        assert_eq!(context.state_transition_cursor(0, state), ChangeTick::ZERO);
+        assert_eq!(
+            context.resource_added_cursor_for_set(0, score),
+            ChangeTick::ZERO
+        );
+        assert_eq!(
+            context.resource_changed_cursor_for_set(0, score),
+            ChangeTick::ZERO
+        );
+        assert_eq!(
+            context.state_transition_cursor_for_set(0, state),
+            ChangeTick::ZERO
+        );
     }
 }

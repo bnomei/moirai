@@ -303,6 +303,7 @@ mod tests {
     use super::*;
     use crate::world::WorldBuilder;
     use alloc::rc::Rc;
+    use alloc::string::ToString;
     use core::cell::Cell;
 
     #[test]
@@ -324,16 +325,23 @@ mod tests {
         );
         assert_eq!(
             *scratch
-                .get_or_insert_with(&world, entity, || {
-                    calls.set(calls.get() + 1);
-                    9
-                })
+                .get_or_insert_with(&world, entity, i32::default)
                 .expect("get"),
             7
         );
         assert_eq!(calls.get(), 1);
         scratch.reserve(8);
         scratch.try_reserve(8).expect("try reserve");
+        assert_eq!(
+            EntityScratchError::WrongWorld.to_string(),
+            "entity scratch used with the wrong world"
+        );
+        assert!(!EntityScratchError::StaleEntity { entity }
+            .to_string()
+            .is_empty());
+        assert!(!EntityScratchError::EntityNotLive { entity }
+            .to_string()
+            .is_empty());
     }
 
     #[test]
@@ -387,5 +395,63 @@ mod tests {
             Some(2)
         );
         assert!(scratch.is_empty());
+    }
+
+    #[test]
+    fn get_or_insert_replaces_stale_generation_and_remove_handles_absence() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let stale = world.spawn().expect("stale");
+        let mut scratch = DenseEntityScratch::new(&world);
+        scratch.insert(&world, stale, 1).expect("insert stale");
+        world.despawn(stale).expect("despawn");
+        let live = world.spawn().expect("reuse");
+        assert_eq!(
+            *scratch
+                .get_or_insert_with(&world, live, || 2)
+                .expect("replace"),
+            2
+        );
+
+        let untouched = world.spawn().expect("untouched");
+        assert_eq!(
+            scratch.remove(&world, untouched).expect("missing slot"),
+            None
+        );
+        scratch.ensure_slot(untouched.slot() as usize);
+        scratch.slots[untouched.slot() as usize].generation =
+            untouched.generation().wrapping_add(1);
+        assert_eq!(
+            scratch
+                .remove(&world, untouched)
+                .expect("generation mismatch"),
+            None
+        );
+        scratch.slots[untouched.slot() as usize].generation = untouched.generation();
+        assert_eq!(scratch.remove(&world, untouched).expect("empty slot"), None);
+    }
+
+    #[test]
+    fn retain_live_repairs_the_active_index_after_swap_remove() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let stale = world.spawn().expect("stale");
+        let middle = world.spawn().expect("middle");
+        let last = world.spawn().expect("last");
+        let mut scratch = DenseEntityScratch::new(&world);
+        scratch.insert(&world, stale, 1).expect("stale value");
+        scratch.insert(&world, middle, 2).expect("middle value");
+        scratch.insert(&world, last, 3).expect("last value");
+        world.despawn(stale).expect("despawn");
+
+        assert_eq!(scratch.retain_live(&world).expect("retain"), 1);
+        assert_eq!(scratch.remove(&world, last).expect("last"), Some(3));
+        assert_eq!(scratch.remove(&world, middle).expect("middle"), Some(2));
+
+        let final_stale = world.spawn().expect("final stale");
+        let mut final_scratch = DenseEntityScratch::new(&world);
+        final_scratch
+            .insert(&world, final_stale, 4)
+            .expect("final value");
+        world.despawn(final_stale).expect("final despawn");
+        assert_eq!(final_scratch.retain_live(&world).expect("final retain"), 1);
     }
 }

@@ -140,6 +140,9 @@ mod tests {
     #[derive(Clone, Copy)]
     struct Table(#[allow(dead_code)] i32);
 
+    #[derive(Clone, Copy)]
+    struct Tag;
+
     #[test]
     fn structural_sparse_collects_matching_entities() {
         let mut builder = WorldBuilder::new();
@@ -280,5 +283,139 @@ mod tests {
         let since = world.change_tick();
         let now = since;
         assert!(collect_query1_entities(&world, &plan, since, now).is_empty());
+    }
+
+    #[test]
+    fn entity_all_traversal_collects_only_structural_matches() {
+        let mut builder = WorldBuilder::new();
+        let tag = builder
+            .register_component::<Tag>(ComponentOptions::tag())
+            .expect("tag");
+        let mut world = builder.build().expect("build");
+        let untagged = world.spawn().expect("untagged");
+        let tagged = world.spawn().expect("tagged");
+        world.add_tag(tagged, &tag).expect("tag");
+        let plan = world
+            .resolve_entity_plan(&QuerySpec::new().with_tag::<Tag>())
+            .expect("plan");
+
+        assert_eq!(
+            collect_query1_structural_members(&world, &plan),
+            vec![tagged]
+        );
+        assert_eq!(
+            collect_query1_entities(&world, &plan, ChangeTick::ZERO, world.change_tick(),),
+            vec![tagged]
+        );
+        assert_ne!(untagged, tagged);
+    }
+
+    #[test]
+    fn query2_collection_filters_entities_missing_second_component() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Sparse>(ComponentOptions::sparse())
+            .expect("sparse");
+        builder
+            .register_component::<Table>(ComponentOptions::table())
+            .expect("table");
+        let mut world = builder.build().expect("build");
+        let both = world.spawn().expect("both");
+        let primary_only = world.spawn().expect("primary");
+        world.insert(both, Sparse(1)).expect("sparse");
+        world.insert(both, Table(2)).expect("table");
+        world.insert(primary_only, Sparse(3)).expect("primary");
+        let (plan, second_index, second_is_table) = world
+            .resolve_query2_plan::<Sparse, Table>(&QuerySpec::new())
+            .expect("plan");
+
+        assert_eq!(
+            collect_query2_entities(
+                &world,
+                &plan,
+                ChangeTick::ZERO,
+                world.change_tick(),
+                second_index,
+                second_is_table,
+            ),
+            vec![both]
+        );
+    }
+
+    #[test]
+    fn every_collection_source_skips_nonmatching_candidates() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Sparse>(ComponentOptions::sparse())
+            .expect("sparse");
+        builder
+            .register_component::<Table>(ComponentOptions::table())
+            .expect("table");
+        let mut world = builder.build().expect("build");
+        let both = world.spawn().expect("both");
+        let sparse_only = world.spawn().expect("sparse only");
+        let table_only = world.spawn().expect("table only");
+        world.insert(both, Sparse(1)).expect("both sparse");
+        world.insert(both, Table(2)).expect("both table");
+        world
+            .insert(sparse_only, Sparse(3))
+            .expect("sparse only component");
+        world
+            .insert(table_only, Table(4))
+            .expect("table only component");
+
+        let all = world
+            .resolve_entity_plan(&QuerySpec::new())
+            .expect("all plan");
+        assert_eq!(
+            collect_query1_structural_members(&world, &all),
+            alloc::vec![both, sparse_only, table_only]
+        );
+
+        let table_index = world.component_index::<Table>().expect("table index");
+        let mut table_plan = (*world
+            .resolve_query1_plan::<Table>(&QuerySpec::new().with::<Sparse>())
+            .expect("table plan"))
+        .clone();
+        table_plan.traversal = TraversalSource::Table {
+            component_index: table_index,
+        };
+        assert_eq!(
+            collect_query1_structural_members(&world, &table_plan),
+            alloc::vec![both]
+        );
+
+        let exact_spec = QuerySpec::new().exact_ids(
+            alloc::vec![sparse_only, both],
+            ExactIdPolicy::SkipUnavailable,
+        );
+        let exact_plan = world
+            .resolve_query1_plan::<Table>(&exact_spec)
+            .expect("exact plan");
+        assert_eq!(
+            collect_query1_structural_members(&world, &exact_plan),
+            alloc::vec![both]
+        );
+
+        let sparse_index = world.component_index::<Sparse>().expect("sparse index");
+        let mut sparse_plan = (*world
+            .resolve_query1_plan::<Sparse>(&QuerySpec::new().with::<Table>())
+            .expect("sparse plan"))
+        .clone();
+        sparse_plan.traversal = TraversalSource::Sparse {
+            component_index: sparse_index,
+        };
+        assert_eq!(
+            collect_query1_entities(&world, &sparse_plan, ChangeTick::ZERO, world.change_tick(),),
+            alloc::vec![both]
+        );
+        assert_eq!(
+            collect_query1_entities(&world, &table_plan, ChangeTick::ZERO, world.change_tick(),),
+            alloc::vec![both]
+        );
+        assert_eq!(
+            collect_query1_entities(&world, &exact_plan, ChangeTick::ZERO, world.change_tick(),),
+            alloc::vec![both]
+        );
     }
 }

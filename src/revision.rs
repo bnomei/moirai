@@ -61,6 +61,7 @@ impl<const N: usize> From<[Revision; N]> for RevisionKey<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn revision_advances_from_zero() {
@@ -74,6 +75,7 @@ mod tests {
         let mut revision = Revision(u64::MAX);
         assert_eq!(revision.advance(), Err(RevisionExhausted));
         assert_eq!(revision.get(), u64::MAX);
+        assert_eq!(RevisionExhausted.to_string(), "revision exhausted");
     }
 
     #[test]

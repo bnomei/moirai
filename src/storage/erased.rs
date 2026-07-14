@@ -305,6 +305,7 @@ mod tests {
         let typed = store.typed_mut::<i32>().expect("typed");
         typed.insert_with_tick(entity(1), 7, tick);
         *typed.get_mut_with_tick(entity(1), tick).expect("mut") = 9;
+        assert_eq!(typed.dense_value(0), Some(&9));
         assert_eq!(store.sparse_added_tick(entity(1)), Some(tick));
         assert_eq!(store.sparse_changed_tick(entity(1)), Some(tick));
         store.remove_entity(entity(1));

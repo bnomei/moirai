@@ -248,4 +248,37 @@ mod tests {
             QueryError::CommandRejected { .. }
         ));
     }
+
+    #[test]
+    fn query_commands_reject_stale_targets() {
+        use crate::component::ComponentOptions;
+        use crate::operation::StageOperation;
+        use crate::query::{QueryPolicy, QuerySpec, QueryWindow};
+        use crate::world::WorldBuilder;
+
+        #[derive(Clone, Copy)]
+        struct Marker;
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("marker");
+        let mut world = builder.build().expect("world");
+        let live = world.spawn().expect("live");
+        world.insert(live, Marker).expect("marker");
+        let stale = world.spawn().expect("stale");
+        world.despawn(stale).expect("despawn");
+        let mut query = world
+            .prepare_query1::<Marker>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare");
+
+        world.begin_run(StageOperation::Update).expect("begin");
+        let error = query
+            .for_each_mut_with_effects(&mut world, QueryWindow::All, |_, _, effects| {
+                effects.commands()?.despawn(stale)
+            })
+            .expect_err("stale command target");
+        world.end_run();
+        assert!(matches!(error, QueryError::CommandRejected { .. }));
+    }
 }

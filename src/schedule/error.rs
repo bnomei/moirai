@@ -194,6 +194,8 @@ impl std::error::Error for ScheduleError {}
 mod tests {
     use super::*;
     use crate::world::WorldError;
+    #[cfg(feature = "std")]
+    use alloc::string::ToString;
 
     #[test]
     fn world_error_converts_into_build_error() {
@@ -202,5 +204,47 @@ mod tests {
             error,
             BuildError::WorldBuild(WorldError::NestedRun)
         ));
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn build_error_display_covers_detailed_variants() {
+        let errors = [
+            BuildError::SystemInitialization {
+                system: "init".into(),
+                detail: "failed".into(),
+            },
+            BuildError::UnregisteredEventRole {
+                system: "reader".into(),
+                event: "event".into(),
+            },
+            BuildError::EventOperationMismatch {
+                system: "reader".into(),
+                event: "event".into(),
+                event_operation: crate::schedule::StageOperation::Render,
+                system_operation: crate::schedule::StageOperation::Update,
+            },
+            BuildError::MissingEventProducer {
+                system: "reader".into(),
+                event: "event".into(),
+            },
+            BuildError::UnreachableEventProducer {
+                producer: "writer".into(),
+                consumer: "reader".into(),
+                event: "event".into(),
+            },
+            BuildError::InvalidStageFlushMode {
+                label: "Render".into(),
+                mode: crate::schedule::FlushMode::Stage,
+            },
+            BuildError::InvalidSystemFlushMode {
+                label: "render".into(),
+                mode: crate::schedule::FlushMode::AfterSystem,
+            },
+        ];
+
+        for error in errors {
+            assert!(!error.to_string().is_empty());
+        }
     }
 }

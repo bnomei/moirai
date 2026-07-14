@@ -367,7 +367,16 @@ mod tests {
             Err(WorldError::ResourceInUse { .. })
         ));
         store.unlock::<Score>();
+        assert!(!store.locked.contains(&TypeId::of::<Score>()));
+        store.unlock::<Score>();
         assert_eq!(store.remove::<Score>().expect("remove"), Some(Score(1)));
+
+        store.lock_type(TypeId::of::<Other>());
+        store.lock_type(TypeId::of::<Other>());
+        assert!(store.locked.contains(&TypeId::of::<Other>()));
+        store.unlock_type(TypeId::of::<Other>());
+        assert!(!store.locked.contains(&TypeId::of::<Other>()));
+        store.unlock_type(TypeId::of::<Other>());
     }
 
     #[test]
@@ -421,6 +430,14 @@ mod tests {
         let tick = ChangeTick::from_raw(1);
         store.insert(Score(1), tick).expect("insert");
         let _ = store.take_for_scope::<Score>().expect("scope");
+        assert!(matches!(
+            store.prepare_scope::<Score>(),
+            Err(WorldError::ResourceScoped { .. })
+        ));
+        assert!(matches!(
+            store.prepare_scope::<Other>(),
+            Err(WorldError::ResourceScoped { .. })
+        ));
         assert!(matches!(
             store.take_for_scope::<Score>(),
             Err(WorldError::ResourceScoped { .. })

@@ -836,4 +836,105 @@ mod tests {
                 if label == "missing"
         ));
     }
+
+    #[test]
+    fn builder_reports_unknown_sets_and_invalid_flush_modes() {
+        let mut builder = ScheduleBuilder::standard();
+        assert!(matches!(
+            builder.set_stage_flush_mode("missing", FlushMode::Final),
+            Err(BuildError::UnknownStage { .. })
+        ));
+        assert!(matches!(
+            builder.set_stage_flush_mode(stage::RENDER, FlushMode::Stage),
+            Err(BuildError::InvalidStageFlushMode { .. })
+        ));
+
+        let missing = SystemSet::new("missing");
+        assert!(matches!(
+            builder.add_system(
+                System::new("member", stage::UPDATE, |_world, _dt| {}).in_set(&missing)
+            ),
+            Err(BuildError::UnknownSystemSet { .. })
+        ));
+        assert!(matches!(
+            builder.add_system(
+                System::new("before", stage::UPDATE, |_world, _dt| {}).before_set(&missing)
+            ),
+            Err(BuildError::UnknownSystemSet { .. })
+        ));
+    }
+
+    #[test]
+    fn internal_ordering_helpers_cover_cycles_unknown_sets_and_invalid_edges() {
+        assert!(!has_explicit_path(0, 2, 3, &[(0, 1), (1, 0)]));
+
+        let sets = BTreeMap::new();
+        assert!(matches!(
+            ensure_set_label(&sets, "missing"),
+            Err(BuildError::UnknownSystemSet { .. })
+        ));
+
+        let systems = vec![
+            System::new("update", stage::UPDATE, |_world, _dt| {}),
+            System::new("render", stage::RENDER, |_world, _dt| {}),
+        ];
+        assert!(matches!(
+            push_ordering_edge(&mut Vec::new(), 0, 0, &systems),
+            Err(BuildError::SelfEdge { .. })
+        ));
+        assert!(matches!(
+            push_ordering_edge(&mut Vec::new(), 0, 1, &systems),
+            Err(BuildError::CrossStageSystemEdge { .. })
+        ));
+        assert!(matches!(
+            validate_system_flush_mode(
+                &System::new("render", stage::RENDER, |_world, _dt| {}).flush_after(),
+                StageOperation::Render,
+            ),
+            Err(BuildError::InvalidSystemFlushMode { .. })
+        ));
+    }
+
+    #[test]
+    fn build_rechecks_unknown_before_set_when_validation_is_bypassed() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let missing = SystemSet::new("missing");
+        let mut builder = ScheduleBuilder::standard();
+        builder
+            .systems
+            .push(System::new("bypassed", stage::UPDATE, |_world, _dt| {}).before_set(&missing));
+        assert!(matches!(
+            builder.build(&mut world),
+            Err(BuildError::UnknownSystemSet { .. })
+        ));
+    }
+
+    #[test]
+    fn build_deduplicates_present_required_resource_locks() {
+        #[derive(Clone)]
+        struct SharedResource;
+
+        let mut world_builder = WorldBuilder::new();
+        world_builder.register_resource::<SharedResource>();
+        let mut world = world_builder.build().expect("world");
+        world
+            .insert_resource(SharedResource)
+            .expect("insert resource");
+
+        let mut builder = ScheduleBuilder::standard();
+        builder
+            .add_system(
+                System::new("first", stage::UPDATE, |_world, _dt| {})
+                    .requires_resource::<SharedResource>(),
+            )
+            .expect("first");
+        builder
+            .add_system(
+                System::new("second", stage::UPDATE, |_world, _dt| {})
+                    .requires_resource::<SharedResource>(),
+            )
+            .expect("second");
+
+        builder.build(&mut world).expect("schedule");
+    }
 }

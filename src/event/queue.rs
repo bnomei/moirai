@@ -699,6 +699,76 @@ mod tests {
     }
 
     #[test]
+    fn storage_reuse_and_entry_variants_cover_all_layout_paths() {
+        let mut builder = WorldBuilder::new();
+        let event_id = builder
+            .add_event::<Damage>(EventOptions::frame(StageOperation::Update))
+            .expect("register");
+        let owner = builder.owner_for_test();
+        let mut storage = EventStorage::new(1);
+        storage.ensure_channel(
+            event_id.index(),
+            EventRetention::Frame(StageOperation::Update),
+        );
+        storage.send(&event_id, Damage(1)).expect("seed");
+        storage.set_channel_state_for_test(event_id.index(), 6, false);
+        storage.clear_frame(StageOperation::Update);
+        storage
+            .send(&event_id, Other(2))
+            .expect("replace recycled type");
+
+        let mut reader = storage
+            .create_reader::<Other>(
+                owner.clone(),
+                event_id.clone(),
+                EventReaderStart::OldestRetained,
+            )
+            .expect("reader");
+        reader.last_payload = Some(Box::new(Damage(9)));
+        assert_eq!(
+            storage
+                .read_next(&owner, &mut reader)
+                .expect("read")
+                .map(|event| event.0),
+            Some(2)
+        );
+
+        storage.clear_frame(StageOperation::Update);
+        storage.set_channel_state_for_test(event_id.index(), 7, false);
+        assert_eq!(storage.channels[0].oldest_retained, 7);
+        assert_eq!(reader.cursor.get(), 7);
+        storage.set_channel_state_for_test(99, 8, false);
+
+        let mut channel = EventChannel::new(EventRetention::Bounded(2));
+        channel.push_event(0, Damage(1));
+        channel.push_event(1, Damage(2));
+        channel.push_event(2, Other(3));
+        assert!(channel.position_after(u64::MAX).is_none());
+
+        let mut ring = EventEntries::new(EventRetention::Bounded(LINEAR_BOUNDED_CAPACITY_MAX + 1));
+        ring.push(EventEntry {
+            sequence: 0,
+            payload: Box::new(Damage(1)),
+        });
+        assert!(ring.get_mut(0).is_some());
+        ring.recycle_oldest();
+
+        let mut linear = EventEntries::new(EventRetention::Manual);
+        linear.push(EventEntry {
+            sequence: 0,
+            payload: Box::new(Damage(4)),
+        });
+        linear.recycle_oldest();
+    }
+
+    #[test]
+    #[should_panic(expected = "small bounded event channels use linear storage")]
+    fn linear_overwrite_invariant_rejects_ring_storage() {
+        let mut ring = EventEntries::new(EventRetention::Bounded(LINEAR_BOUNDED_CAPACITY_MAX + 1));
+        ring.overwrite_oldest_linear(1, 1, Damage(1));
+    }
+
+    #[test]
     fn fork_reader_rejects_unregistered_channel() {
         let mut builder = WorldBuilder::new();
         let event_id = builder

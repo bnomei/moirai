@@ -113,6 +113,9 @@ mod tests {
     #[derive(Clone, Copy)]
     struct Position(#[allow(dead_code)] i32);
 
+    #[derive(Clone, Copy)]
+    struct Velocity(#[allow(dead_code)] i32);
+
     #[test]
     fn query_cursor_commits_on_exhaustion() {
         let mut builder = WorldBuilder::new();
@@ -172,6 +175,33 @@ mod tests {
         assert_eq!(cursor.since(), world.change_tick());
         let direct = QueryCursor::from_now(&world, fingerprint).expect("direct");
         assert_eq!(direct.since(), world.change_tick());
+    }
+
+    #[test]
+    fn query2_now_and_fork_preserve_fingerprint_and_tick() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("position");
+        builder
+            .register_component::<Velocity>(ComponentOptions::sparse())
+            .expect("velocity");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Position(1)).expect("position");
+        world.insert(entity, Velocity(2)).expect("velocity");
+        let spec = QuerySpec::new().changed::<Position>();
+
+        let cursor = QueryCursor::from_spec2_now::<Position, Velocity>(&mut world, &spec)
+            .expect("query2 now");
+        let fork = cursor.fork();
+        assert_eq!(cursor.since(), world.change_tick());
+        assert_eq!(fork.since(), cursor.since());
+
+        let (plan, _, _) = world
+            .resolve_query2_plan::<Position, Velocity>(&spec)
+            .expect("plan");
+        assert!(fork.validate(&world, plan.fingerprint).is_ok());
     }
 
     #[test]

@@ -82,13 +82,13 @@ impl ComponentLifecycleRegistry {
             if let Some(event_index) = self.added_event_indices[index] {
                 let event_id = EventId::new(owner.clone(), event_index);
                 if let Some(options) = registry.options(&event_id) {
-                    storage.ensure_channel(event_index as usize, options.retention());
+                    storage.ensure_channel(event_index as usize, options.retention())
                 }
             }
             if let Some(event_index) = self.removed_event_indices[index] {
                 let event_id = EventId::new(owner.clone(), event_index);
                 if let Some(options) = registry.options(&event_id) {
-                    storage.ensure_channel(event_index as usize, options.retention());
+                    storage.ensure_channel(event_index as usize, options.retention())
                 }
             }
         }
@@ -263,5 +263,15 @@ mod tests {
         storage
             .send(&removed, ComponentRemoved { entity, component })
             .expect("send removed");
+
+        let empty_registry = EventRegistry::new();
+        lifecycle.ensure_storage_channels(&mut storage, &empty_registry, &owner);
+
+        lifecycle.clear_added_event_for_test(0);
+        lifecycle.clear_removed_event_for_test(0);
+        assert!(lifecycle.added_event_id(&owner, 0).is_none());
+        assert!(lifecycle.removed_event_id(&owner, 0).is_none());
+        lifecycle.clear_added_event_for_test(99);
+        lifecycle.clear_removed_event_for_test(99);
     }
 }

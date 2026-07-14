@@ -95,3 +95,42 @@ impl QuerySpec {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ComponentOptions;
+    use crate::world::WorldBuilder;
+
+    #[derive(Clone, Copy)]
+    struct Position;
+
+    #[derive(Clone, Copy)]
+    struct Player;
+
+    #[test]
+    fn dynamic_id_builders_populate_each_selector_group() {
+        let mut builder = WorldBuilder::new();
+        let position = builder
+            .register_component::<Position>(ComponentOptions::sparse())
+            .expect("position");
+        let player = builder
+            .register_component::<Player>(ComponentOptions::tag())
+            .expect("player");
+
+        let spec = QuerySpec::new()
+            .with_id(position.clone())
+            .without_id(position.clone())
+            .with_tag_id(player.clone())
+            .without_tag_id(player)
+            .added_id(position.clone())
+            .changed_id(position);
+
+        assert_eq!(spec.required_ids.len(), 1);
+        assert_eq!(spec.without_ids.len(), 1);
+        assert_eq!(spec.with_tag_ids.len(), 1);
+        assert_eq!(spec.without_tag_ids.len(), 1);
+        assert_eq!(spec.added_ids.len(), 1);
+        assert_eq!(spec.changed_ids.len(), 1);
+    }
+}

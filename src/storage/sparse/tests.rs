@@ -34,6 +34,7 @@ fn insert_replace_and_iteration_cover_dense_paths() {
     assert_eq!(set.added_tick(0), Some(tick));
     assert_eq!(set.changed_tick(0), Some(later));
     assert_eq!(set.dense_slot(0), Some(a.slot()));
+    assert_eq!(set.dense_value(0), Some(&2));
     assert!(set.contains_slot(a));
     assert!(!set.contains_slot(b));
     assert_eq!(set.dense_index(a), Some(0));

@@ -1156,9 +1156,7 @@ mod tests {
 
         world
             .resource_scope_mut::<Score, _>(|value, _| {
-                if let Some(score) = value {
-                    score.0 = 5;
-                }
+                value.expect("score is present").0 = 5;
             })
             .expect("scope");
 
@@ -2067,5 +2065,39 @@ mod tests {
         };
         world.set_fixed_step(Some(step));
         assert_eq!(world.fixed_step(), Some(step));
+    }
+
+    #[test]
+    fn command_target_rejects_foreign_entities() {
+        let first = test_world();
+        let mut second = test_world();
+        let foreign = second.spawn().expect("foreign");
+        assert!(matches!(
+            first.ensure_command_target(foreign),
+            Err(WorldError::EntityOwnerMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn world_tick_test_setter_updates_raw_tick() {
+        let mut world = test_world();
+        world.set_world_tick_for_test(17);
+        assert_eq!(world.world_tick().raw(), 17);
+    }
+
+    #[test]
+    fn component_topology_bump_updates_registered_revision() {
+        let mut builder = WorldBuilder::new();
+        let component = builder
+            .register_component::<Marker>(ComponentOptions::sparse())
+            .expect("component");
+        let mut world = builder.build().expect("world");
+        let before = world.query_component_revisions[component.index()];
+        world.bump_component_query_topology(component.index());
+        assert_eq!(
+            world.query_component_revisions[component.index()],
+            before + 1
+        );
+        world.bump_component_query_topology(usize::MAX);
     }
 }

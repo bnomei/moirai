@@ -67,3 +67,21 @@ impl fmt::Display for ReplayConfigError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for ReplayConfigError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accessors_and_capture_policy_round_trip() {
+        let every = ReplayConfig::new(7, 3, CapturePolicy::EveryStep).expect("every");
+        assert_eq!(every.seed(), 7);
+        assert_eq!(every.steps(), 3);
+        assert_eq!(every.capture(), CapturePolicy::EveryStep);
+        assert!(every.should_capture(false));
+
+        let final_only = ReplayConfig::new(8, 2, CapturePolicy::FinalOnly).expect("final");
+        assert!(!final_only.should_capture(false));
+        assert!(final_only.should_capture(true));
+    }
+}

@@ -105,3 +105,32 @@ impl<S> StepSnapshot<S> {
         &self.metrics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn record_accessors_preserve_snapshot_and_metrics() {
+        let step = StepIndex::from_raw_for_test(2);
+        let tick = WorldTick::ZERO;
+        let record = StepRecord::new(
+            step,
+            Some(tick),
+            11_u32,
+            vec![MetricSample::new("work", 1.5)],
+        );
+        assert_eq!(record.step(), step);
+        assert_eq!(record.world_tick(), Some(tick));
+        assert_eq!(record.snapshot(), &11);
+        assert_eq!(record.metrics()[0].key(), "work");
+        assert_eq!(record.metrics()[0].value(), 1.5);
+
+        let snapshot = record.into_snapshot();
+        assert_eq!(snapshot.step(), step);
+        assert_eq!(snapshot.world_tick(), Some(tick));
+        assert_eq!(snapshot.snapshot(), &11);
+        assert_eq!(snapshot.metrics().len(), 1);
+    }
+}

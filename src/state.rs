@@ -1,5 +1,3 @@
-use alloc::string::String;
-
 use crate::time::ChangeTick;
 
 /// Failure to queue a state transition.
@@ -79,12 +77,10 @@ pub fn apply<S: Eq + 'static>(
             let tick = world
                 .issue_change_tick_for_state()
                 .map_err(|error| alloc::format!("{error:?}"))?;
-            let Some(state) = world
+            let state = world
                 .resource_mut::<State<S>>()
                 .map_err(|error| alloc::format!("{error:?}"))?
-            else {
-                return Err(String::from("state resource missing"));
-            };
+                .expect("required state resource remains present while the schedule lease is live");
             state.apply_pending(tick);
             Ok(())
         },
@@ -108,6 +104,8 @@ impl std::error::Error for StateError {}
 mod tests {
     use super::*;
     use crate::time::ChangeTick;
+    #[cfg(feature = "std")]
+    use alloc::string::ToString;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum Phase {
@@ -126,32 +124,55 @@ mod tests {
             Err(StateError::ConflictingTransition)
         ));
         assert_eq!(state.pending(), Some(&Phase::B));
+        #[cfg(feature = "std")]
+        assert_eq!(
+            StateError::ConflictingTransition.to_string(),
+            "conflicting state transition request"
+        );
     }
 
     #[test]
-    fn apply_system_errors_when_state_resource_missing() {
-        use crate::schedule::stage;
-        use crate::world::WorldBuilder;
+    fn apply_system_wiring_requires_state_and_runs_transitions() {
+        use crate::app::AppBuilder;
+        use crate::schedule::{stage, BuildError};
 
-        #[derive(Clone, Eq, PartialEq)]
+        #[derive(Clone, Debug, Eq, PartialEq)]
         enum Menu {
-            #[allow(dead_code)]
             Open,
+            Closed,
         }
 
-        let mut builder = WorldBuilder::new();
-        builder.register_resource::<State<Menu>>();
-        let mut world = builder.build().expect("world");
-        let system = apply::<Menu>("apply", stage::UPDATE);
-        let crate::schedule::SystemBodySource::Ready(mut body) = system.body else {
-            panic!("state apply system must be ready without local initialization");
-        };
-        world
-            .begin_run(crate::operation::StageOperation::Update)
-            .expect("begin");
-        let err = body(&mut world, 0.0).expect_err("missing state");
-        assert_eq!(err, "state resource missing");
-        world.end_run();
+        let mut missing = AppBuilder::new();
+        missing
+            .add_system(apply::<Menu>("apply", stage::UPDATE))
+            .expect("system");
+        assert!(matches!(
+            missing.build(),
+            Err(BuildError::MissingRequiredResource { .. })
+        ));
+
+        let mut builder = AppBuilder::new();
+        builder.insert_state(Menu::Open);
+        builder
+            .add_system(apply::<Menu>("apply", stage::UPDATE))
+            .expect("system");
+        let mut app = builder.build().expect("app");
+        app.world_mut()
+            .resource_mut::<State<Menu>>()
+            .expect("state access")
+            .expect("state resource")
+            .request(Menu::Closed)
+            .expect("request");
+        app.update(0.0).expect("update");
+        let state = app
+            .world()
+            .resource::<State<Menu>>()
+            .expect("state access")
+            .expect("state resource");
+        assert_eq!(state.current(), &Menu::Closed);
+        assert_eq!(state.previous(), Some(&Menu::Open));
+        assert!(state.pending().is_none());
+        assert!(state.transition_tick().is_some());
     }
 
     #[test]
