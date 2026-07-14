@@ -95,4 +95,8 @@ impl super::World {
     pub(crate) fn state_transition_tick_for(&self, type_id: TypeId) -> Option<ChangeTick> {
         self.resources.transition_tick_for(type_id).ok().flatten()
     }
+
+    pub(crate) fn state_pending_for(&self, type_id: TypeId) -> bool {
+        self.resources.state_pending_for(type_id).unwrap_or(false)
+    }
 }

@@ -97,6 +97,9 @@ impl From<WorldError> for BuildError {
 pub enum ScheduleError {
     OwnerMismatch,
     StaleHandle,
+    DuplicateStageInPlan,
+    NonUpdateStageInPlan,
+    StartupStageInPlan,
     SystemNotFound { label: String },
 }
 
@@ -179,6 +182,9 @@ impl core::fmt::Display for ScheduleError {
         match self {
             Self::OwnerMismatch => f.write_str("schedule handle belongs to a different schedule"),
             Self::StaleHandle => f.write_str("stale schedule handle"),
+            Self::DuplicateStageInPlan => f.write_str("update plan contains a duplicate stage"),
+            Self::NonUpdateStageInPlan => f.write_str("update plan contains a non-update stage"),
+            Self::StartupStageInPlan => f.write_str("update plan cannot select Startup"),
             Self::SystemNotFound { label } => write!(f, "system not found: {label}"),
         }
     }

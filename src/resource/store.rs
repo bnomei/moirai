@@ -17,6 +17,8 @@ pub(crate) struct ResourceStore {
     scoped: Option<TypeId>,
     #[allow(clippy::type_complexity)]
     state_transition_readers: BTreeMap<TypeId, fn(&dyn Any) -> Option<ChangeTick>>,
+    #[allow(clippy::type_complexity)]
+    state_pending_readers: BTreeMap<TypeId, fn(&dyn Any) -> bool>,
 }
 
 pub(crate) struct ScopedResource<R> {
@@ -54,6 +56,7 @@ impl ResourceStore {
             locked: Vec::new(),
             scoped: None,
             state_transition_readers: BTreeMap::new(),
+            state_pending_readers: BTreeMap::new(),
             registered_names: Vec::new(),
         }
     }
@@ -78,6 +81,12 @@ impl ResourceStore {
                 value
                     .downcast_ref::<crate::state::State<S>>()
                     .and_then(|state| state.transition_tick())
+            });
+        self.state_pending_readers
+            .insert(type_id, |value: &dyn Any| {
+                value
+                    .downcast_ref::<crate::state::State<S>>()
+                    .is_some_and(|state| state.pending().is_some())
             });
     }
 
@@ -303,6 +312,23 @@ impl ResourceStore {
         };
         let reader = self.state_transition_readers.get(&type_id).copied();
         Ok(reader.and_then(|read| read(entry.value.as_ref())))
+    }
+
+    pub fn state_pending_for(&self, type_id: TypeId) -> Result<bool, WorldError> {
+        let index = self
+            .registered
+            .iter()
+            .position(|id| *id == type_id)
+            .ok_or_else(|| WorldError::UnregisteredResource {
+                name: String::from("<resource>"),
+            })?;
+        let Some(entry) = self.entries[index].as_ref() else {
+            return Ok(false);
+        };
+        Ok(self
+            .state_pending_readers
+            .get(&type_id)
+            .is_some_and(|read| read(entry.value.as_ref())))
     }
 
     pub fn cancel_scope(&mut self) {

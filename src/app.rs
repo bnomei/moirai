@@ -9,8 +9,9 @@ pub use crate::schedule::BuildError;
 use crate::schedule::RunOutcome;
 use crate::schedule::{
     FlushMode, RunContext, Schedule, ScheduleBuilder, ScheduleError, System, SystemId, SystemSet,
+    UpdatePlan,
 };
-use crate::time::FixedConfig;
+use crate::time::{FixedConfig, FixedWork};
 use crate::world::{World, WorldBuilder};
 
 /// Terminal execution record retained after a fault.
@@ -113,9 +114,27 @@ impl App {
         self.update_with(delta_seconds, |_| ())
     }
 
+    /// Runs a validated subset of Update stages.
+    ///
+    /// Startup still runs once before the first successful planned update. The
+    /// selected stages retain compiled order, share one world tick, final flush,
+    /// and Update-frame event cleanup.
+    pub fn update_plan(&mut self, delta_seconds: f32, plan: &UpdatePlan) -> Result<(), AppError> {
+        self.update_inner(delta_seconds, Some(plan), |_| ())
+    }
+
     pub fn update_with<R>(
         &mut self,
         delta_seconds: f32,
+        observe: impl FnOnce(&World) -> R,
+    ) -> Result<R, AppError> {
+        self.update_inner(delta_seconds, None, observe)
+    }
+
+    fn update_inner<R>(
+        &mut self,
+        delta_seconds: f32,
+        plan: Option<&UpdatePlan>,
         observe: impl FnOnce(&World) -> R,
     ) -> Result<R, AppError> {
         self.ensure_ready()?;
@@ -126,36 +145,62 @@ impl App {
         );
 
         let frame_delta = duration_from_seconds(delta_seconds)?;
-        let fixed_config = self.schedule.fixed_config().copied();
-        let substeps = if let Some(config) = fixed_config {
-            let peek_substeps = self
-                .schedule
-                .fixed_accumulator()
-                .peek_substeps(frame_delta, &config)
-                .0;
-            self.world
-                .preflight_world_tick()
-                .map_err(|_| self.fault_tick_exhaustion())?;
+        let fixed_stage_selected = plan.map_or(true, |plan| {
             self.schedule
-                .fixed_accumulator()
-                .preflight_substeps(peek_substeps)
-                .map_err(|_| self.fault_fixed_exhaustion())?;
-            let (substeps, debt) = self
-                .schedule
-                .fixed_accumulator_mut()
-                .plan_substeps(frame_delta, &config);
-            if let Some(debt) = debt {
-                emit(
-                    &mut self.observer,
-                    DiagnosticEvent::FixedDebtDropped { steps: debt.steps },
-                );
+                .update_stage_indices()
+                .iter()
+                .copied()
+                .any(|index| {
+                    self.schedule.stage_label_at(index) == stage::FIXED_UPDATE
+                        && self.schedule.plan_contains_stage(plan, index)
+                })
+        });
+        let fixed_config = self.schedule.fixed_config().copied();
+        let fixed_plan = if fixed_stage_selected {
+            if let Some(config) = fixed_config {
+                let peek = self
+                    .schedule
+                    .fixed_accumulator()
+                    .peek_plan(frame_delta, &config);
+                let planned_steps = match peek.work {
+                    FixedWork::Steps(steps) => steps as u128,
+                    FixedWork::Coalesced { steps, .. } => steps,
+                };
+                self.world
+                    .preflight_world_tick()
+                    .map_err(|_| self.fault_tick_exhaustion())?;
+                self.schedule
+                    .fixed_accumulator()
+                    .preflight_steps(planned_steps)
+                    .map_err(|_| self.fault_fixed_exhaustion())?;
+                let fixed_plan = self
+                    .schedule
+                    .fixed_accumulator_mut()
+                    .plan(frame_delta, &config);
+                if let Some(debt) = fixed_plan.dropped {
+                    emit(
+                        &mut self.observer,
+                        DiagnosticEvent::FixedDebtDropped { steps: debt.steps },
+                    );
+                }
+                if let Some(debt) = fixed_plan.coalesced {
+                    emit(
+                        &mut self.observer,
+                        DiagnosticEvent::FixedDebtCoalesced { steps: debt.steps },
+                    );
+                }
+                Some(fixed_plan)
+            } else {
+                self.world
+                    .preflight_world_tick()
+                    .map_err(|_| self.fault_tick_exhaustion())?;
+                None
             }
-            substeps
         } else {
             self.world
                 .preflight_world_tick()
                 .map_err(|_| self.fault_tick_exhaustion())?;
-            0
+            None
         };
 
         self.world
@@ -167,16 +212,46 @@ impl App {
         for stage_order_index in 0..update_stage_count {
             let stage_index = self.schedule.update_stage_indices()[stage_order_index];
             let stage_label = self.schedule.stage_label_at(stage_index);
+            let selected = plan.map_or(true, |plan| {
+                self.schedule.plan_contains_stage(plan, stage_index)
+            });
+            let startup_pending = stage_label == stage::STARTUP;
+            if !selected && !startup_pending {
+                continue;
+            }
             if stage_label == stage::FIXED_UPDATE {
                 if let Some(config) = fixed_config {
-                    for _ in 0..substeps {
-                        let step = self.schedule.fixed_accumulator_mut().next_step(&config);
-                        self.world.set_fixed_step(Some(step));
-                        self.run_context.fixed_step = Some(step);
-                        let result = self.run_stage(stage_index, seconds_from_duration(step.delta));
-                        self.world.set_fixed_step(None);
-                        self.run_context.fixed_step = None;
-                        result?;
+                    if let Some(fixed_plan) = fixed_plan {
+                        match fixed_plan.work {
+                            FixedWork::Steps(substeps) => {
+                                for _ in 0..substeps {
+                                    let step =
+                                        self.schedule.fixed_accumulator_mut().next_step(&config);
+                                    self.world.set_fixed_step(Some(step));
+                                    self.run_context.fixed_step = Some(step);
+                                    let result = self
+                                        .run_stage(stage_index, seconds_from_duration(step.delta));
+                                    self.world.set_fixed_step(None);
+                                    self.run_context.fixed_step = None;
+                                    result?;
+                                }
+                            }
+                            FixedWork::Coalesced { steps, delta } => {
+                                let steps = u64::try_from(steps)
+                                    .expect("fixed-step preflight accepts coalesced step count");
+                                let step = self
+                                    .schedule
+                                    .fixed_accumulator_mut()
+                                    .next_coalesced(steps, delta);
+                                self.world.set_fixed_step(Some(step));
+                                self.run_context.fixed_step = Some(step);
+                                let result =
+                                    self.run_stage(stage_index, seconds_from_duration(delta));
+                                self.world.set_fixed_step(None);
+                                self.run_context.fixed_step = None;
+                                result?;
+                            }
+                        }
                     }
                 }
                 continue;

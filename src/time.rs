@@ -13,8 +13,15 @@ pub(crate) enum WorldTickError {
 /// Fixed simulation substep identity while FixedUpdate runs.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct FixedStep {
+    /// Index of the first fixed interval represented by this run.
     pub index: u64,
+    /// Simulation time represented by this run.
     pub delta: Duration,
+    /// Number of fixed intervals represented by this run.
+    ///
+    /// This is one for ordinary fixed updates. A coalesced update represents
+    /// more than one interval and advances the next index by this amount.
+    pub steps: u64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -27,6 +34,18 @@ pub(crate) enum FixedStepError {
 pub struct FixedConfig {
     delta: Duration,
     max_substeps: u32,
+    debt_policy: FixedDebtPolicy,
+}
+
+/// Policy used when a frame contains more fixed intervals than the cap.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum FixedDebtPolicy {
+    /// Run up to the cap, discard the remaining whole intervals, and report it.
+    DropWithDiagnostic,
+    /// Run up to the cap and retain the remaining intervals for future updates.
+    Preserve,
+    /// Run one update with all overdue whole intervals combined into its delta.
+    Coalesce,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -45,6 +64,25 @@ pub(crate) struct FixedAccumulator {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct FixedDebtDropped {
     pub steps: u128,
+}
+
+/// Whole fixed intervals represented by one coalesced FixedUpdate run.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct FixedDebtCoalesced {
+    pub steps: u128,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FixedWork {
+    Steps(u32),
+    Coalesced { steps: u128, delta: Duration },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FixedPlan {
+    pub work: FixedWork,
+    pub dropped: Option<FixedDebtDropped>,
+    pub coalesced: Option<FixedDebtCoalesced>,
 }
 
 /// Monotonic world change counter for component/resource mutation metadata.
@@ -84,6 +122,7 @@ impl FixedConfig {
         Ok(Self {
             delta,
             max_substeps: Self::DEFAULT_MAX_SUBSTEPS,
+            debt_policy: FixedDebtPolicy::DropWithDiagnostic,
         })
     }
 
@@ -102,6 +141,15 @@ impl FixedConfig {
     pub fn max_substeps(&self) -> u32 {
         self.max_substeps
     }
+
+    pub fn with_debt_policy(mut self, debt_policy: FixedDebtPolicy) -> Self {
+        self.debt_policy = debt_policy;
+        self
+    }
+
+    pub fn debt_policy(&self) -> FixedDebtPolicy {
+        self.debt_policy
+    }
 }
 
 impl FixedAccumulator {
@@ -117,62 +165,89 @@ impl FixedAccumulator {
         self.next_index = next_index;
     }
 
-    pub fn peek_substeps(
-        &self,
-        frame_delta: Duration,
-        config: &FixedConfig,
-    ) -> (u32, Option<FixedDebtDropped>) {
-        let (run, debt, _) = Self::substep_plan(self.remainder.saturating_add(frame_delta), config);
-        (run, debt)
+    pub fn peek_plan(&self, frame_delta: Duration, config: &FixedConfig) -> FixedPlan {
+        Self::substep_plan(self.remainder.saturating_add(frame_delta), config).0
     }
 
-    pub fn plan_substeps(
-        &mut self,
-        frame_delta: Duration,
-        config: &FixedConfig,
-    ) -> (u32, Option<FixedDebtDropped>) {
+    pub fn plan(&mut self, frame_delta: Duration, config: &FixedConfig) -> FixedPlan {
         let total = self.remainder.saturating_add(frame_delta);
-        let (run, debt, remainder) = Self::substep_plan(total, config);
+        let (plan, remainder) = Self::substep_plan(total, config);
         self.remainder = remainder;
-        (run, debt)
+        plan
     }
 
-    pub fn preflight_substeps(&self, substeps: u32) -> Result<(), FixedStepError> {
-        if substeps == 0 {
+    pub fn preflight_steps(&self, steps: u128) -> Result<(), FixedStepError> {
+        if steps == 0 {
             return Ok(());
         }
+        let steps = u64::try_from(steps).map_err(|_| FixedStepError::Exhausted)?;
         let last = self
             .next_index
-            .checked_add(substeps as u64 - 1)
+            .checked_add(steps - 1)
             .ok_or(FixedStepError::Exhausted)?;
         last.checked_add(1).ok_or(FixedStepError::Exhausted)?;
         Ok(())
     }
 
-    fn substep_plan(
-        total: Duration,
-        config: &FixedConfig,
-    ) -> (u32, Option<FixedDebtDropped>, Duration) {
+    fn substep_plan(total: Duration, config: &FixedConfig) -> (FixedPlan, Duration) {
         let delta_nanos = config.delta().as_nanos();
         let total_nanos = total.as_nanos();
         let due = total_nanos / delta_nanos;
         let run = due.min(config.max_substeps() as u128) as u32;
-        let dropped = due - run as u128;
-        let debt = if dropped > 0 {
-            Some(FixedDebtDropped { steps: dropped })
-        } else {
-            None
+        let ordinary = FixedPlan {
+            work: FixedWork::Steps(run),
+            dropped: None,
+            coalesced: None,
         };
-        let remainder = duration_from_nanos(total_nanos % delta_nanos);
-        (run, debt, remainder)
+        if due <= config.max_substeps() as u128 {
+            return (ordinary, duration_from_nanos(total_nanos % delta_nanos));
+        }
+
+        match config.debt_policy() {
+            FixedDebtPolicy::DropWithDiagnostic => (
+                FixedPlan {
+                    dropped: Some(FixedDebtDropped {
+                        steps: due - run as u128,
+                    }),
+                    ..ordinary
+                },
+                duration_from_nanos(total_nanos % delta_nanos),
+            ),
+            FixedDebtPolicy::Preserve => {
+                let consumed = delta_nanos.saturating_mul(run as u128);
+                (ordinary, duration_from_nanos(total_nanos - consumed))
+            }
+            FixedDebtPolicy::Coalesce => {
+                let delta = duration_from_nanos(delta_nanos.saturating_mul(due));
+                (
+                    FixedPlan {
+                        work: FixedWork::Coalesced { steps: due, delta },
+                        dropped: None,
+                        coalesced: Some(FixedDebtCoalesced { steps: due }),
+                    },
+                    duration_from_nanos(total_nanos % delta_nanos),
+                )
+            }
+        }
     }
 
     pub fn next_step(&mut self, config: &FixedConfig) -> FixedStep {
         let step = FixedStep {
             index: self.next_index,
             delta: config.delta(),
+            steps: 1,
         };
-        self.next_index = self.next_index.saturating_add(1);
+        self.next_index = self.next_index.saturating_add(step.steps);
+        step
+    }
+
+    pub fn next_coalesced(&mut self, steps: u64, delta: Duration) -> FixedStep {
+        let step = FixedStep {
+            index: self.next_index,
+            delta,
+            steps,
+        };
+        self.next_index = self.next_index.saturating_add(steps);
         step
     }
 }
@@ -231,7 +306,7 @@ impl fmt::Display for ChangeTick {
 
 #[cfg(test)]
 mod tests {
-    use super::{FixedAccumulator, FixedConfig};
+    use super::{FixedAccumulator, FixedConfig, FixedDebtPolicy, FixedWork};
     use core::time::Duration;
 
     use alloc::format;
@@ -256,17 +331,17 @@ mod tests {
     }
 
     #[test]
-    fn preflight_substeps_zero_is_ok() {
+    fn preflight_steps_zero_is_ok() {
         let accumulator = FixedAccumulator::new();
-        accumulator.preflight_substeps(0).expect("zero substeps");
+        accumulator.preflight_steps(0).expect("zero steps");
     }
 
     #[test]
-    fn preflight_substeps_reports_exhaustion_near_u64_max() {
+    fn preflight_steps_reports_exhaustion_near_u64_max() {
         let mut accumulator = FixedAccumulator::new();
         accumulator.set_next_index_for_test(u64::MAX);
         assert!(matches!(
-            accumulator.preflight_substeps(1),
+            accumulator.preflight_steps(1),
             Err(FixedStepError::Exhausted)
         ));
     }
@@ -280,11 +355,11 @@ mod tests {
     #[test]
     fn default_accumulator_matches_new() {
         assert_eq!(
-            FixedAccumulator::default().peek_substeps(
+            FixedAccumulator::default().peek_plan(
                 Duration::from_millis(1),
                 &FixedConfig::new(Duration::from_millis(1)).expect("delta")
             ),
-            FixedAccumulator::new().peek_substeps(
+            FixedAccumulator::new().peek_plan(
                 Duration::from_millis(1),
                 &FixedConfig::new(Duration::from_millis(1)).expect("delta")
             )
@@ -299,13 +374,50 @@ mod tests {
             .expect("cap");
         let mut accumulator = FixedAccumulator::new();
 
-        let (run, debt) = accumulator.plan_substeps(Duration::MAX, &config);
+        let plan = accumulator.plan(Duration::MAX, &config);
 
-        assert_eq!(run, 8);
+        assert_eq!(plan.work, FixedWork::Steps(8));
         assert_eq!(
-            debt.expect("debt").steps,
+            plan.dropped.expect("debt").steps,
             Duration::MAX.as_nanos() / config.delta().as_nanos() - 8
         );
         assert!(accumulator.remainder < config.delta());
+    }
+
+    #[test]
+    fn preserve_debt_keeps_unrun_whole_steps() {
+        let config = FixedConfig::new(Duration::from_millis(10))
+            .expect("positive delta")
+            .with_max_substeps(2)
+            .expect("cap")
+            .with_debt_policy(FixedDebtPolicy::Preserve);
+        let mut accumulator = FixedAccumulator::new();
+
+        let first = accumulator.plan(Duration::from_millis(50), &config);
+        assert_eq!(first.work, FixedWork::Steps(2));
+        assert!(first.dropped.is_none());
+        let second = accumulator.plan(Duration::ZERO, &config);
+        assert_eq!(second.work, FixedWork::Steps(2));
+    }
+
+    #[test]
+    fn coalesce_represents_all_overdue_intervals_once() {
+        let config = FixedConfig::new(Duration::from_millis(10))
+            .expect("positive delta")
+            .with_max_substeps(2)
+            .expect("cap")
+            .with_debt_policy(FixedDebtPolicy::Coalesce);
+        let mut accumulator = FixedAccumulator::new();
+
+        let plan = accumulator.plan(Duration::from_millis(55), &config);
+        assert_eq!(
+            plan.work,
+            FixedWork::Coalesced {
+                steps: 5,
+                delta: Duration::from_millis(50),
+            }
+        );
+        assert_eq!(plan.coalesced.expect("coalesced").steps, 5);
+        assert_eq!(accumulator.remainder, Duration::from_millis(5));
     }
 }

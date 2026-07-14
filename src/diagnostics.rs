@@ -32,6 +32,9 @@ pub enum DiagnosticEvent<'a> {
     FixedDebtDropped {
         steps: u128,
     },
+    FixedDebtCoalesced {
+        steps: u128,
+    },
     Fault {
         stage: Option<&'a str>,
         system: Option<&'a str>,

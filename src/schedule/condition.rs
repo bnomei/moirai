@@ -29,6 +29,7 @@ enum ConditionKind {
     ResourceAdded(TypeId),
     ResourceChanged(TypeId),
     StateChanged(TypeId),
+    StatePending(TypeId),
     FixedStepMod { mask: u64, phase: u64 },
     And(Box<ConditionKind>, Box<ConditionKind>),
     Or(Box<ConditionKind>, Box<ConditionKind>),
@@ -58,6 +59,11 @@ impl Condition {
 
     pub fn state_changed<S: Eq + 'static>() -> Self {
         Self(ConditionKind::StateChanged(TypeId::of::<State<S>>()))
+    }
+
+    /// Runs while a state transition has been requested but not yet applied.
+    pub fn state_pending<S: Eq + 'static>() -> Self {
+        Self(ConditionKind::StatePending(TypeId::of::<State<S>>()))
     }
 
     /// Runs on one phase of a power-of-two fixed-step cadence.
@@ -170,6 +176,7 @@ fn evaluate_kind(
             world.state_transition_tick_for(*type_id),
             context.state_transition_cursor(system_index, *type_id),
         ),
+        ConditionKind::StatePending(type_id) => world.state_pending_for(*type_id),
         ConditionKind::FixedStepMod { mask, phase } => context
             .fixed_step
             .is_some_and(|step| step.index & mask == *phase),
@@ -207,6 +214,7 @@ fn evaluate_kind_for_set(
             world.state_transition_tick_for(*type_id),
             context.state_transition_cursor_for_set(set_index, *type_id),
         ),
+        ConditionKind::StatePending(type_id) => world.state_pending_for(*type_id),
         ConditionKind::FixedStepMod { mask, phase } => context
             .fixed_step
             .is_some_and(|step| step.index & mask == *phase),
@@ -371,6 +379,7 @@ mod tests {
             context.fixed_step = Some(crate::time::FixedStep {
                 index,
                 delta: core::time::Duration::from_millis(16),
+                steps: 1,
             });
             assert_eq!(condition.evaluate(&world, 0, &context), index % 4 == 0);
             assert_eq!(

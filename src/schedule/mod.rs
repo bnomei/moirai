@@ -206,6 +206,15 @@ pub struct Schedule {
     pub(crate) compiled: CompiledSchedule,
 }
 
+/// Validated subset of Update stages run by [`crate::App::update_plan`].
+///
+/// The plan is schedule-owned through its opaque stage handles. Execution always
+/// follows the compiled stage order, never the caller's input order.
+#[derive(Clone, Debug)]
+pub struct UpdatePlan {
+    stages: Vec<usize>,
+}
+
 impl Schedule {
     pub fn builder() -> ScheduleBuilder {
         ScheduleBuilder::new()
@@ -253,6 +262,37 @@ impl Schedule {
         enabled: bool,
     ) -> Result<(), ScheduleError> {
         self.compiled.set_system_enabled(id, enabled)
+    }
+
+    /// Creates a plan that runs only the supplied Update stages.
+    ///
+    /// Startup is automatic on the first successful update and cannot be named
+    /// in a plan. Render stages belong to [`crate::App::render`].
+    pub fn update_plan(
+        &self,
+        stages: impl IntoIterator<Item = StageId>,
+    ) -> Result<UpdatePlan, ScheduleError> {
+        let mut selected = Vec::new();
+        for id in stages {
+            id.validate_owner(&self.compiled.owner)?;
+            let index = id.index();
+            let stage = self
+                .compiled
+                .stages
+                .get(index)
+                .ok_or(ScheduleError::StaleHandle)?;
+            if stage.descriptor.operation != StageOperation::Update {
+                return Err(ScheduleError::NonUpdateStageInPlan);
+            }
+            if stage.descriptor.label == stage::STARTUP {
+                return Err(ScheduleError::StartupStageInPlan);
+            }
+            if selected.contains(&index) {
+                return Err(ScheduleError::DuplicateStageInPlan);
+            }
+            selected.push(index);
+        }
+        Ok(UpdatePlan { stages: selected })
     }
 
     pub(crate) fn run_stage(
@@ -319,6 +359,10 @@ impl Schedule {
 
     pub(crate) fn update_stage_indices(&self) -> &[usize] {
         &self.compiled.update_stage_order
+    }
+
+    pub(crate) fn plan_contains_stage(&self, plan: &UpdatePlan, stage_index: usize) -> bool {
+        plan.stages.contains(&stage_index)
     }
 
     pub(crate) fn set_count(&self) -> usize {

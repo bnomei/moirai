@@ -88,6 +88,41 @@ pub fn apply<S: Eq + 'static>(
     .requires_resource::<State<S>>()
 }
 
+/// Creates an exit hook that runs after a transition request and before
+/// [`apply`] commits it. The hook observes the outgoing [`State::current`]
+/// and requested [`State::pending`] values.
+pub fn on_exit<S: Eq + 'static>(
+    name: impl Into<alloc::string::String>,
+    stage_label: impl Into<alloc::string::String>,
+    body: impl FnMut(&mut crate::world::World, f32) + 'static,
+) -> crate::schedule::System {
+    crate::schedule::System::new(name, stage_label, body)
+        .run_if(crate::schedule::Condition::state_pending::<S>())
+        .requires_resource::<State<S>>()
+}
+
+/// Creates a post-apply transition hook. It observes [`State::previous`] and
+/// [`State::current`] after an ordered [`apply`] system runs.
+pub fn on_transition<S: Eq + 'static>(
+    name: impl Into<alloc::string::String>,
+    stage_label: impl Into<alloc::string::String>,
+    body: impl FnMut(&mut crate::world::World, f32) + 'static,
+) -> crate::schedule::System {
+    crate::schedule::System::new(name, stage_label, body)
+        .run_if(crate::schedule::Condition::state_changed::<S>())
+        .requires_resource::<State<S>>()
+}
+
+/// Creates a post-apply enter hook. It has the same transition boundary as
+/// [`on_transition`] and is named for host lifecycle readability.
+pub fn on_enter<S: Eq + 'static>(
+    name: impl Into<alloc::string::String>,
+    stage_label: impl Into<alloc::string::String>,
+    body: impl FnMut(&mut crate::world::World, f32) + 'static,
+) -> crate::schedule::System {
+    on_transition::<S>(name, stage_label, body)
+}
+
 #[cfg(feature = "std")]
 impl core::fmt::Display for StateError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -186,5 +221,73 @@ mod tests {
         assert_eq!(state.transition_tick(), Some(tick));
         state.apply_pending(tick);
         assert_eq!(state.current(), &Phase::B);
+    }
+
+    #[test]
+    fn lifecycle_helpers_observe_the_ordered_transition_boundary() {
+        use alloc::rc::Rc;
+        use core::cell::RefCell;
+
+        use crate::app::AppBuilder;
+        use crate::schedule::stage;
+
+        #[derive(Debug, Eq, PartialEq)]
+        enum Mode {
+            Menu,
+            Playing,
+        }
+
+        let order = Rc::new(RefCell::new(alloc::vec::Vec::new()));
+        let exit_order = Rc::clone(&order);
+        let transition_order = Rc::clone(&order);
+        let enter_order = Rc::clone(&order);
+        let mut builder = AppBuilder::new();
+        builder.insert_state(Mode::Menu);
+        builder
+            .add_system(on_exit::<Mode>("exit", stage::UPDATE, move |world, _| {
+                let state = world
+                    .resource::<State<Mode>>()
+                    .expect("state")
+                    .expect("present");
+                assert_eq!(state.current(), &Mode::Menu);
+                assert_eq!(state.pending(), Some(&Mode::Playing));
+                exit_order.borrow_mut().push("exit");
+            }))
+            .expect("exit");
+        builder
+            .add_system(apply::<Mode>("apply", stage::UPDATE).after("exit"))
+            .expect("apply");
+        builder
+            .add_system(
+                on_transition::<Mode>("transition", stage::UPDATE, move |world, _| {
+                    let state = world
+                        .resource::<State<Mode>>()
+                        .expect("state")
+                        .expect("present");
+                    assert_eq!(state.previous(), Some(&Mode::Menu));
+                    assert_eq!(state.current(), &Mode::Playing);
+                    transition_order.borrow_mut().push("transition");
+                })
+                .after("apply"),
+            )
+            .expect("transition");
+        builder
+            .add_system(
+                on_enter::<Mode>("enter", stage::UPDATE, move |_, _| {
+                    enter_order.borrow_mut().push("enter");
+                })
+                .after("transition"),
+            )
+            .expect("enter");
+        let mut app = builder.build().expect("app");
+        app.world_mut()
+            .resource_mut::<State<Mode>>()
+            .expect("state")
+            .expect("present")
+            .request(Mode::Playing)
+            .expect("request");
+
+        app.update(0.0).expect("update");
+        assert_eq!(&*order.borrow(), &["exit", "transition", "enter"]);
     }
 }

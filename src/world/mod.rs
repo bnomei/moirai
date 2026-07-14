@@ -2066,6 +2066,7 @@ mod tests {
         let step = FixedStep {
             index: 0,
             delta: Duration::from_millis(16),
+            steps: 1,
         };
         world.set_fixed_step(Some(step));
         assert_eq!(world.fixed_step(), Some(step));

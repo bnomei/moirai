@@ -85,10 +85,13 @@ pub use revision::{Revision, RevisionExhausted, RevisionKey};
 pub use schedule::stage;
 pub use schedule::{
     Condition, ConditionError, FlushMode, Schedule, ScheduleBuilder, ScheduleError, StageId,
-    System, SystemId, SystemInitContext, SystemSet,
+    System, SystemId, SystemInitContext, SystemSet, UpdatePlan,
 };
-pub use state::{apply, State, StateError};
-pub use time::{ChangeTick, FixedConfig, FixedStep, WorldTick};
+pub use state::{apply, on_enter, on_exit, on_transition, State, StateError};
+pub use time::{
+    ChangeTick, FixedConfig, FixedDebtCoalesced, FixedDebtDropped, FixedDebtPolicy, FixedStep,
+    WorldTick,
+};
 pub use world::{
     Bundle, Commands, DenseEntityScratch, DynamicBundle, EntityScratchError, World, WorldBuilder,
     WorldError,
