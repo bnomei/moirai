@@ -23,12 +23,13 @@ echo "== msrv =="
 cargo +1.75 check --lib --no-default-features
 
 echo "== docs =="
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+cargo test --doc --package moirai --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --package moirai --no-deps --all-features --locked
 
 echo "== bench compile =="
 cargo bench --no-run
 
 echo "== package =="
-cargo package --allow-dirty
+cargo package --allow-dirty --locked
 
 echo "Phase 6 verification commands completed."

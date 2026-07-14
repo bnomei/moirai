@@ -26,8 +26,8 @@ use crate::time::{ChangeTick, FixedStep};
 use crate::world::World;
 
 /// Per-pass execution scratch state for conditions and fixed steps.
-pub struct RunContext {
-    pub fixed_step: Option<FixedStep>,
+pub(crate) struct RunContext {
+    pub(crate) fixed_step: Option<FixedStep>,
     resource_added_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     resource_changed_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
     state_transition_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
@@ -38,7 +38,7 @@ pub struct RunContext {
 }
 
 impl RunContext {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_set_capacity(0)
     }
 
@@ -337,7 +337,7 @@ impl Schedule {
     }
 }
 
-#[cfg(any(test, feature = "testkit"))]
+#[cfg(test)]
 pub(crate) fn stage_flush_mode_for_test(schedule: &Schedule, label: &str) -> Option<FlushMode> {
     schedule
         .stage_id(label)

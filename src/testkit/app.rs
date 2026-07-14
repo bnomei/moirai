@@ -150,7 +150,7 @@ mod tests {
             1.0,
             &|world| Tick(world.world_tick().raw()),
             &|_| Vec::new(),
-            StepIndex::from_raw_for_test(u32::MAX),
+            StepIndex::from_raw(u32::MAX),
         )
         .expect_err("overflow");
         assert!(matches!(failure.source(), &ReplayRunError::StepOverflow));
@@ -159,11 +159,37 @@ mod tests {
     }
 
     #[test]
+    fn replay_app_returns_partial_report_when_world_tick_is_exhausted() {
+        let mut builder = AppBuilder::new();
+        builder
+            .add_system(System::new("tick", stage::UPDATE, |_world, _dt| {}))
+            .expect("system");
+        let mut app = builder.build().expect("app");
+        app.world_mut().set_world_tick_for_test(u64::MAX);
+        let config = ReplayConfig::new(1, 2, CapturePolicy::EveryStep).expect("config");
+
+        let failure = replay_app(
+            &mut app,
+            config,
+            1.0 / 60.0,
+            |world| Tick(world.world_tick().raw()),
+            |_| Vec::new(),
+        )
+        .expect_err("tick exhaustion");
+
+        assert!(matches!(
+            failure.source(),
+            &ReplayRunError::Source(AppError::WorldTickExhausted)
+        ));
+        assert_eq!(failure.step(), StepIndex::FIRST);
+    }
+
+    #[test]
     fn record_step_validation_reports_mismatch_with_partial_report() {
         let config = ReplayConfig::new(2, 1, CapturePolicy::EveryStep).expect("config");
         let report = ReplayReport::new(config);
         let expected = StepIndex::FIRST;
-        let reported = StepIndex::from_raw_for_test(1);
+        let reported = StepIndex::from_raw(1);
         let record = StepRecord::new(reported, None, Tick(0), Vec::new());
         let failure = validate_record_step(expected, report, record).expect_err("mismatch");
         assert!(matches!(

@@ -195,7 +195,6 @@ fn implementation_modules_are_not_public() {
     cases.compile_fail("tests/ui/internal_schedule_runner.rs");
     cases.compile_fail("tests/ui/internal_world_query_plan.rs");
     cases.compile_fail("tests/ui/stage_id_raw_index.rs");
-    #[cfg(not(feature = "testkit"))]
     cases.compile_fail("tests/ui/inherent_test_controls.rs");
 }
 
@@ -226,7 +225,7 @@ fn std_feature_is_additive() {}
 fn testkit_namespace_paths_compile() {
     use moirai::testkit::{
         reports_match, CapturePolicy, MetricSample, ReplayConfig, ReplayFailure, ReplayReport,
-        ReplayRunError, ScheduleTestExt, StepIndex, StepRecord, StepSnapshot, WorldTestExt,
+        ReplayRunError, StepIndex, StepRecord, StepSnapshot,
     };
     let _ = core::mem::size_of::<CapturePolicy>();
     let _ = core::mem::size_of::<ReplayConfig>();
@@ -238,8 +237,4 @@ fn testkit_namespace_paths_compile() {
     let _ = core::mem::size_of::<StepRecord<u8>>();
     let _ = core::mem::size_of::<StepSnapshot<u8>>();
     let _: fn(&ReplayReport<u8>, &ReplayReport<u8>) -> bool = reports_match::<u8>;
-    fn accepts_world_ext<T: WorldTestExt>() {}
-    fn accepts_schedule_ext<T: ScheduleTestExt>() {}
-    accepts_world_ext::<moirai::World>();
-    accepts_schedule_ext::<moirai::Schedule>();
 }

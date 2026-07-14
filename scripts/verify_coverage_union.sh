@@ -8,6 +8,7 @@ LOCK="$TARGET/.coverage-union.lock"
 STAGE=""
 PREVIOUS=""
 SOURCE_DIGEST_BEFORE=""
+COVERAGE_IGNORE_FILENAME_REGEX='(^|/)src/examples(/|$)'
 
 mkdir -p "$TARGET"
 if ! mkdir "$LOCK" 2>/dev/null; then
@@ -39,27 +40,27 @@ SOURCE_DIGEST_BEFORE="$(
 
 echo "== coverage: no default features =="
 cargo llvm-cov clean --workspace
-cargo llvm-cov --no-report --no-default-features
-cargo llvm-cov report --lcov --output-path "$STAGE/flavors/no-default.lcov"
-cargo llvm-cov report --json --output-path "$STAGE/flavors/no-default.json"
+cargo llvm-cov --no-report --no-default-features --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --lcov --output-path "$STAGE/flavors/no-default.lcov" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --json --output-path "$STAGE/flavors/no-default.json" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
 
 echo "== coverage: std =="
 cargo llvm-cov clean --workspace
-cargo llvm-cov --no-report --features std
-cargo llvm-cov report --lcov --output-path "$STAGE/flavors/std.lcov"
-cargo llvm-cov report --json --output-path "$STAGE/flavors/std.json"
+cargo llvm-cov --no-report --features std --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --lcov --output-path "$STAGE/flavors/std.lcov" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --json --output-path "$STAGE/flavors/std.json" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
 
 echo "== coverage: testkit =="
 cargo llvm-cov clean --workspace
-cargo llvm-cov --no-report --features testkit
-cargo llvm-cov report --lcov --output-path "$STAGE/flavors/testkit.lcov"
-cargo llvm-cov report --json --output-path "$STAGE/flavors/testkit.json"
+cargo llvm-cov --no-report --features testkit --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --lcov --output-path "$STAGE/flavors/testkit.lcov" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --json --output-path "$STAGE/flavors/testkit.json" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
 
 echo "== coverage: all features =="
 cargo llvm-cov clean --workspace
-cargo llvm-cov --no-report --all-features
-cargo llvm-cov report --lcov --output-path "$STAGE/flavors/all-features.lcov"
-cargo llvm-cov report --json --output-path "$STAGE/flavors/all-features.json"
+cargo llvm-cov --no-report --all-features --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --lcov --output-path "$STAGE/flavors/all-features.lcov" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
+cargo llvm-cov report --json --output-path "$STAGE/flavors/all-features.json" --ignore-filename-regex "$COVERAGE_IGNORE_FILENAME_REGEX"
 
 SOURCE_DIGEST_AFTER="$(
     uv run --no-project python scripts/coverage_union.py --repo "$ROOT" --source-digest
@@ -80,21 +81,21 @@ uv run --no-project python scripts/coverage_union.py \
     --missing "$STAGE/missing-lines.txt" \
     --manifest "$STAGE/manifest.json" \
     --command "cargo llvm-cov clean --workspace" \
-    --command "cargo llvm-cov --no-report --no-default-features" \
-    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/no-default.lcov" \
-    --command "cargo llvm-cov report --json --output-path <staging>/flavors/no-default.json" \
+    --command "cargo llvm-cov --no-report --no-default-features --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/no-default.lcov --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --json --output-path <staging>/flavors/no-default.json --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
     --command "cargo llvm-cov clean --workspace" \
-    --command "cargo llvm-cov --no-report --features std" \
-    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/std.lcov" \
-    --command "cargo llvm-cov report --json --output-path <staging>/flavors/std.json" \
+    --command "cargo llvm-cov --no-report --features std --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/std.lcov --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --json --output-path <staging>/flavors/std.json --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
     --command "cargo llvm-cov clean --workspace" \
-    --command "cargo llvm-cov --no-report --features testkit" \
-    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/testkit.lcov" \
-    --command "cargo llvm-cov report --json --output-path <staging>/flavors/testkit.json" \
+    --command "cargo llvm-cov --no-report --features testkit --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/testkit.lcov --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --json --output-path <staging>/flavors/testkit.json --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
     --command "cargo llvm-cov clean --workspace" \
-    --command "cargo llvm-cov --no-report --all-features" \
-    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/all-features.lcov" \
-    --command "cargo llvm-cov report --json --output-path <staging>/flavors/all-features.json"
+    --command "cargo llvm-cov --no-report --all-features --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --lcov --output-path <staging>/flavors/all-features.lcov --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'" \
+    --command "cargo llvm-cov report --json --output-path <staging>/flavors/all-features.json --ignore-filename-regex '$COVERAGE_IGNORE_FILENAME_REGEX'"
 
 # Publish the evidence and normalized artifacts as one directory only after every flavor succeeds.
 # Keeping the previous directory until the rename completes avoids a stale/new mixed set.

@@ -1,6 +1,4 @@
 use moirai::event::{EventOptions, EventReaderStart};
-#[cfg(feature = "testkit")]
-use moirai::testkit::WorldTestExt;
 use moirai::world::{EventReadError, WorldBuilder};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -93,54 +91,6 @@ fn event_reader_rejects_cross_world_reads() {
         world_b.read_event(&mut reader),
         Err(EventReadError::OwnerMismatch { .. })
     ));
-}
-
-#[test]
-#[cfg(feature = "testkit")]
-fn sequence_exhaustion_closes_channel_and_reads_report_closed() {
-    let mut builder = WorldBuilder::new();
-    builder
-        .add_event::<Damage>(EventOptions::manual())
-        .expect("register");
-    let mut world = builder.build().expect("build");
-    let mut reader = world
-        .event_reader::<Damage>(EventReaderStart::FromNow)
-        .expect("reader");
-
-    world
-        .set_event_sequence_for_test::<Damage>(u64::MAX, false)
-        .expect("registered event");
-    assert!(matches!(
-        world.send(Damage { amount: 1 }),
-        Err(moirai::world::WorldError::EventChannelClosed)
-    ));
-    assert!(matches!(
-        world.read_event(&mut reader),
-        Err(EventReadError::ChannelClosed)
-    ));
-}
-
-#[test]
-#[cfg(feature = "testkit")]
-fn oldest_retained_reader_reads_after_near_exhaustion_sequence_override() {
-    let mut builder = WorldBuilder::new();
-    builder
-        .add_event::<Damage>(EventOptions::manual())
-        .expect("register");
-    let mut world = builder.build().expect("build");
-
-    world
-        .set_event_sequence_for_test::<Damage>(u64::MAX - 2, false)
-        .expect("registered event");
-    world.send(Damage { amount: 7 }).expect("send near max");
-    let mut reader = world
-        .event_reader::<Damage>(EventReaderStart::OldestRetained)
-        .expect("reader");
-
-    assert_eq!(
-        world.read_event(&mut reader).expect("read").cloned(),
-        Some(Damage { amount: 7 })
-    );
 }
 
 #[test]

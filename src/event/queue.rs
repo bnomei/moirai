@@ -227,7 +227,7 @@ impl EventStorage {
         self.channels.clear();
     }
 
-    #[cfg(any(test, feature = "testkit"))]
+    #[cfg(test)]
     pub(crate) fn set_channel_state_for_test(
         &mut self,
         index: usize,

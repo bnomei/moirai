@@ -623,11 +623,9 @@ seed/capture policy, and failure retains a partial report. The App helper captur
 `update_with` using host snapshot/metric closures. Testkit owns no RNG, serializer, reflection, or
 sibling assertion type.
 
-`WorldTestExt` and `ScheduleTestExt` contain test-only exhaustion and inspection hooks. They are
-implemented in an internal module under crate tests or the `testkit` feature, and are publicly
-reachable only as `moirai::testkit::{WorldTestExt, ScheduleTestExt}` with that feature. Core
-`World` and `Schedule` expose no inherent test controls; event exhaustion resolves a typed
-registered channel and never accepts a raw channel index.
+Raw exhaustion and schedule-inspection hooks are crate-internal test support. The public
+`moirai::testkit` feature contains deterministic replay and evidence types, not counter mutation,
+fault injection, or compiled-schedule inspection controls.
 
 The Anapao-owned Moirai adapter is a bridge, not a second simulator. It maps selected scalar
 metrics and diagnostic events from `moirai::testkit` into Anapao's public report/assertion/artifact types. It calls
@@ -646,7 +644,8 @@ A canonical ecosystem test should:
 ## Public API and compatibility tests
 
 - `tests/public_api.rs`: root exports, namespace paths, and prelude compile together.
-- doctests: one minimal app, one schedule validation failure, one query, one no_std example.
+- doctests: the ordered `moirai::examples::tier_*` learning path plus crate privacy checks; the
+  `testkit` feature adds the deterministic replay lesson.
 - `trybuild`: invalid sealed/internal extension points stay inaccessible where applicable.
 - feature matrix: core no_std, core std, and testkit. Wyrd and Anapao adapters own their matrices.
 - `cargo semver-checks`: begin once the first public baseline is published.

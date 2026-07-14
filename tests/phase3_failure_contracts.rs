@@ -1,10 +1,6 @@
 use moirai::component::ComponentOptions;
 use moirai::event::EventOptions;
-#[cfg(feature = "testkit")]
-use moirai::testkit::WorldTestExt;
 use moirai::world::{Bundle, BundleWriter, WorldBuilder, WorldError};
-#[cfg(feature = "testkit")]
-use moirai::ChangeTick;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -110,30 +106,6 @@ fn failing_bundle_rollbacks_drop_non_clone_table_values_once() {
         Err(WorldError::WrongStorageKind { .. })
     ));
     assert_eq!(deferred_drops.get(), 1);
-    assert!(!world.has_pending_commands());
-}
-
-#[test]
-#[cfg(feature = "testkit")]
-fn poisoned_world_rejects_new_commands_and_can_discard_existing_ones() {
-    let mut builder = WorldBuilder::new();
-    builder
-        .register_component::<Health>(ComponentOptions::sparse())
-        .expect("register");
-    let mut world = builder.build().expect("build");
-
-    let entity = world.spawn().expect("spawn");
-    world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
-    world.insert(entity, Health(1)).expect("consume last tick");
-    assert!(matches!(
-        world.insert(entity, Health(2)),
-        Err(WorldError::ChangeTickExhausted)
-    ));
-
-    assert!(matches!(
-        world.commands().expect("commands").despawn(entity),
-        Err(WorldError::ChangeTickExhausted)
-    ));
     assert!(!world.has_pending_commands());
 }
 

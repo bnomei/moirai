@@ -222,7 +222,7 @@ impl World {
     }
 }
 
-#[cfg(any(test, feature = "testkit"))]
+#[cfg(test)]
 pub(crate) fn set_event_sequence_for_test<E: Clone + 'static>(
     world: &mut World,
     next_sequence: u64,
@@ -246,11 +246,67 @@ pub(crate) fn set_event_sequence_for_test<E: Clone + 'static>(
 mod tests {
     use super::*;
     use crate::component::ComponentOptions;
-    use crate::event::EventReaderStart;
+    use crate::event::{EventOptions, EventReaderStart};
     use crate::world::WorldBuilder;
 
     #[derive(Clone, Copy)]
     struct Health(#[allow(dead_code)] i32);
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Damage(u32);
+
+    #[test]
+    fn event_sequence_exhaustion_closes_channel_and_reader() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .add_event::<Damage>(EventOptions::manual())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+        let mut reader = world
+            .event_reader::<Damage>(EventReaderStart::FromNow)
+            .expect("reader");
+
+        set_event_sequence_for_test::<Damage>(&mut world, u64::MAX, false)
+            .expect("registered event");
+        assert!(matches!(
+            world.send(Damage(1)),
+            Err(WorldError::EventChannelClosed)
+        ));
+        assert!(matches!(
+            world.read_event(&mut reader),
+            Err(EventReadError::ChannelClosed)
+        ));
+    }
+
+    #[test]
+    fn oldest_retained_reader_reads_near_sequence_exhaustion() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .add_event::<Damage>(EventOptions::manual())
+            .expect("register");
+        let mut world = builder.build().expect("world");
+
+        set_event_sequence_for_test::<Damage>(&mut world, u64::MAX - 2, false)
+            .expect("registered event");
+        world.send(Damage(7)).expect("send near max");
+        let mut reader = world
+            .event_reader::<Damage>(EventReaderStart::OldestRetained)
+            .expect("reader");
+
+        assert_eq!(
+            world.read_event(&mut reader).expect("read").cloned(),
+            Some(Damage(7))
+        );
+    }
+
+    #[test]
+    fn event_sequence_test_support_rejects_unregistered_channels() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        assert!(matches!(
+            set_event_sequence_for_test::<Damage>(&mut world, 0, false),
+            Err(WorldError::UnregisteredEvent { .. })
+        ));
+    }
 
     #[test]
     fn event_reader_rejects_unregistered_event_type() {

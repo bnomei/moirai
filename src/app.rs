@@ -654,11 +654,115 @@ impl std::error::Error for AppError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::component::ComponentOptions;
     use crate::schedule::{stage, ScheduleBuilder, System};
-    use crate::time::FixedConfig;
+    use crate::time::{ChangeTick, FixedConfig};
     use crate::world::WorldBuilder;
     use alloc::vec::Vec;
     use core::time::Duration;
+
+    #[derive(Clone, Copy)]
+    struct PoisonedComponent;
+
+    fn poison_world(world: &mut World) {
+        let entity = world.spawn().expect("entity");
+        world.insert(entity, PoisonedComponent).expect("seed");
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+        world
+            .insert(entity, PoisonedComponent)
+            .expect("consume last tick");
+        assert!(matches!(
+            world.insert(entity, PoisonedComponent),
+            Err(crate::world::WorldError::ChangeTickExhausted)
+        ));
+    }
+
+    #[test]
+    fn from_parts_rejects_poisoned_world() {
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<PoisonedComponent>(ComponentOptions::sparse())
+            .expect("component");
+        let mut world = builder.build().expect("world");
+        let schedule = ScheduleBuilder::standard()
+            .build(&mut world)
+            .expect("schedule");
+        poison_world(&mut world);
+
+        assert!(matches!(
+            App::from_parts(world, schedule),
+            Err(BuildError::WorldMutationPoisoned)
+        ));
+    }
+
+    #[test]
+    fn update_rejects_poisoned_world() {
+        let mut builder = AppBuilder::new();
+        builder
+            .world_builder()
+            .register_component::<PoisonedComponent>(ComponentOptions::sparse())
+            .expect("component");
+        builder
+            .add_system(System::new("noop", stage::UPDATE, |_world, _dt| {}))
+            .expect("system");
+        let mut app = builder.build().expect("app");
+        poison_world(app.world_mut());
+
+        assert!(matches!(
+            app.update(1.0 / 60.0),
+            Err(AppError::WorldMutationPoisoned)
+        ));
+    }
+
+    #[test]
+    fn world_tick_exhaustion_faults_app() {
+        let mut app = AppBuilder::new().build().expect("app");
+        app.world_mut().set_world_tick_for_test(u64::MAX);
+
+        assert!(matches!(
+            app.update(1.0 / 60.0),
+            Err(AppError::WorldTickExhausted)
+        ));
+        assert!(app.is_faulted());
+        assert_eq!(
+            app.fault().and_then(|fault| fault.detail.as_deref()),
+            Some("world tick exhausted")
+        );
+    }
+
+    #[test]
+    fn caught_tick_exhaustion_faults_before_next_system() {
+        use core::sync::atomic::{AtomicU32, Ordering};
+
+        static LATER_RUNS: AtomicU32 = AtomicU32::new(0);
+        LATER_RUNS.store(0, Ordering::SeqCst);
+
+        #[derive(Clone, Copy)]
+        struct Counter;
+
+        let mut builder = AppBuilder::new();
+        builder.insert_resource(Counter);
+        builder
+            .add_system(System::new("poison", stage::UPDATE, |world, _dt| {
+                let _ = world.resource_mut::<Counter>();
+            }))
+            .expect("poison system");
+        builder
+            .add_system(System::new("later", stage::UPDATE, |_world, _dt| {
+                LATER_RUNS.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("later system");
+        let mut app = builder.build().expect("app");
+        app.world_mut()
+            .set_change_tick_for_test(ChangeTick::from_raw(u64::MAX));
+
+        assert!(matches!(app.update(0.0), Err(AppError::Fault(_))));
+        assert_eq!(LATER_RUNS.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            app.fault().and_then(|fault| fault.system.as_deref()),
+            Some("poison")
+        );
+    }
 
     #[test]
     fn fixed_step_exhaustion_records_fault() {

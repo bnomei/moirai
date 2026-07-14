@@ -1,65 +1,7 @@
 //! Stable query facade.
 //!
-//! # Examples
-//!
-//! Immutable sparse query:
-//!
-//! ```
-//! use moirai::component::ComponentOptions;
-//! use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
-//! use moirai::world::WorldBuilder;
-//!
-//! #[derive(Clone, Copy)]
-//! struct Position(i32);
-//!
-//! let mut builder = WorldBuilder::new();
-//! builder
-//!     .register_component::<Position>(ComponentOptions::sparse())
-//!     .expect("register");
-//! let mut world = builder.build().expect("build");
-//! let entity = world.spawn().expect("spawn");
-//! world.insert(entity, Position(1)).expect("insert");
-//!
-//! let spec = QuerySpec::new();
-//! let mut query = world
-//!     .prepare_query1::<Position>(spec, QueryPolicy::Prepared)
-//!     .expect("prepare");
-//! let count = query
-//!     .iter(&mut world, QueryWindow::All)
-//!     .expect("iterate")
-//!     .count();
-//! assert_eq!(count, 1);
-//! ```
-//!
-//! Closure-scoped mutation:
-//!
-//! ```
-//! use moirai::component::ComponentOptions;
-//! use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
-//! use moirai::world::WorldBuilder;
-//!
-//! #[derive(Clone, Copy)]
-//! struct Velocity(i32);
-//!
-//! let mut builder = WorldBuilder::new();
-//! builder
-//!     .register_component::<Velocity>(ComponentOptions::sparse())
-//!     .expect("register");
-//! let mut world = builder.build().expect("build");
-//! let entity = world.spawn().expect("spawn");
-//! world.insert(entity, Velocity(1)).expect("insert");
-//!
-//! let mut query = world
-//!     .prepare_query1::<Velocity>(QuerySpec::new(), QueryPolicy::Prepared)
-//!     .expect("prepare");
-//! query
-//!     .for_each_mut(&mut world, QueryWindow::All, |_, vel| {
-//!         vel.0 += 1;
-//!         Ok(())
-//!     })
-//!     .expect("mutate");
-//! assert_eq!(world.get::<Velocity>(entity).expect("get").expect("present").0, 2);
-//! ```
+//! Learn the query surface in the ordered lessons beginning with
+//! [`crate::examples::tier_c::c01_prepared_queries`].
 
 mod cache;
 mod cursor;

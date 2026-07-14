@@ -140,7 +140,7 @@ mod tests {
 
         fn step(&mut self, step: StepIndex) -> Result<StepRecord<Self::Snapshot>, Self::Error> {
             Ok(StepRecord::new(
-                StepIndex::from_raw_for_test(step.raw().wrapping_add(1)),
+                StepIndex::from_raw(step.raw().wrapping_add(1)),
                 None,
                 1,
                 Vec::new(),
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn advance_replay_step_overflow_maps_step_overflow() {
-        let step = StepIndex::from_raw_for_test(u32::MAX);
+        let step = StepIndex::from_raw(u32::MAX);
         assert!(matches!(
             advance_replay_step::<()>(step),
             Err(ReplayRunError::StepOverflow)
@@ -161,7 +161,7 @@ mod tests {
     fn run_replay_returns_partial_report_on_step_overflow() {
         let config = ReplayConfig::new(7, 2, CapturePolicy::EveryStep).expect("config");
         let mut driver = CountingDriver { remaining: 2 };
-        let failure = run_replay_loop(config, &mut driver, StepIndex::from_raw_for_test(u32::MAX))
+        let failure = run_replay_loop(config, &mut driver, StepIndex::from_raw(u32::MAX))
             .expect_err("overflow");
         assert!(matches!(failure.source(), &ReplayRunError::StepOverflow));
         assert_eq!(failure.step().raw(), u32::MAX);

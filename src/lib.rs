@@ -11,6 +11,11 @@
 //! author systems. Advanced construction helpers such as [`world::BundleWriter`] stay
 //! in their semantic namespace.
 //!
+//! # Learn by example
+//!
+//! [`examples`] is the canonical ordered learning path. Its stable, runnable doctests
+//! progress from a first app through scheduling, queries, and deterministic replay.
+//!
 //! # Privacy boundary
 //!
 //! Internal modules are not reachable from downstream crates:
@@ -39,6 +44,7 @@ mod app;
 mod command;
 pub mod diagnostics;
 pub mod event;
+pub mod examples;
 mod operation;
 pub mod prelude;
 pub mod query;
@@ -61,10 +67,6 @@ pub mod world;
 
 #[cfg(feature = "testkit")]
 pub mod testkit;
-#[cfg(any(test, feature = "testkit"))]
-#[cfg_attr(not(feature = "testkit"), allow(dead_code))]
-#[path = "testkit/ext.rs"]
-mod testkit_ext;
 
 pub use app::{App, AppBuilder, AppError, AppFault, BuildError};
 pub use component::{ComponentId, ComponentOptions, StorageKind};

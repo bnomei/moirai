@@ -770,6 +770,8 @@ fn topological_sort(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::component::ComponentOptions;
+    use crate::time::ChangeTick;
     use crate::world::WorldBuilder;
     use crate::StageOperation;
 
@@ -782,6 +784,29 @@ mod tests {
             Err(BuildError::WorldRunning)
         ));
         world.end_run();
+    }
+
+    #[test]
+    fn build_rejects_poisoned_world() {
+        #[derive(Clone, Copy)]
+        struct Health;
+
+        let mut builder = WorldBuilder::new();
+        builder
+            .register_component::<Health>(ComponentOptions::sparse())
+            .expect("component");
+        let mut world = builder.build().expect("world");
+        let entity = world.spawn().expect("entity");
+        world.insert(entity, Health).expect("seed");
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+        world.insert(entity, Health).expect("consume last tick");
+        let _ = world.insert(entity, Health);
+
+        assert!(world.is_mutation_poisoned());
+        assert!(matches!(
+            ScheduleBuilder::standard().build(&mut world),
+            Err(BuildError::WorldMutationPoisoned)
+        ));
     }
 
     #[test]

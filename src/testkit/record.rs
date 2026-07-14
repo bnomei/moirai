@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn record_accessors_preserve_snapshot_and_metrics() {
-        let step = StepIndex::from_raw_for_test(2);
+        let step = StepIndex::from_raw(2);
         let tick = WorldTick::ZERO;
         let record = StepRecord::new(
             step,

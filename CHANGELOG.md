@@ -2,6 +2,20 @@
 
 All notable public API changes to Moirai are documented here. The crate follows [Cargo SemVer](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## Unreleased
+
+### Added
+
+- Canonical `moirai::examples` Rustdoc lessons organized into ordered tiers, with stable runnable
+  doctests covering world construction, scheduling, queries, constrained host data, and replay.
+
+### Removed
+
+- Public test-only fault injection and inspection traits `WorldTestExt` and `ScheduleTestExt`;
+  repository failure-path tests now use crate-internal test support.
+- The accidentally public `schedule::RunContext` execution scratch type, which was not part of
+  host authoring.
+
 ## 0.1.0-rc.1 — 2026-07-12
 
 First explicit public baseline captured at Phase 6 quality closure.

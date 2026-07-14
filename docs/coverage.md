@@ -21,7 +21,9 @@ scripts/verify_coverage_union.sh
 ## Source-line contract
 
 Each flavor starts with `cargo llvm-cov clean --workspace`, runs its tests with `--no-report`, and
-then exports both LCOV and full LLVM JSON before the next flavor is cleaned. The gate uses LCOV `DA`
+then exports both LCOV and full LLVM JSON before the next flavor is cleaned. Every non-clean
+`cargo llvm-cov` invocation applies `--ignore-filename-regex '(^|/)src/examples(/|$)'`, so the
+documentation-only lesson hierarchy cannot enter either report format. The gate uses LCOV `DA`
 records because they are LLVM's explicit source-line/count representation. A
 canonical production source line is executable when at least one flavor emits a `DA` record for it,
 and covered when any flavor reports a positive count. Generic monomorphizations and repeated records
@@ -36,11 +38,15 @@ as `cfg(any(test, feature = "testkit"))` and `cfg(not(test))` remain in the deno
 can ship in a non-test build. Unsupported cfg syntax fails the audit rather than guessing.
 
 `src/bench_internals.rs` is the sole whole-file exclusion: it contains benchmark-only implementation
-enabled by the private `bench-internals` feature and is not production runtime code. This narrow
-exclusion is recorded with its reason in both `summary.json` and `manifest.json`.
+enabled by the private `bench-internals` feature and is not production runtime code. The whole
+`src/examples/` directory is excluded separately because it contains documentation-only lessons
+validated through stable package doctests. Both exclusions are recorded with their reasons in
+`summary.json` and `manifest.json`; the analyzer also fails closed if an LCOV or JSON export still
+contains a `src/examples/` source record.
 
 There are no coverage attributes or production-code coverage suppressions. Any future tooling-only
-exclusion must be narrow, reviewed, and documented here before a 100% result can be claimed.
+or documentation-only exclusion must be narrow, reviewed, and documented here before a 100% result
+can be claimed.
 
 ## Evidence and failure behavior
 

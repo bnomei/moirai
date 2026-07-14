@@ -18,14 +18,11 @@ impl StepIndex {
         Ok(Self(next))
     }
 
-    /// Construct a step index from a raw value. Intended for host tests and drivers.
-    #[cfg(feature = "testkit")]
+    /// Construct a replay step index from a host-provided raw value.
+    ///
+    /// This supports replay drivers that resume from persisted evidence. Use [`Self::next`]
+    /// when advancing a step so overflow remains explicit.
     pub fn from_raw(raw: u32) -> Self {
-        Self(raw)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_raw_for_test(raw: u32) -> Self {
         Self(raw)
     }
 }

@@ -148,20 +148,21 @@ Keep named tests for the failures research identified:
 
 ## Coverage contract
 
-The release target is 100% executable source-line coverage across the supported feature union,
-excluding test/benchmark code and mechanically non-executable lines. Coverage is measured on
-current stable with `cargo-llvm-cov`; it is not an MSRV job.
+The release target is 100% executable production source-line coverage across the supported feature
+union, excluding test/benchmark support, the documentation-only `src/examples/` lesson hierarchy,
+and mechanically non-executable lines. Coverage is measured on current stable with
+`cargo-llvm-cov`; it is not an MSRV job.
 
 Run at least:
 
 1. core `--no-default-features`;
 2. `--features std`;
 3. `--features testkit`;
-4. doctests/compile examples where the coverage tool supports them.
+4. stable package doctests, validated separately from instrumentation.
 
 Merge reports so cfg-specific paths are not hidden by an `--all-features`-only build. Any justified
-tooling exclusion is line-specific, reviewed, and recorded in `docs/coverage.md`. “Unreachable in
-tests” is normally evidence that the code or API should be removed.
+tooling exclusion is narrow, reviewed, and recorded in `docs/coverage.md`. “Unreachable in tests”
+is normally evidence that the production code or API should be removed.
 
 Coverage assertions must inspect observable state. A test that only executes a branch to paint it
 green does not satisfy the quality gate.
@@ -295,10 +296,9 @@ cargo test --features std
 cargo test --features testkit
 cargo test --all-features
 cargo +1.75 check --lib --no-default-features
-cargo doc --no-deps --all-features
-cargo llvm-cov --no-default-features
-cargo llvm-cov --features std
-cargo llvm-cov --features testkit
+cargo test --doc --package moirai --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --package moirai --no-deps --all-features --locked
+scripts/verify_coverage_union.sh
 cargo bench
 cargo package --allow-dirty
 ```

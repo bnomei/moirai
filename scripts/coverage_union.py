@@ -28,6 +28,9 @@ REQUIRED_FLAVORS = {"no-default", "std", "testkit", "all-features"}
 WHOLE_FILE_EXCLUSIONS = {
     "src/bench_internals.rs": "benchmark-only implementation enabled by the bench-internals feature",
 }
+WHOLE_DIRECTORY_EXCLUSIONS = {
+    "src/examples": "documentation-only lessons validated separately through stable doctests",
+}
 
 
 @dataclass(frozen=True)
@@ -366,11 +369,51 @@ def _module_candidates(parent: Path, module: str) -> tuple[Path, Path]:
     return base / f"{module}.rs", base / module / "mod.rs"
 
 
-def external_test_modules(src_root: Path) -> set[Path]:
+def _is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+    except ValueError:
+        return False
+    return True
+
+
+def _excluded_source_directories(repo: Path) -> dict[Path, str]:
+    exclusions: dict[Path, str] = {}
+    for relative, reason in WHOLE_DIRECTORY_EXCLUSIONS.items():
+        directory = (repo / relative).resolve()
+        if not directory.is_dir():
+            raise ValueError(f"configured coverage exclusion directory is missing: {relative}")
+        if not any(directory.rglob("*.rs")):
+            raise ValueError(f"configured coverage exclusion directory has no Rust files: {relative}")
+        exclusions[directory] = reason
+    return exclusions
+
+
+def _reported_path(filename: str, repo: Path) -> Path:
+    path = Path(filename)
+    if not path.is_absolute():
+        path = repo / path
+    return path.resolve()
+
+
+def _excluded_report_directory(
+    filename: str, repo: Path, excluded_directories: dict[Path, str]
+) -> Path | None:
+    path = _reported_path(filename, repo)
+    return next(
+        (directory for directory in excluded_directories if _is_within(path, directory)),
+        None,
+    )
+
+
+def external_test_modules(src_root: Path, excluded_directories: set[Path]) -> set[Path]:
     """Resolve test-only cfg external modules, including their external descendants."""
     excluded: set[Path] = set()
     queue: list[Path] = []
     for source_path in sorted(src_root.rglob("*.rs")):
+        resolved_source = source_path.resolve()
+        if any(_is_within(resolved_source, directory) for directory in excluded_directories):
+            continue
         source = source_path.read_text(encoding="utf-8")
         for span in cfg_test_only_item_spans(source):
             if not span.external_module:
@@ -430,7 +473,9 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _validate_llvm_json(path: Path) -> None:
+def _validate_llvm_json(
+    path: Path, repo: Path, excluded_directories: dict[Path, str]
+) -> None:
     document = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(document, dict) or document.get("type") != "llvm.coverage.json.export":
         raise ValueError(f"unsupported LLVM coverage JSON type: {path}")
@@ -443,8 +488,21 @@ def _validate_llvm_json(path: Path) -> None:
     for dataset in datasets:
         if not isinstance(dataset, dict):
             raise ValueError(f"invalid LLVM coverage JSON data set: {path}")
-        if not isinstance(dataset.get("files"), list):
+        files = dataset.get("files")
+        if not isinstance(files, list):
             raise ValueError(f"LLVM coverage JSON data set has no files list: {path}")
+        for source_file in files:
+            if not isinstance(source_file, dict) or not isinstance(
+                source_file.get("filename"), str
+            ):
+                raise ValueError(f"invalid LLVM coverage JSON file record: {path}")
+            filename = source_file["filename"]
+            directory = _excluded_report_directory(filename, repo, excluded_directories)
+            if directory is not None:
+                relative = directory.relative_to(repo).as_posix()
+                raise ValueError(
+                    f"LLVM coverage JSON contains excluded source directory {relative}: {filename}"
+                )
         if not isinstance(dataset.get("functions"), list):
             raise ValueError(f"LLVM coverage JSON data set has no functions list: {path}")
         if not isinstance(dataset.get("totals"), dict):
@@ -478,17 +536,25 @@ def _source_input_evidence(repo: Path) -> dict[str, object]:
         path = repo / relative
         try:
             path.lstat()
-        except FileNotFoundError as error:
-            raise ValueError(f"git-visible source input vanished: {relative}") from error
+        except FileNotFoundError:
+            # `git ls-files --cached` intentionally includes tracked deletions. Keep
+            # those deletions in the dirty-tree fingerprint so a coverage run can
+            # validate a legitimate API removal without silently hashing HEAD's copy.
+            records.append({"path": relative.as_posix(), "state": "deleted"})
+            continue
         if not path.is_file():
             raise ValueError(f"git-visible source input is not a readable file: {relative}")
-        records.append({"path": relative.as_posix(), "sha256": _sha256(path)})
+        records.append(
+            {"path": relative.as_posix(), "state": "present", "sha256": _sha256(path)}
+        )
 
     aggregate = hashlib.sha256()
     for raw_path, record in zip(raw_paths, records, strict=True):
         aggregate.update(raw_path)
         aggregate.update(b"\0")
-        aggregate.update(record["sha256"].encode("ascii"))
+        aggregate.update(record["state"].encode("ascii"))
+        aggregate.update(b"\0")
+        aggregate.update(record.get("sha256", "").encode("ascii"))
         aggregate.update(b"\n")
     return {"sha256": aggregate.hexdigest(), "files": records}
 
@@ -509,12 +575,20 @@ def _parse_lcov(
     src_root: Path,
     exclusions: dict[Path, set[int]],
     external: set[Path],
+    excluded_directories: dict[Path, str],
 ) -> dict[tuple[Path, int], bool]:
     lines: dict[tuple[Path, int], bool] = {}
     current: Path | None = None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         if raw_line.startswith("SF:"):
-            current = _source_path(raw_line[3:], repo, src_root)
+            filename = raw_line[3:]
+            directory = _excluded_report_directory(filename, repo, excluded_directories)
+            if directory is not None:
+                relative = directory.relative_to(repo).as_posix()
+                raise ValueError(
+                    f"LCOV contains excluded source directory {relative}: {filename}"
+                )
+            current = _source_path(filename, repo, src_root)
             if current in external:
                 current = None
         elif raw_line.startswith("DA:") and current is not None:
@@ -547,12 +621,16 @@ def _source_audit(
     dict[Path, set[int]],
     set[Path],
     dict[Path, str],
+    dict[Path, str],
     list[dict[str, object]],
 ]:
     exclusions: dict[Path, set[int]] = {}
     items: list[dict[str, object]] = []
+    whole_directories = _excluded_source_directories(repo)
     for source_path in sorted(src_root.rglob("*.rs")):
         resolved = source_path.resolve()
+        if any(_is_within(resolved, directory) for directory in whole_directories):
+            continue
         source = source_path.read_text(encoding="utf-8")
         spans = cfg_test_only_item_spans(source)
         lines, _count = _excluded_lines(source)
@@ -567,7 +645,13 @@ def _source_audit(
                     "external_module": span.external_module,
                 }
             )
-    return exclusions, external_test_modules(src_root), _whole_file_exclusions(repo), items
+    return (
+        exclusions,
+        external_test_modules(src_root, set(whole_directories)),
+        _whole_file_exclusions(repo),
+        whole_directories,
+        items,
+    )
 
 
 def _totals(lines: dict[tuple[Path, int], bool]) -> dict[str, float | int]:
@@ -587,7 +671,9 @@ def analyze(args: argparse.Namespace) -> None:
     source_inputs = _source_input_evidence(repo)
     if args.verified_source_digest != source_inputs["sha256"]:
         raise ValueError("verified source-input digest does not match analyzer inputs")
-    exclusions, external, whole_files, cfg_items = _source_audit(repo, src_root)
+    exclusions, external, whole_files, whole_directories, cfg_items = _source_audit(
+        repo, src_root
+    )
     excluded_files = external.union(whole_files)
 
     flavor_lines: dict[str, dict[tuple[Path, int], bool]] = {}
@@ -604,8 +690,15 @@ def analyze(args: argparse.Namespace) -> None:
         json_path = Path(json_path)
         # Full JSON is retained as independently reproducible evidence. Parse it now so a
         # truncated export can never be published beside an otherwise valid LCOV gate.
-        _validate_llvm_json(json_path)
-        flavor_lines[name] = _parse_lcov(lcov_path, repo, src_root, exclusions, excluded_files)
+        _validate_llvm_json(json_path, repo, whole_directories)
+        flavor_lines[name] = _parse_lcov(
+            lcov_path,
+            repo,
+            src_root,
+            exclusions,
+            excluded_files,
+            whole_directories,
+        )
         if not flavor_lines[name]:
             raise ValueError(f"coverage flavor has an empty production LCOV map: {name}")
         artifact_paths[f"flavors/{name}.lcov"] = lcov_path
@@ -642,13 +735,17 @@ def analyze(args: argparse.Namespace) -> None:
         "totals": totals,
         "flavors": {name: _totals(lines) for name, lines in sorted(flavor_lines.items())},
         "exclusions": {
-            "policy": "cfg items impossible with test=false are balanced independently; their external modules are excluded transitively",
+            "policy": "cfg items impossible with test=false are balanced independently; their external modules are excluded transitively; documentation-only lesson directories are excluded from instrumentation reports",
             "test_only_cfg_items": len(cfg_items),
             "external_module_files": sorted(path.relative_to(repo).as_posix() for path in external),
             "inline_source_lines": sum(len(lines) for lines in exclusions.values()),
             "whole_files": [
                 {"path": path.relative_to(repo).as_posix(), "reason": reason}
                 for path, reason in sorted(whole_files.items())
+            ],
+            "whole_directories": [
+                {"path": path.relative_to(repo).as_posix(), "reason": reason}
+                for path, reason in sorted(whole_directories.items())
             ],
         },
         "files": file_rows,
@@ -732,7 +829,7 @@ fn production_after() {}
         (src / "thing" / "tests.rs").write_text("mod child;\n", encoding="utf-8")
         child = src / "thing" / "tests" / "child.rs"
         child.write_text("fn test_only() {}\n", encoding="utf-8")
-        assert external_test_modules(src) == {
+        assert external_test_modules(src, set()) == {
             (src / "thing" / "tests.rs").resolve(),
             child.resolve(),
         }
@@ -741,9 +838,16 @@ fn production_after() {}
         (src / "lib.rs").write_text(sample, encoding="utf-8")
         benchmark_only = src / "bench_internals.rs"
         benchmark_only.write_text("fn benchmark_only() {}\n", encoding="utf-8")
-        exclusions, external, whole_files, _items = _source_audit(repo, src)
+        lesson_directory = src / "examples"
+        lesson_directory.mkdir()
+        lesson = lesson_directory / "a01_world.rs"
+        lesson.write_text("//! Documentation-only lesson.\n", encoding="utf-8")
+        exclusions, external, whole_files, whole_directories, _items = _source_audit(repo, src)
         assert whole_files == {
             benchmark_only.resolve(): "benchmark-only implementation enabled by the bench-internals feature"
+        }
+        assert whole_directories == {
+            lesson_directory.resolve(): "documentation-only lessons validated separately through stable doctests"
         }
         production_before = next(
             index for index, line in enumerate(sample.splitlines(), 1) if line.startswith("fn production_before")
@@ -767,8 +871,22 @@ fn production_after() {}
             encoding="utf-8",
         )
         excluded_files = external.union(whole_files)
-        first = _parse_lcov(flavor_a, repo, src.resolve(), exclusions, excluded_files)
-        second = _parse_lcov(flavor_b, repo, src.resolve(), exclusions, excluded_files)
+        first = _parse_lcov(
+            flavor_a,
+            repo,
+            src.resolve(),
+            exclusions,
+            excluded_files,
+            whole_directories,
+        )
+        second = _parse_lcov(
+            flavor_b,
+            repo,
+            src.resolve(),
+            exclusions,
+            excluded_files,
+            whole_directories,
+        )
         union = dict(first)
         for key, covered in second.items():
             union[key] = union.get(key, False) or covered
@@ -789,15 +907,55 @@ fn production_after() {}
             ),
             encoding="utf-8",
         )
-        _validate_llvm_json(valid_json)
+        _validate_llvm_json(valid_json, repo, whole_directories)
         invalid_json = repo / "invalid.json"
         invalid_json.write_text("{}", encoding="utf-8")
         try:
-            _validate_llvm_json(invalid_json)
+            _validate_llvm_json(invalid_json, repo, whole_directories)
         except ValueError:
             pass
         else:
             raise AssertionError("invalid LLVM coverage JSON must fail closed")
+
+        excluded_lcov = repo / "excluded.lcov"
+        excluded_lcov.write_text(f"SF:{lesson}\nDA:1,1\nend_of_record\n", encoding="utf-8")
+        try:
+            _parse_lcov(
+                excluded_lcov,
+                repo,
+                src.resolve(),
+                exclusions,
+                excluded_files,
+                whole_directories,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("LCOV lesson records must fail closed")
+
+        excluded_json = repo / "excluded.json"
+        excluded_json.write_text(
+            json.dumps(
+                {
+                    "type": "llvm.coverage.json.export",
+                    "version": "3.1.0",
+                    "data": [
+                        {
+                            "files": [{"filename": str(lesson)}],
+                            "functions": [],
+                            "totals": {},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            _validate_llvm_json(excluded_json, repo, whole_directories)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("LLVM JSON lesson records must fail closed")
 
         (repo / "Cargo.toml").write_text("[package]\nname='digest-test'\n", encoding="utf-8")
         scripts = repo / "scripts"
@@ -829,6 +987,14 @@ fn production_after() {}
         tracked_test.write_text("fn tracked_input_changed() {}\n", encoding="utf-8")
         tracked_changed = _source_input_evidence(repo)
         assert tracked_changed["sha256"] != first_digest["sha256"]
+
+        tracked_test.unlink()
+        tracked_deleted = _source_input_evidence(repo)
+        assert tracked_deleted["sha256"] != tracked_changed["sha256"]
+        assert {
+            "path": "tests/coverage_input.rs",
+            "state": "deleted",
+        } in tracked_deleted["files"]
 
         fixture = repo / "fixtures" / "runtime.txt"
         fixture.parent.mkdir()
@@ -872,12 +1038,13 @@ def main() -> None:
         return
     if args.audit_only:
         repo = args.repo.resolve()
-        _exclusions, external, whole_files, items = _source_audit(
+        _exclusions, external, whole_files, whole_directories, items = _source_audit(
             repo, (repo / "src").resolve()
         )
         print(
             f"audited {len(items)} test-only cfg items, {len(external)} external module files, "
-            f"and {len(whole_files)} whole-file exclusions"
+            f"{len(whole_files)} whole-file exclusions, and "
+            f"{len(whole_directories)} whole-directory exclusions"
         )
         return
     if args.source_digest:

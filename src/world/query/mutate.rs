@@ -723,6 +723,7 @@ fn split_sparse_stores_mut_read<'a, A: 'static, B: 'static>(
 mod tests {
     use super::*;
     use crate::component::ComponentOptions;
+    use crate::query::{QueryPolicy, QueryWindow};
     use crate::time::ChangeTick;
     use crate::world::{WorldBuilder, WorldError};
 
@@ -814,6 +815,52 @@ mod tests {
             Err(QueryError::BorrowConflict { detail })
                 if detail.contains("world mutation is poisoned")
         ));
+    }
+
+    #[test]
+    fn prepared_mutation_rejects_poisoned_world() {
+        let mut world = sparse_world();
+        let entity = world.spawn().expect("spawn");
+        world.insert(entity, Pos(1)).expect("seed");
+        let mut query = world
+            .prepare_query1::<Pos>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare");
+
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+        world.insert(entity, Pos(2)).expect("consume last tick");
+        assert!(matches!(
+            world.insert(entity, Pos(3)),
+            Err(WorldError::ChangeTickExhausted)
+        ));
+
+        assert!(matches!(
+            query.for_each_mut(&mut world, QueryWindow::All, |_, _| Ok(())),
+            Err(QueryError::BorrowConflict { detail })
+                if detail.contains("world mutation is poisoned")
+        ));
+    }
+
+    #[test]
+    fn prepared_pair_mutation_preflights_all_change_ticks() {
+        let mut world = sparse_world();
+        let a = world.spawn().expect("a");
+        let b = world.spawn().expect("b");
+        world.insert(a, Pos(1)).expect("a pos");
+        world.insert(a, Vel(1)).expect("a vel");
+        world.insert(b, Pos(2)).expect("b pos");
+        world.insert(b, Vel(2)).expect("b vel");
+        let mut query = world
+            .prepare_query2::<Pos, Vel>(QuerySpec::new(), QueryPolicy::Prepared)
+            .expect("prepare");
+
+        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
+
+        assert!(matches!(
+            query.for_each_mut_mut(&mut world, QueryWindow::All, |_, _, _| Ok(())),
+            Err(QueryError::BorrowConflict { detail })
+                if detail.contains("insufficient change ticks for query mutation")
+        ));
+        assert_eq!(world.get::<Pos>(a).expect("get").expect("present").0, 1);
     }
 
     #[test]

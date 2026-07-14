@@ -39,6 +39,13 @@ Events use an explicit typed broadcast contract (`E: Clone + 'static`), schedule
 producer/consumer roles, and runtime stage handles are obtained through `Schedule::stage_id` and
 resolved through checked `Schedule::stage_label`.
 
+## Examples
+
+The canonical learning path is the ordered [`moirai::examples`](https://docs.rs/moirai/latest/moirai/examples/index.html)
+Rustdoc hierarchy. It starts with world and application foundations, then progresses through
+scheduling, queries, constrained host data, and deterministic replay. Every lesson is a runnable
+stable-Rust doctest using the public API.
+
 ## Planning docs
 
 The cross-phase public/module contract lives in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).

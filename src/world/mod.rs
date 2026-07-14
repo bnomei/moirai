@@ -8,8 +8,6 @@ pub(crate) mod guard;
 mod lease;
 mod owner;
 
-#[cfg(any(test, feature = "testkit"))]
-pub(crate) use events::set_event_sequence_for_test;
 pub(crate) use owner::WorldOwner;
 pub(crate) mod query;
 mod resources;
@@ -1033,12 +1031,12 @@ impl World {
     }
 }
 
-#[cfg(any(test, feature = "testkit"))]
+#[cfg(test)]
 pub(crate) fn set_change_tick_for_test(world: &mut World, tick: ChangeTick) {
     world.change_tick = tick;
 }
 
-#[cfg(any(test, feature = "testkit"))]
+#[cfg(test)]
 pub(crate) fn set_world_tick_for_test(world: &mut World, raw: u64) {
     world.world_tick.set_raw(raw);
 }
@@ -1370,6 +1368,12 @@ mod tests {
                 .map(|m| m.0),
             Some(1)
         );
+
+        assert!(matches!(
+            world.commands().expect("commands").despawn(entity),
+            Err(WorldError::ChangeTickExhausted)
+        ));
+        assert!(!world.has_pending_commands());
     }
 
     #[test]

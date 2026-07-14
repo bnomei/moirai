@@ -9,8 +9,6 @@ use moirai::query::{QueryPolicy, QuerySpec, QueryWindow};
 use moirai::schedule::FlushMode;
 use moirai::schedule::{stage, Condition, ScheduleBuilder, System, SystemSet};
 use moirai::state::{apply, State};
-#[cfg(feature = "testkit")]
-use moirai::testkit::{ScheduleTestExt, WorldTestExt};
 use moirai::world::WorldBuilder;
 use moirai::FixedConfig;
 use moirai::StageOperation;
@@ -1117,19 +1115,6 @@ fn explicit_flush_modes_are_effective_and_invalid_placements_are_rejected() {
 }
 
 #[test]
-#[cfg(feature = "testkit")]
-fn standard_builder_defaults_stage_flush_mode() {
-    let mut world = WorldBuilder::new().build().expect("world");
-    let schedule = ScheduleBuilder::standard()
-        .build(&mut world)
-        .expect("build");
-    assert_eq!(
-        schedule.stage_flush_mode_for_test(stage::UPDATE),
-        Some(FlushMode::Stage)
-    );
-}
-
-#[test]
 fn duplicate_set_labels_are_rejected_at_build() {
     let set = SystemSet::new("sim");
     let mut builder = ScheduleBuilder::standard();
@@ -1661,54 +1646,6 @@ fn from_parts_rejects_pending_commands() {
 }
 
 #[test]
-#[cfg(feature = "testkit")]
-fn from_parts_rejects_poisoned_world() {
-    use moirai::component::ComponentOptions;
-    use moirai::ChangeTick;
-
-    #[derive(Clone, Copy)]
-    struct Health(#[allow(dead_code)] i32);
-
-    let mut builder = WorldBuilder::new();
-    builder
-        .register_component::<Health>(ComponentOptions::sparse())
-        .expect("register");
-    let mut world = builder.build().expect("build");
-    let schedule = ScheduleBuilder::standard()
-        .build(&mut world)
-        .expect("schedule");
-    let entity = world.spawn().expect("spawn");
-    world.insert(entity, Health(0)).expect("seed");
-    world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
-    world.insert(entity, Health(1)).expect("consume last tick");
-    assert!(matches!(
-        world.insert(entity, Health(2)),
-        Err(moirai::world::WorldError::ChangeTickExhausted)
-    ));
-    assert!(world.is_mutation_poisoned());
-    assert!(matches!(
-        moirai::App::from_parts(world, schedule),
-        Err(BuildError::WorldMutationPoisoned)
-    ));
-}
-
-#[test]
-#[cfg(feature = "testkit")]
-fn world_tick_exhaustion_faults_app() {
-    let mut app = build_app(System::new("noop", stage::UPDATE, |_world, _dt| {}));
-    app.world_mut().set_world_tick_for_test(u64::MAX);
-    assert!(matches!(
-        app.update(1.0 / 60.0),
-        Err(AppError::WorldTickExhausted)
-    ));
-    assert!(app.is_faulted());
-    assert_eq!(
-        app.fault().and_then(|fault| fault.detail.as_deref()),
-        Some("world tick exhausted")
-    );
-}
-
-#[test]
 fn add_stage_same_label_and_operation_is_idempotent() {
     let mut builder = ScheduleBuilder::new();
     builder
@@ -1731,31 +1668,6 @@ fn schedule_build_rejects_pending_commands_running_and_poisoned_world() {
         ScheduleBuilder::standard().build(&mut world),
         Err(BuildError::PendingCommands)
     ));
-
-    #[cfg(feature = "testkit")]
-    {
-        use moirai::component::ComponentOptions;
-        use moirai::ChangeTick;
-
-        #[derive(Clone, Copy)]
-        struct Health(#[allow(dead_code)] i32);
-
-        let mut builder = WorldBuilder::new();
-        builder
-            .register_component::<Health>(ComponentOptions::sparse())
-            .expect("register");
-        let mut world = builder.build().expect("world");
-        let entity = world.spawn().expect("spawn");
-        world.insert(entity, Health(0)).expect("seed");
-        world.set_change_tick_for_test(ChangeTick::from_raw(u64::MAX - 1));
-        world.insert(entity, Health(1)).expect("consume");
-        let _ = world.insert(entity, Health(2));
-        assert!(world.is_mutation_poisoned());
-        assert!(matches!(
-            ScheduleBuilder::standard().build(&mut world),
-            Err(BuildError::WorldMutationPoisoned)
-        ));
-    }
 }
 
 #[test]

@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use moirai::schedule::{stage, System};
 use moirai::testkit::{
     replay_app, reports_match, run_replay, CapturePolicy, MetricSample, ReplayConfig,
-    ReplayConfigError, ReplayDriver, ReplayRunError, StepIndex, StepRecord, WorldTestExt,
+    ReplayConfigError, ReplayDriver, ReplayRunError, StepIndex, StepRecord,
 };
 use moirai::AppBuilder;
 
@@ -23,18 +23,6 @@ fn counter_app() -> moirai::App {
         }))
         .expect("system");
     builder.build().expect("app")
-}
-
-#[test]
-fn typed_event_exhaustion_hook_rejects_unregistered_channels() {
-    #[derive(Clone)]
-    struct MissingEvent;
-
-    let mut world = moirai::WorldBuilder::new().build().expect("world");
-    assert!(matches!(
-        world.set_event_sequence_for_test::<MissingEvent>(0, false),
-        Err(moirai::WorldError::UnregisteredEvent { .. })
-    ));
 }
 
 #[test]
@@ -214,28 +202,6 @@ fn run_replay_passes_seed_to_factory_contract() {
     let report = run_replay(config, |seed| SeedDriver { seed }).expect("replay");
     assert_eq!(report.step_snapshots()[0].snapshot(), &42);
     assert_eq!(report.step_snapshots()[1].snapshot(), &43);
-}
-
-#[test]
-fn replay_app_returns_partial_report_when_update_fails() {
-    use moirai::AppError;
-
-    let mut app = counter_app();
-    app.world_mut().set_world_tick_for_test(u64::MAX);
-    let config = ReplayConfig::new(1, 2, CapturePolicy::EveryStep).expect("config");
-    let failure = replay_app(
-        &mut app,
-        config,
-        1.0 / 60.0,
-        |world| TickSnapshot(world.world_tick().raw()),
-        |_world| Vec::new(),
-    )
-    .expect_err("tick exhaustion");
-    assert!(matches!(
-        failure.source(),
-        &ReplayRunError::Source(AppError::WorldTickExhausted)
-    ));
-    assert_eq!(failure.step(), StepIndex::FIRST);
 }
 
 #[test]
