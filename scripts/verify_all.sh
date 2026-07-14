@@ -32,4 +32,4 @@ cargo bench --no-run
 echo "== package =="
 cargo package --allow-dirty --locked
 
-echo "Phase 6 verification commands completed."
+echo "Repository verification commands completed."

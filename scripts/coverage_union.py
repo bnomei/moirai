@@ -960,7 +960,7 @@ fn production_after() {}
         (repo / "Cargo.toml").write_text("[package]\nname='digest-test'\n", encoding="utf-8")
         scripts = repo / "scripts"
         scripts.mkdir()
-        for name in ("coverage_union.py", "verify_coverage_union.sh", "verify_phase6.sh"):
+        for name in ("coverage_union.py", "verify_coverage_union.sh", "verify_all.sh"):
             (scripts / name).write_text(name + "\n", encoding="utf-8")
         (repo / ".gitignore").write_text("/target/\n", encoding="utf-8")
         tests = repo / "tests"

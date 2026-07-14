@@ -1,5 +1,0 @@
-research_id="004-queries-performance-proof"
-status="frozen"
-intended_spec_slug="queries-performance-proof"
-canonical_handoff="07-make-specs-handoff.md"
-artifacts=["01-intake.md","02-research-questions.md","03-current-state.md","04-design-decisions.md","05-implementation-shape.md","06-shape-review.md","07-make-specs-handoff.md"]

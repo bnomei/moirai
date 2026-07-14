@@ -18,7 +18,7 @@ All notable public API changes to Moirai are documented here. The crate follows 
 
 ## 0.1.0-rc.1 — 2026-07-12
 
-First explicit public baseline captured at Phase 6 quality closure.
+First explicit public release-candidate baseline.
 
 ### Added
 
@@ -28,7 +28,7 @@ First explicit public baseline captured at Phase 6 quality closure.
 - Entity-only and runtime-component-id queries plus owner-bound `EntityScratch`.
 - Query result cache, membership cache, and plan cache hot paths with steady-state allocation contracts.
 - Typed event readers with payload pooling and frame/manual/bounded retention policies.
-- Phase 6 verification script: `scripts/verify_phase6.sh`.
+- Repository-wide verification script: `scripts/verify_all.sh`.
 
 ### Changed
 
@@ -41,7 +41,7 @@ First explicit public baseline captured at Phase 6 quality closure.
 - **Queries:** `query`, `query2`, and `for_each_mut*` accept `&QuerySpec` to avoid per-call spec clones.
 - **Schedule:** Set condition evaluation reuses per-set gate slots across updates.
 
-### Compatibility notes (pd-asteroids adaptations)
+### Design choices
 
 - Runtime schedule cycles are build errors, not panics.
 - Embedded raw schedule pointers and host-specific profiler hooks are rejected by design.
@@ -51,5 +51,5 @@ First explicit public baseline captured at Phase 6 quality closure.
 
 `cargo semver-checks` should be run against this release candidate tag before publishing `0.1.0`. Document intentional breaking changes here before each stable bump.
 
-This release candidate does not claim a Sea of Grass or pd-asteroids cutover, nor does this quality
-reconciliation establish a new performance result.
+This release candidate does not claim compatibility with downstream integrations or establish new
+performance results.

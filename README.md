@@ -1,15 +1,60 @@
-# moirai
+# Moirai
 
-A standalone, single-threaded `no_std + alloc` ECS library — extracted from the production runtime
-in [pd-asteroids](https://github.com/bnomei/pd-asteroids) and designed to work alongside
-[wyrd](https://github.com/bnomei/wyrd) (signal-graph behavior) and
-[anapao](https://github.com/bnomei/anapao) (deterministic verification).
+[![Crates.io Version](https://img.shields.io/crates/v/moirai)](https://crates.io/crates/moirai)
+[![Crates.io Downloads](https://img.shields.io/crates/d/moirai)](https://crates.io/crates/moirai)
+[![CI](https://img.shields.io/github/actions/workflow/status/bnomei/moirai/ci.yml?branch=main&label=CI)](https://github.com/bnomei/moirai/actions/workflows/ci.yml)
+[![docs.rs](https://img.shields.io/docsrs/moirai)](https://docs.rs/moirai)
+[![MSRV](https://img.shields.io/badge/MSRV-1.75-blue)](https://www.rust-lang.org)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**Status:** the core integration-readiness contract is implemented and under final quality review.
-Downstream Wyrd adapters and game cutovers remain separate work; no downstream migration or
-performance result is claimed here. See [ROADMAP.md](./ROADMAP.md).
+Moirai is a small, deterministic, single-threaded entity-component-system library for constrained
+and headless games. It combines checked world construction, validated schedules, prepared queries,
+typed events, fixed-step execution, diagnostics, and replay support in a `no_std + alloc` crate.
+
+**Status:** Moirai 0.1 is pre-1.0. The core API is usable, but minor `0.x` releases may make
+breaking public-API changes. CI checks the feature matrix, Rust 1.75 support, Rustdoc, dependency
+policy, source coverage, and benchmark compilation.
+
+**Single-threaded** · **`no_std + alloc` by default** · **zero runtime dependencies** ·
+**checked schedules** · **deterministic replay**
+
+## When Moirai fits
+
+Use Moirai when you want an ECS that is:
+
+- deterministic across entity allocation, schedule order, queries, events, and replay;
+- explicit about component storage, system dependencies, event retention, and fixed-step policy;
+- validated before execution for invalid schemas, missing dependencies, and schedule cycles;
+- explicit about owner-scoped handles that reject cross-world or cross-schedule use;
+- usable without `std`, threads, reflection, or an engine runtime; and
+- designed for constrained devices while still supporting headless verification.
+
+Moirai owns ECS data and execution. Your host owns input, rendering, audio, networking,
+persistence, and platform integration. The crate does not require a particular game engine or
+async runtime.
 
 ## Quickstart
+
+### Prerequisites
+
+- Rust 1.75 or later
+
+Add Moirai to your project:
+
+```bash
+cargo add moirai
+```
+
+This writes a dependency entry like:
+
+```toml
+[dependencies]
+moirai = "0.1"
+```
+
+### Run your first app
+
+Create an application with one resource and one update system:
 
 ```rust
 use moirai::prelude::*;
@@ -32,40 +77,135 @@ builder
 
 let mut app = builder.build().expect("valid app");
 app.update(1.0 / 60.0).expect("update");
+
+assert_eq!(app.world().world_tick().raw(), 1);
 assert_eq!(app.world().resource::<Counter>().unwrap(), Some(&Counter(1)));
 ```
 
-Events use an explicit typed broadcast contract (`E: Clone + 'static`), schedules validate typed
-producer/consumer roles, and runtime stage handles are obtained through `Schedule::stage_id` and
-resolved through checked `Schedule::stage_label`.
+`AppBuilder` validates the world and schedule together. `App::update` advances the world tick and
+runs the built-in update stages in their checked order.
 
-## Examples
+## How execution works
 
-The canonical learning path is the ordered [`moirai::examples`](https://docs.rs/moirai/latest/moirai/examples/index.html)
-Rustdoc hierarchy. It starts with world and application foundations, then progresses through
-scheduling, queries, constrained host data, and deterministic replay. Every lesson is a runnable
-stable-Rust doctest using the public API.
+The standard builder separates application construction from execution:
 
-## Planning docs
+```text
+AppBuilder
+├─ WorldBuilder: components, resources, events, initial data
+└─ ScheduleBuilder: stages, systems, sets, conditions, ordering
+          │
+          └─ build validates ownership and execution contracts
+                         │
+                         ▼
+                        App
+        ┌────────────────┴────────────────┐
+        ▼                                 ▼
+App::update(delta)                 App::render(delta)
+Startup once                       Render stages
+FixedUpdate 0..n
+Update stages
+        │                                 │
+        └──── checked flush and frame-event cleanup ────┘
+```
 
-The cross-phase public/module contract lives in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
-Each `PHASE_*.md` is a **delegation-ready spec** (requirements, design, tasks, verification). See
-[docs/SPEC_FORMAT.md](./docs/SPEC_FORMAT.md).
+The standard schedule contains `Startup`, `FixedUpdate`, `Update`, and `Render`. Startup runs once;
+fixed steps run only when configured; update and render are separate host operations. Deferred
+commands apply at configured flush boundaries, so structural changes never invalidate a running
+system body.
 
-| Doc | Purpose |
+## Core capabilities
+
+| Area | What Moirai provides |
 | --- | --- |
-| [ROADMAP.md](./ROADMAP.md) | Vision, ecosystem map, decisions, phase index |
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Single-crate module, facade, lifecycle, and interop contract |
-| [docs/parity.md](./docs/parity.md) | All 151 source tests classified preserve/adapt/reject |
-| [docs/wyrd-parity.md](./docs/wyrd-parity.md) | Source-audited 16-case Wyrd migration and restore-continuation gate |
-| [PHASE_0_ANALYSIS.md](./PHASE_0_ANALYSIS.md) | Inventory, locked decisions, and sign-off gate |
-| [PHASE_1_SCAFFOLD.md](./PHASE_1_SCAFFOLD.md) | Crate facade, visibility, CI, and features |
-| [PHASE_2_CORE_STORAGE.md](./PHASE_2_CORE_STORAGE.md) | Checked identity, registration, storage, and Q16 |
-| [PHASE_3_WORLD_LIFECYCLE.md](./PHASE_3_WORLD_LIFECYCLE.md) | World, commands, resources, events |
-| [PHASE_4_SCHEDULE.md](./PHASE_4_SCHEDULE.md) | Safe App/Schedule validation and execution |
-| [PHASE_5_QUERIES.md](./PHASE_5_QUERIES.md) | Prepared queries and execution policies |
-| [PHASE_6_QUALITY.md](./PHASE_6_QUALITY.md) | Classified parity, coverage, API stability, and Divan |
-| [PHASE_7_INTEGRATIONS.md](./PHASE_7_INTEGRATIONS.md) | Downstream Wyrd/Anapao adapters and host migrations |
+| World model | World-owned generational entity IDs, resources, sparse and table components, tags, bundles, and deferred commands |
+| Scheduling | Checked stages, system sets, explicit ordering, conditions, fixed-step policy, update plans, and runtime enable/disable handles |
+| Queries | Typed queries, exact-ID policy, prepared membership/result policies, change windows, cursors, and deferred query effects |
+| Events | Typed broadcast events with explicit readers and frame, manual, or bounded retention |
+| State and time | Checked state transitions, world/change ticks, fixed-step metadata, and debt policy |
+| Constrained hosts | `no_std + alloc`, Q16.16 fixed-point values, dense entity scratch storage, and no runtime dependencies |
+| Verification | Structured diagnostics plus optional deterministic replay reports and exact host snapshots |
+
+Opaque entity, component, event, stage, system, and query handles remain scoped to the
+world or schedule that created them. Cross-owner use returns an error instead of indexing unrelated
+state.
+
+## Learn through tiered examples
+
+[`moirai::examples`](https://docs.rs/moirai/latest/moirai/examples/index.html) is the canonical
+learning path. Its 17 lessons are stable-Rust doctests that use the same public API available to
+applications.
+
+| Tier | Focus | Lessons |
+| --- | --- | ---: |
+| **A** | World and application foundations: resources, components, bundles, tags, deferred commands | 4 |
+| **B** | Scheduled behavior: ordering, state transitions, typed events, fixed timestep | 4 |
+| **C** | Prepared queries, filters, change cursors, and controlled side effects | 4 |
+| **D** | System locals, diagnostics, dense scratch data, Q16 values, deterministic replay | 5 |
+
+Start with [A01: Run your first app](https://docs.rs/moirai/latest/moirai/examples/tier_a/a01_first_app/index.html)
+and follow each lesson's **Next** link. The final replay lesson requires the `testkit` feature and is
+included in docs.rs builds.
+
+## Features
+
+Moirai has no default Cargo features.
+
+| Feature | Purpose |
+| --- | --- |
+| default feature set | The dependency-free `no_std + alloc` ECS, schedule, query, event, diagnostics, Q16, and example APIs |
+| `std` | Additive standard-library integration; the core execution model remains unchanged |
+| `testkit` | Deterministic finite replay, step records, exact host snapshots, metrics, partial failure reports, and report comparison |
+| `bench-internals` | Repository benchmark seams; not a stable host-facing API |
+
+Build the default constrained surface:
+
+```bash
+cargo check --no-default-features
+```
+
+Run the replay lesson and testkit tests:
+
+```bash
+cargo test --features testkit
+```
+
+## Stability and boundaries
+
+The public Rust API follows [Cargo's SemVer compatibility rules](https://doc.rust-lang.org/cargo/reference/semver.html).
+Before 1.0, minor releases may revise public contracts; patch releases should preserve them unless
+the changelog documents a required correction.
+
+Moirai deliberately remains single-threaded and forbids unsafe code. It does not expose allocator,
+registry, storage-engine, command-queue, or schedule-runner internals. Host snapshots used by
+`testkit` are explicit application types—Moirai does not reflect or serialize a type-erased world.
+
+## Development
+
+Run the standard public checks:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --package moirai --no-deps --all-features --locked
+```
+
+The complete repository gate also checks the feature matrix, production source coverage, MSRV,
+benchmark compilation, and the publishable package:
+
+```bash
+scripts/verify_all.sh
+```
+
+The complete gate requires a current Rust toolchain plus the Rust 1.75 toolchain,
+`cargo-llvm-cov`, and [UV](https://docs.astral.sh/uv/).
+
+## Reference and next steps
+
+- [API reference](https://docs.rs/moirai)
+- [Tiered executable examples](https://docs.rs/moirai/latest/moirai/examples/index.html)
+- [Crates.io package](https://crates.io/crates/moirai)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

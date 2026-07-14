@@ -1,5 +1,0 @@
-research_id="002-core-storage-q16-parity"
-status="frozen"
-intended_spec_slug="core-storage-q16-parity"
-canonical_handoff="07-make-specs-handoff.md"
-artifacts=["01-intake.md","02-research-questions.md","03-current-state.md","04-design-decisions.md","05-implementation-shape.md","06-shape-review.md","07-make-specs-handoff.md"]

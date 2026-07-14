@@ -1,6 +1,8 @@
 .devana
 .frigg
 .DS_Store
+__pycache__/
+*.py[cod]
 .orchid/buds
 .orchid/leases
 .orchid/locks
@@ -8,3 +10,13 @@
 .orchid/reports
 /target
 /.perf-artifacts
+
+# Local planning, specifications, and research
+/docs/
+/specs/
+/.orchid/spec-research/
+/PHASE_*.md
+/ROADMAP.md
+
+# Local parity-planning artifacts
+/tests/parity_ledger.rs
