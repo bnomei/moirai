@@ -10,9 +10,9 @@ use moirai::schedule::FlushMode;
 use moirai::schedule::{stage, Condition, ScheduleBuilder, System, SystemSet};
 use moirai::state::{apply, on_exit, State};
 use moirai::world::WorldBuilder;
-use moirai::FixedConfig;
 use moirai::StageOperation;
 use moirai::{AppBuilder, AppError, BuildError};
+use moirai::{FixedConfig, FixedDebtPolicy};
 
 static UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -1954,4 +1954,67 @@ fn fixed_step_mod_observes_zero_based_binary_phases() {
     app.update(0.004).expect("first four steps");
     app.update(0.004).expect("second four steps");
     assert_eq!(&*observed.borrow(), &[0, 4]);
+}
+
+#[test]
+fn fixed_step_mod_matches_internal_phase_of_coalesced_range() {
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let observed_steps = Rc::clone(&observed);
+    let fixed = FixedConfig::new(Duration::from_millis(1))
+        .expect("fixed")
+        .with_max_substeps(2)
+        .expect("substeps")
+        .with_debt_policy(FixedDebtPolicy::Coalesce);
+    let mut builder = AppBuilder::new();
+    builder.schedule_builder().fixed(fixed);
+    builder
+        .add_system(
+            System::new("cadenced", stage::FIXED_UPDATE, move |world, _dt| {
+                observed_steps
+                    .borrow_mut()
+                    .push(world.fixed_step().expect("fixed step").index);
+            })
+            .run_if(Condition::fixed_step_mod(4, 1).expect("cadence")),
+        )
+        .expect("system");
+
+    let mut app = builder.build().expect("app");
+    app.update(0.004)
+        .expect("one coalesced range of four steps");
+
+    assert_eq!(&*observed.borrow(), &[0]);
+}
+
+#[test]
+fn fixed_step_mod_set_matches_internal_phase_of_coalesced_range_once() {
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let observed_steps = Rc::clone(&observed);
+    let fixed = FixedConfig::new(Duration::from_millis(1))
+        .expect("fixed")
+        .with_max_substeps(2)
+        .expect("substeps")
+        .with_debt_policy(FixedDebtPolicy::Coalesce);
+    let set = SystemSet::new("cadenced");
+    let mut builder = AppBuilder::new();
+    builder.schedule_builder().fixed(fixed);
+    builder.register_set(set.clone()).expect("set");
+    builder
+        .set_run_if(&set, Condition::fixed_step_mod(4, 1).expect("cadence"))
+        .expect("set condition");
+    builder
+        .add_system(
+            System::new("member", stage::FIXED_UPDATE, move |world, _dt| {
+                observed_steps
+                    .borrow_mut()
+                    .push(world.fixed_step().expect("fixed step").index);
+            })
+            .in_set(&set),
+        )
+        .expect("system");
+
+    let mut app = builder.build().expect("app");
+    app.update(0.004)
+        .expect("one coalesced range of four steps");
+
+    assert_eq!(&*observed.borrow(), &[0]);
 }

@@ -126,7 +126,8 @@ impl Condition {
     /// Runs on one phase of a power-of-two fixed-step cadence.
     ///
     /// The condition is false outside `FixedUpdate`. Fixed-step indices are
-    /// zero-based, so `(8, 0)` includes the first fixed substep.
+    /// zero-based, so `(8, 0)` includes the first fixed substep. A coalesced
+    /// fixed update passes when any index it represents matches the phase.
     pub fn fixed_step_mod(period: u64, phase: u64) -> Result<Self, ConditionError> {
         if period == 0 {
             return Err(ConditionError::ZeroPeriod);
@@ -243,7 +244,7 @@ fn evaluate_kind(
         ),
         ConditionKind::FixedStepMod { mask, phase } => context
             .fixed_step
-            .is_some_and(|step| step.index & mask == *phase),
+            .is_some_and(|step| fixed_step_mod_matches(step, *mask, *phase)),
         ConditionKind::And(left, right) => {
             evaluate_kind(left, world, system_index, context)
                 && evaluate_kind(right, world, system_index, context)
@@ -285,7 +286,7 @@ fn evaluate_kind_for_set(
         ),
         ConditionKind::FixedStepMod { mask, phase } => context
             .fixed_step
-            .is_some_and(|step| step.index & mask == *phase),
+            .is_some_and(|step| fixed_step_mod_matches(step, *mask, *phase)),
         ConditionKind::And(left, right) => {
             evaluate_kind_for_set(left, world, set_index, context)
                 && evaluate_kind_for_set(right, world, set_index, context)
@@ -296,6 +297,11 @@ fn evaluate_kind_for_set(
         }
         ConditionKind::Predicate(predicate) => predicate(world),
     }
+}
+
+fn fixed_step_mod_matches(step: crate::time::FixedStep, mask: u64, phase: u64) -> bool {
+    let offset_to_phase = phase.wrapping_sub(step.index & mask) & mask;
+    offset_to_phase < step.steps
 }
 
 fn advance_kind_cursors(
