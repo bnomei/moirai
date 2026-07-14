@@ -1,8 +1,14 @@
+//! Typed and erased component table columns.
+//!
+//! Each [`TypedTableColumn`] is a dense value column with parallel added/changed tick arrays.
+//! [`ErasedTableColumn`] supports archetype migration without monomorphizing over every component.
+
 use alloc::boxed::Box;
 use core::any::{Any, TypeId};
 
 use crate::time::ChangeTick;
 
+/// Column operations used while relocating entities between archetype tables.
 pub(crate) trait ErasedTableColumn: Any {
     fn len(&self) -> usize;
     #[allow(dead_code)]
@@ -23,6 +29,7 @@ pub(crate) trait ErasedTableColumn: Any {
     fn changed_tick(&self, row: usize) -> Option<ChangeTick>;
 }
 
+/// One boxed component value removed from a table column during migration.
 pub(crate) struct ErasedTableRow {
     value: Box<dyn Any>,
 }
@@ -33,6 +40,7 @@ impl ErasedTableRow {
     }
 }
 
+/// Dense component column inside one archetype table.
 pub(crate) struct TypedTableColumn<T: 'static> {
     data: alloc::vec::Vec<T>,
     added: alloc::vec::Vec<u64>,

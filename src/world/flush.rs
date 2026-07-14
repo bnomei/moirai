@@ -1,10 +1,17 @@
+//! Deferred [`Commands`] flush and discard for an idle [`World`].
+//!
+//! [`World::flush`] preflights queued structural operations, issues one change tick for
+//! the batch, and commits entity and component mutations atomically.
+
 use crate::world::{FlushReport, World, WorldError};
 
 impl World {
+    /// Whether the deferred command queue contains unflushed operations.
     pub fn has_pending_commands(&self) -> bool {
         !self.command_queue.is_empty()
     }
 
+    /// Commit all queued commands when the world is idle.
     pub fn flush(&mut self) -> Result<FlushReport, WorldError> {
         if !self.run_guard.is_idle() {
             return Err(WorldError::FlushDuringRun);
@@ -12,6 +19,7 @@ impl World {
         self.flush_commands()
     }
 
+    /// Drop queued commands and release reserved entity slots.
     pub fn discard_commands(&mut self) -> Result<(), WorldError> {
         if !self.run_guard.is_idle() {
             return Err(WorldError::DiscardDuringRun);

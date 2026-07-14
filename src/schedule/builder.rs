@@ -1,3 +1,9 @@
+//! Authoring API that validates and compiles an ECS schedule against a [`World`].
+//!
+//! Resolves system ordering within stages, event producer/consumer reachability,
+//! flush policy, fixed-update configuration, and execution-lease attachment before
+//! returning an executable [`Schedule`].
+
 use crate::event::EventRetention;
 use crate::operation::StageOperation;
 use crate::schedule::compiled::{CompiledSchedule, CompiledStage, CompiledSystem};
@@ -30,6 +36,7 @@ pub struct ScheduleBuilder {
 }
 
 impl ScheduleBuilder {
+    /// Empty builder; stages and systems must be added explicitly.
     pub fn new() -> Self {
         Self {
             owner: ScheduleOwner::new(),
@@ -43,6 +50,7 @@ impl ScheduleBuilder {
         }
     }
 
+    /// Preloads Startup, FixedUpdate, Update, and Render with stage-level Update flush.
     pub fn standard() -> Self {
         let mut builder = Self::new();
         builder.default_update_flush = FlushMode::Stage;
@@ -61,6 +69,7 @@ impl ScheduleBuilder {
         builder
     }
 
+    /// Registers a stage label for an operation; duplicate labels must share the same operation.
     pub fn add_stage(
         &mut self,
         label: impl Into<String>,
@@ -88,6 +97,7 @@ impl ScheduleBuilder {
         Ok(())
     }
 
+    /// Declares a system-set label with an always-on gate until [`Self::set_run_if`] replaces it.
     pub fn register_set(&mut self, set: SystemSet) -> Result<&mut Self, BuildError> {
         if self
             .sets
@@ -101,6 +111,7 @@ impl ScheduleBuilder {
         Ok(self)
     }
 
+    /// Sets when deferred commands flush for an Update or Render stage.
     pub fn set_stage_flush_mode(
         &mut self,
         label: impl AsRef<str>,
@@ -130,6 +141,7 @@ impl ScheduleBuilder {
         Ok(self)
     }
 
+    /// Gates every system in a registered set behind one shared condition.
     pub fn set_run_if(
         &mut self,
         set: &SystemSet,
@@ -146,6 +158,7 @@ impl ScheduleBuilder {
         }
     }
 
+    /// Orders all systems in `before` ahead of all systems in `after` within shared stages.
     pub fn order_set_before(
         &mut self,
         before: &SystemSet,
@@ -158,6 +171,7 @@ impl ScheduleBuilder {
         Ok(self)
     }
 
+    /// Convenience alias for [`Self::order_set_before`] with reversed arguments.
     pub fn order_set_after(
         &mut self,
         after: &SystemSet,
@@ -176,6 +190,7 @@ impl ScheduleBuilder {
         }
     }
 
+    /// Registers a system; stage, set membership, and flush mode are validated here.
     pub fn add_system(&mut self, system: System) -> Result<(), BuildError> {
         let stage_index = self
             .stage_index
@@ -212,11 +227,15 @@ impl ScheduleBuilder {
         Ok(())
     }
 
+    /// Enables fixed-timestep accumulation for systems in the FixedUpdate stage.
     pub fn fixed(&mut self, config: FixedConfig) -> &mut Self {
         self.fixed_config = Some(config);
         self
     }
 
+    /// Compiles the graph, attaches the world execution lease, and returns a runnable schedule.
+    ///
+    /// Requires an idle, non-poisoned world with no pending commands or live lease.
     pub fn build(self, world: &mut World) -> Result<Schedule, BuildError> {
         if world.has_pending_commands() {
             return Err(BuildError::PendingCommands);
@@ -712,6 +731,7 @@ impl Default for ScheduleBuilder {
     }
 }
 
+/// Deterministic Kahn sort: ready nodes are always taken in ascending index order.
 fn topological_sort(
     stage_members: &[usize],
     systems: &[System],

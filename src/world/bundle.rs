@@ -1,3 +1,8 @@
+//! Component [`Bundle`] insertion for spawn and deferred commands.
+//!
+//! [`BundleWriter`] routes writes through immediate world mutation, queued commands,
+//! or query-side command enqueue depending on the active spawn path.
+
 use crate::command::{CommandOp, ErasedComponentValue};
 use crate::component::ComponentId;
 use crate::entity::EntityId;
@@ -5,12 +10,12 @@ use crate::world::{World, WorldError};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-/// Checked bundle insertion through [`BundleWriter`].
+/// Write one or more components onto an entity through [`BundleWriter`].
 pub trait Bundle {
     fn write(self, writer: &mut BundleWriter<'_>) -> Result<(), WorldError>;
 }
 
-/// Conditional bundle with validated component ids and owned values.
+/// Runtime-assembled bundle of validated [`ComponentId`] entries and owned values.
 pub struct DynamicBundle {
     entries: Vec<DynamicEntry>,
 }
@@ -21,12 +26,14 @@ struct DynamicEntry {
 }
 
 impl DynamicBundle {
+    /// Empty dynamic bundle.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
     }
 
+    /// Append typed component `T` resolved against `world`'s registry.
     pub fn push<T: 'static>(&mut self, world: &World, value: T) -> Result<(), WorldError> {
         let component_id = world.component_id::<T>()?;
         if world.is_tag_component(&component_id) {
@@ -37,6 +44,7 @@ impl DynamicBundle {
         self.push_entry(component_id, Some(Box::new(value)))
     }
 
+    /// Append tag component without a stored value.
     pub fn push_tag(&mut self, tag: &ComponentId) -> Result<(), WorldError> {
         self.push_entry(tag.clone(), None)
     }
@@ -92,7 +100,7 @@ impl Bundle for DynamicBundle {
     }
 }
 
-/// Safe bundle write surface without storage access.
+/// Checked bundle write surface for immediate, deferred, and query enqueue paths.
 pub struct BundleWriter<'w> {
     entity: EntityId,
     target: BundleTarget<'w>,
@@ -133,6 +141,7 @@ impl<'w> BundleWriter<'w> {
         }
     }
 
+    /// Insert component `T` for the bundle's target entity.
     pub fn insert<T: 'static>(&mut self, value: T) -> Result<(), WorldError> {
         match &mut self.target {
             BundleTarget::Immediate(world) => world.insert(self.entity, value).map(|_| ()),

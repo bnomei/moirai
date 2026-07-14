@@ -1,3 +1,8 @@
+//! Run guard and per-system event access for schedule execution.
+//!
+//! [`RunGuard`] tracks whether the world is idle or running a stage operation and,
+//! when present, which event channels the active system may emit or consume.
+
 use crate::event::EventId;
 use crate::operation::StageOperation;
 use alloc::rc::Rc;

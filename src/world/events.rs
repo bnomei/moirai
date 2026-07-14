@@ -1,9 +1,15 @@
+//! World event send, read, and component lifecycle emission.
+//!
+//! Manual and frame events honor schedule-declared emit/consume access. Component
+//! added/removed channels are registered automatically during world construction.
+
 use core::any::{type_name, TypeId};
 
 use crate::event::{ComponentAdded, ComponentRemoved, EventReader, EventReaderStart};
 use crate::world::{EventReadError, World, WorldError};
 
 impl World {
+    /// Send one instance of registered event `E`.
     pub fn send<E: Clone + 'static>(&mut self, event: E) -> Result<(), WorldError> {
         let event_id = self
             .events
@@ -16,6 +22,7 @@ impl World {
         self.events.storage.send(&event_id, event)
     }
 
+    /// Open a reader for registered event `E` starting at `start`.
     pub fn event_reader<E: Clone + 'static>(
         &mut self,
         start: EventReaderStart,
@@ -33,6 +40,7 @@ impl World {
             .create_reader(self.owner.clone(), event_id, start)
     }
 
+    /// Read the next retained event through `reader`.
     pub fn read_event<'a, E: Clone + 'static>(
         &mut self,
         reader: &'a mut EventReader<E>,
@@ -50,6 +58,7 @@ impl World {
         self.events.storage.read_next(&self.owner, reader)
     }
 
+    /// Reader for component-added lifecycle events of `T`.
     pub fn on_add_reader<T: 'static>(
         &mut self,
         start: EventReaderStart,
@@ -68,6 +77,7 @@ impl World {
             .create_reader(self.owner.clone(), event_id, start)
     }
 
+    /// Reader for component-removed lifecycle events of `T`.
     pub fn on_remove_reader<T: 'static>(
         &mut self,
         start: EventReaderStart,

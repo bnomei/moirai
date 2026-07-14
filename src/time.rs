@@ -1,7 +1,13 @@
+//! Monotonic clocks and fixed-timestep planning for [`crate::App`] and [`crate::world::World`].
+//!
+//! [`WorldTick`] advances once per successful Update pass. [`ChangeTick`] tags component and
+//! resource mutation metadata. [`FixedConfig`] and [`FixedDebtPolicy`] control how overdue fixed
+//! intervals are scheduled, dropped, preserved, or coalesced.
+
 use core::fmt;
 use core::time::Duration;
 
-/// Monotonic frame counter advanced only by `App`.
+/// Monotonic frame counter advanced once per successful Update pass.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
 pub struct WorldTick(u64);
 
@@ -29,7 +35,7 @@ pub(crate) enum FixedStepError {
     Exhausted,
 }
 
-/// Host-provided fixed timestep configuration.
+/// Host-provided fixed timestep: interval, substep cap, and debt policy.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct FixedConfig {
     delta: Duration,
@@ -37,20 +43,23 @@ pub struct FixedConfig {
     debt_policy: FixedDebtPolicy,
 }
 
-/// Policy used when a frame contains more fixed intervals than the cap.
+/// Policy used when a frame contains more whole fixed intervals than [`FixedConfig::max_substeps`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FixedDebtPolicy {
-    /// Run up to the cap, discard the remaining whole intervals, and report it.
+    /// Run up to the cap, discard remaining whole intervals, and emit diagnostics.
     DropWithDiagnostic,
-    /// Run up to the cap and retain the remaining intervals for future updates.
+    /// Run up to the cap and carry remaining whole intervals into future Update passes.
     Preserve,
-    /// Run one update with all overdue whole intervals combined into its delta.
+    /// Run one FixedUpdate with all overdue whole intervals combined into its delta.
     Coalesce,
 }
 
+/// Invalid [`FixedConfig`] construction input.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FixedConfigError {
+    /// Fixed interval must be strictly positive.
     NonPositiveDelta,
+    /// `max_substeps` must be nonzero.
     ZeroSubstepCap,
 }
 
@@ -61,14 +70,18 @@ pub(crate) struct FixedAccumulator {
     next_index: u64,
 }
 
+/// Whole fixed intervals discarded when debt exceeds the substep cap.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct FixedDebtDropped {
+    /// Number of whole intervals dropped this frame.
     pub steps: u128,
 }
 
 /// Whole fixed intervals represented by one coalesced FixedUpdate run.
+/// Whole fixed intervals combined into one coalesced FixedUpdate run.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct FixedDebtCoalesced {
+    /// Number of whole intervals represented by the coalesced run.
     pub steps: u128,
 }
 
@@ -95,8 +108,10 @@ pub(crate) enum ChangeTickError {
 }
 
 impl WorldTick {
+    /// Initial world tick before the first Update pass.
     pub const ZERO: Self = Self(0);
 
+    /// Returns the underlying counter value.
     pub fn raw(self) -> u64 {
         self.0
     }
@@ -113,8 +128,11 @@ impl WorldTick {
 }
 
 impl FixedConfig {
+    /// Default substep cap used by [`FixedConfig::new`].
     pub const DEFAULT_MAX_SUBSTEPS: u32 = 8;
 
+    /// Creates fixed configuration with [`Self::DEFAULT_MAX_SUBSTEPS`] and
+    /// [`FixedDebtPolicy::DropWithDiagnostic`].
     pub fn new(delta: Duration) -> Result<Self, FixedConfigError> {
         if delta.as_nanos() == 0 {
             return Err(FixedConfigError::NonPositiveDelta);
@@ -126,6 +144,7 @@ impl FixedConfig {
         })
     }
 
+    /// Sets the maximum fixed substeps executed per Update pass.
     pub fn with_max_substeps(mut self, max_substeps: u32) -> Result<Self, FixedConfigError> {
         if max_substeps == 0 {
             return Err(FixedConfigError::ZeroSubstepCap);
@@ -134,19 +153,23 @@ impl FixedConfig {
         Ok(self)
     }
 
+    /// Fixed simulation interval.
     pub fn delta(&self) -> Duration {
         self.delta
     }
 
+    /// Maximum fixed substeps scheduled per Update pass.
     pub fn max_substeps(&self) -> u32 {
         self.max_substeps
     }
 
+    /// Selects how overdue whole intervals are handled beyond the substep cap.
     pub fn with_debt_policy(mut self, debt_policy: FixedDebtPolicy) -> Self {
         self.debt_policy = debt_policy;
         self
     }
 
+    /// Active debt policy for overdue fixed intervals.
     pub fn debt_policy(&self) -> FixedDebtPolicy {
         self.debt_policy
     }
@@ -273,12 +296,15 @@ impl fmt::Display for WorldTick {
 }
 
 impl ChangeTick {
+    /// Initial change tick before any mutation metadata is issued.
     pub const ZERO: Self = Self(0);
 
+    /// Constructs a tick from a raw counter value.
     pub const fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
 
+    /// Returns the underlying counter value.
     pub fn raw(self) -> u64 {
         self.0
     }

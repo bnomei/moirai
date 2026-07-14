@@ -1,3 +1,7 @@
+//! Fully materialized query result cache slots.
+//!
+//! Stores filtered entity ids for static queries without added/changed windows.
+
 #![allow(dead_code)]
 
 use alloc::vec::Vec;

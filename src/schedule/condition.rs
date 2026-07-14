@@ -1,3 +1,8 @@
+//! Run conditions gating systems and system sets against read-only world state.
+//!
+//! Tick-based predicates advance cursors in [`crate::schedule::RunContext`] after a
+//! system runs; set gates cache one evaluation per stage pass.
+
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use core::any::TypeId;
@@ -45,8 +50,11 @@ pub struct Condition(ConditionKind);
 /// Invalid fixed-step cadence configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConditionError {
+    /// Fixed-step cadence period must be nonzero.
     ZeroPeriod,
+    /// Period must be a power of two for bitmask indexing.
     PeriodNotPowerOfTwo { period: u64 },
+    /// Phase must be strictly less than the period.
     PhaseOutOfRange { period: u64, phase: u64 },
 }
 
@@ -66,26 +74,32 @@ enum ConditionKind {
 }
 
 impl Condition {
+    /// Unconditional pass; default gate for newly registered system sets.
     pub const fn always() -> Self {
         Self(ConditionKind::Always)
     }
 
+    /// Never runs the gated system or set.
     pub const fn never() -> Self {
         Self(ConditionKind::Never)
     }
 
+    /// Passes while the resource type is present in the world.
     pub fn resource_exists<R: 'static>() -> Self {
         Self(ConditionKind::ResourceExists(TypeId::of::<R>()))
     }
 
+    /// Passes once per resource insertion until the system cursor advances.
     pub fn resource_added<R: 'static>() -> Self {
         Self(ConditionKind::ResourceAdded(TypeId::of::<R>()))
     }
 
+    /// Passes once per resource mutation until the system cursor advances.
     pub fn resource_changed<R: 'static>() -> Self {
         Self(ConditionKind::ResourceChanged(TypeId::of::<R>()))
     }
 
+    /// Passes once per applied state transition until the cursor advances.
     pub fn state_changed<S: Eq + 'static>() -> Self {
         Self(ConditionKind::StateChanged(StateProbe::of::<S>()))
     }
@@ -123,6 +137,7 @@ impl Condition {
         Self::predicate(Rc::new(predicate))
     }
 
+    /// Passes while [`crate::state::State`] holds the given value.
     pub fn in_state<S: Eq + 'static>(value: S) -> Self {
         let expected = value;
         Self::from_world(move |world| {
@@ -134,10 +149,12 @@ impl Condition {
         })
     }
 
+    /// Conjunction; both sides must pass.
     pub fn and(self, other: Self) -> Self {
         Self(ConditionKind::And(Box::new(self.0), Box::new(other.0)))
     }
 
+    /// Disjunction; either side may pass.
     pub fn or(self, other: Self) -> Self {
         Self(ConditionKind::Or(Box::new(self.0), Box::new(other.0)))
     }

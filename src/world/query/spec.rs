@@ -1,3 +1,5 @@
+//! Query spec resolution into fingerprints, filters, and traversal drivers.
+
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;

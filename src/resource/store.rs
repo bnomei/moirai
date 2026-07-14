@@ -1,3 +1,7 @@
+//! Typed resource table with added/changed ticks, borrow locks, and scoped take/restore.
+//!
+//! Used internally by [`crate::world::World`] resource APIs and schedule validation.
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;

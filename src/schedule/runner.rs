@@ -1,3 +1,5 @@
+//! Stage and operation execution: conditions, system bodies, flush, and fault mapping.
+
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 
@@ -9,13 +11,18 @@ use crate::schedule::system::FlushMode;
 use crate::schedule::RunContext;
 use crate::world::World;
 
+/// Runtime fault location when a stage pass aborts before completion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RunOutcome {
+    /// Stage label active when the fault occurred.
     pub fault_stage: Option<String>,
+    /// System label active when the fault occurred.
     pub fault_system: Option<String>,
+    /// World guard, flush, poison, or system-returned detail.
     pub fault_detail: Option<String>,
 }
 
+/// Runs one compiled stage in deterministic system order.
 pub(crate) fn run_stage(
     schedule: &mut CompiledSchedule,
     world: &mut World,
@@ -36,6 +43,7 @@ pub(crate) fn run_stage(
     )
 }
 
+/// Runs every stage registered for an operation in compiled stage order.
 pub(crate) fn run_operation(
     schedule: &mut CompiledSchedule,
     world: &mut World,
@@ -69,6 +77,7 @@ fn run_stage_inner(
     observer: &mut Option<Box<dyn Observer>>,
 ) -> Result<(), RunOutcome> {
     let stage_label = schedule.stages[stage_index].descriptor.label.as_str();
+    // Startup runs at most once per schedule lifetime on the first Update pass.
     if operation == StageOperation::Update
         && stage_label == stage::STARTUP
         && schedule.startup_complete
@@ -154,6 +163,7 @@ fn run_stage_inner(
         flush_or_fault(world, stage_label, "<stage>", observer)?;
     }
 
+    // Advance set cursors only for sets that were evaluated this stage pass.
     let set_count = context
         .set_gate_cache
         .len()
@@ -172,6 +182,7 @@ fn run_stage_inner(
     Ok(())
 }
 
+/// Flushes deferred commands after the last Update stage when flush mode is Final.
 pub(crate) fn final_update_flush(
     world: &mut World,
     observer: &mut Option<Box<dyn Observer>>,

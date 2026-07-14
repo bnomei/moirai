@@ -1,36 +1,54 @@
+//! Q16.16 fixed-point arithmetic with checked and saturating operations.
+//!
+//! Values use 16 fractional bits. Conversions from `f32` round half away from zero.
+
 use core::cmp::Ordering;
 use core::fmt;
 
-/// Conventional Q16.16 fixed-point value with private bits.
+/// Conventional Q16.16 fixed-point value with private raw bits.
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 pub struct Q16(i32);
 
+/// Checked or saturating [`Q16`] operation failure.
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Q16Error {
+    /// Result exceeded representable range on addition or multiplication.
     Overflow,
+    /// Result fell below representable range on subtraction or multiplication.
     Underflow,
+    /// Division by zero.
     DivisionByZero,
+    /// Floating-point input was NaN or infinite in a strict conversion.
     NotFinite,
+    /// Floating-point input rounded outside `i32` range.
     OutOfRange,
 }
 
 impl Q16 {
+    /// Number of fractional bits in the Q16.16 layout.
     pub const FRAC_BITS: u32 = 16;
+    /// Zero fixed-point value.
     pub const ZERO: Self = Self(0);
+    /// One whole unit in fixed-point representation.
     pub const ONE: Self = Self(1 << Self::FRAC_BITS);
+    /// Minimum representable value.
     pub const MIN: Self = Self(i32::MIN);
+    /// Maximum representable value.
     pub const MAX: Self = Self(i32::MAX);
 
+    /// Constructs a value from raw fixed-point bits.
     pub const fn from_bits(bits: i32) -> Self {
         Self(bits)
     }
 
+    /// Returns the raw fixed-point bit pattern.
     pub const fn to_bits(self) -> i32 {
         self.0
     }
 
+    /// Converts a whole `i32` into fixed-point with checked scaling.
     pub fn from_i32(value: i32) -> Result<Self, Q16Error> {
         value
             .checked_mul(Self::ONE.0)
@@ -38,10 +56,12 @@ impl Q16 {
             .ok_or(Q16Error::Overflow)
     }
 
+    /// Converts a whole `i32` into fixed-point with saturating scaling.
     pub fn saturating_from_i32(value: i32) -> Self {
         Self(value.saturating_mul(Self::ONE.0))
     }
 
+    /// Converts `f32` to fixed-point with checked finite range and rounding.
     pub fn try_from_f32(value: f32) -> Result<Self, Q16Error> {
         if !value.is_finite() {
             return Err(Q16Error::NotFinite);
@@ -50,6 +70,7 @@ impl Q16 {
         Ok(Self(round_half_away_to_i32(scaled)?))
     }
 
+    /// Converts `f32` to fixed-point, saturating infinities and rejecting NaN.
     pub fn saturating_from_f32(value: f32) -> Result<Self, Q16Error> {
         if value.is_nan() {
             return Err(Q16Error::NotFinite);
@@ -66,10 +87,12 @@ impl Q16 {
         Ok(Self(rounded))
     }
 
+    /// Converts this value to `f32` for host-side display or interop.
     pub fn to_f32(self) -> f32 {
         self.0 as f32 / (Self::ONE.0 as f32)
     }
 
+    /// Checked fixed-point addition.
     pub fn checked_add(self, rhs: Self) -> Result<Self, Q16Error> {
         self.0
             .checked_add(rhs.0)
@@ -77,10 +100,12 @@ impl Q16 {
             .ok_or(Q16Error::Overflow)
     }
 
+    /// Saturating fixed-point addition.
     pub fn saturating_add(self, rhs: Self) -> Self {
         Self(self.0.saturating_add(rhs.0))
     }
 
+    /// Checked fixed-point subtraction.
     pub fn checked_sub(self, rhs: Self) -> Result<Self, Q16Error> {
         self.0
             .checked_sub(rhs.0)
@@ -88,15 +113,18 @@ impl Q16 {
             .ok_or(Q16Error::Underflow)
     }
 
+    /// Saturating fixed-point subtraction.
     pub fn saturating_sub(self, rhs: Self) -> Self {
         Self(self.0.saturating_sub(rhs.0))
     }
 
+    /// Checked fixed-point multiplication with rounding.
     pub fn checked_mul(self, rhs: Self) -> Result<Self, Q16Error> {
         let product = (self.0 as i64) * (rhs.0 as i64);
         round_div_fixed(product, Self::FRAC_BITS)
     }
 
+    /// Saturating fixed-point multiplication with rounding.
     pub fn saturating_mul(self, rhs: Self) -> Self {
         self.checked_mul(rhs)
             .unwrap_or(if (self.0 > 0) == (rhs.0 > 0) {
@@ -106,6 +134,7 @@ impl Q16 {
             })
     }
 
+    /// Checked fixed-point division with rounding.
     pub fn checked_div(self, rhs: Self) -> Result<Self, Q16Error> {
         if rhs.0 == 0 {
             return Err(Q16Error::DivisionByZero);
@@ -114,6 +143,7 @@ impl Q16 {
         round_div_i64(numerator, rhs.0 as i64)
     }
 
+    /// Saturating fixed-point division with rounding.
     pub fn saturating_div(self, rhs: Self) -> Result<Self, Q16Error> {
         if rhs.0 == 0 {
             return Err(Q16Error::DivisionByZero);

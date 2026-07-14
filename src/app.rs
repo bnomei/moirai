@@ -1,3 +1,11 @@
+//! Top-level ECS application owning [`World`] and [`Schedule`].
+//!
+//! Construction flows through [`AppBuilder`]. [`App::update`] and [`App::render`] advance
+//! [`crate::time::WorldTick`], run fixed substeps when configured, flush deferred commands,
+//! clear frame-scoped events, and emit [`crate::diagnostics::DiagnosticEvent`]s to an optional
+//! [`crate::diagnostics::Observer`]. The first terminal [`AppFault`] is retained on exhaustion,
+//! system failure, or panic.
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use core::time::Duration;
@@ -14,29 +22,40 @@ use crate::schedule::{
 use crate::time::{FixedConfig, FixedWork};
 use crate::world::{World, WorldBuilder};
 
-/// Terminal execution record retained after a fault.
+/// Terminal execution record retained after the first fault.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppFault {
+    /// Stage label active when the fault occurred, if known.
     pub stage: Option<String>,
+    /// System name active when the fault occurred, if known.
     pub system: Option<String>,
+    /// Human-readable detail such as exhaustion or panic text.
     pub detail: Option<String>,
 }
 
-/// Recoverable and terminal App lifecycle failures.
+/// Recoverable preflight failures and terminal execution faults for [`App`].
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppError {
+    /// `delta_seconds` was negative, NaN, or infinite.
     InvalidDelta,
+    /// Deferred commands remain unflushed before the next pass.
     PendingIdleCommands,
+    /// A prior mutation left the world in a poisoned state.
     WorldMutationPoisoned,
+    /// The application already recorded a terminal fault.
     TerminalFault,
+    /// [`crate::time::WorldTick`] cannot advance further.
     WorldTickExhausted,
+    /// Fixed-step indices cannot advance further.
     FixedStepExhausted,
+    /// [`UpdatePlan`] selection failed schedule validation.
     InvalidUpdatePlan(ScheduleError),
+    /// A system or stage pass aborted with location detail.
     Fault(AppFault),
 }
 
-/// Top-level ECS application owning `World` and `Schedule`.
+/// Runnable ECS host pairing one [`World`] with one compiled [`Schedule`].
 pub struct App {
     world: World,
     schedule: Schedule,
@@ -46,7 +65,7 @@ pub struct App {
     observer: Option<Box<dyn Observer>>,
 }
 
-/// Checked application construction.
+/// Checked application construction: world seeding, schedule authoring, observer wiring.
 pub struct AppBuilder {
     world_builder: WorldBuilder,
     schedule_builder: ScheduleBuilder,
@@ -54,10 +73,14 @@ pub struct AppBuilder {
 }
 
 impl App {
+    /// Starts checked construction with a standard schedule template.
     pub fn builder() -> AppBuilder {
         AppBuilder::new()
     }
 
+    /// Assembles an application from an already-built world and schedule.
+    ///
+    /// Rejects pending commands, active run guards, poisoned mutation state, and lease mismatch.
     pub fn from_parts(world: World, schedule: Schedule) -> Result<Self, BuildError> {
         if world.has_pending_commands() {
             return Err(BuildError::PendingCommands);
@@ -82,18 +105,22 @@ impl App {
         })
     }
 
+    /// Read-only access to the owned world.
     pub fn world(&self) -> &World {
         &self.world
     }
 
+    /// Mutable world access between passes when the app is not faulted.
     pub fn world_mut(&mut self) -> &mut World {
         &mut self.world
     }
 
+    /// Read-only access to the compiled schedule graph.
     pub fn schedule(&self) -> &Schedule {
         &self.schedule
     }
 
+    /// Whether a terminal fault prevents further execution.
     pub fn is_faulted(&self) -> bool {
         self.faulted
     }
@@ -103,6 +130,7 @@ impl App {
         self.fault.as_ref()
     }
 
+    /// Enables or disables one compiled system without rebuilding the schedule.
     pub fn set_system_enabled(
         &mut self,
         id: &SystemId,
@@ -111,6 +139,7 @@ impl App {
         self.schedule.set_system_enabled(id, enabled)
     }
 
+    /// Runs the full Update pass for `delta_seconds`.
     pub fn update(&mut self, delta_seconds: f32) -> Result<(), AppError> {
         self.update_with(delta_seconds, |_| ())
     }
@@ -124,6 +153,7 @@ impl App {
         self.update_inner(delta_seconds, Some(plan), |_| ())
     }
 
+    /// Runs Update and returns a value observed from the world after frame cleanup.
     pub fn update_with<R>(
         &mut self,
         delta_seconds: f32,
@@ -273,10 +303,12 @@ impl App {
         Ok(observed)
     }
 
+    /// Runs the Render pass for `delta_seconds`.
     pub fn render(&mut self, delta_seconds: f32) -> Result<(), AppError> {
         self.render_with(delta_seconds, |_| ())
     }
 
+    /// Runs Render and returns a value observed from the world after frame cleanup.
     pub fn render_with<R>(
         &mut self,
         delta_seconds: f32,
@@ -492,6 +524,7 @@ impl App {
 }
 
 impl AppBuilder {
+    /// Creates a builder with a fresh world and standard schedule template.
     pub fn new() -> AppBuilder {
         Self {
             world_builder: WorldBuilder::new(),
@@ -500,14 +533,17 @@ impl AppBuilder {
         }
     }
 
+    /// Mutable world construction surface for component and resource registration.
     pub fn world_builder(&mut self) -> &mut WorldBuilder {
         &mut self.world_builder
     }
 
+    /// Mutable schedule authoring surface for systems, sets, and ordering.
     pub fn schedule_builder(&mut self) -> &mut ScheduleBuilder {
         &mut self.schedule_builder
     }
 
+    /// Registers one system before schedule validation.
     pub fn add_system(&mut self, system: System) -> Result<&mut Self, BuildError> {
         self.schedule_builder.add_system(system)?;
         Ok(self)
@@ -525,11 +561,13 @@ impl AppBuilder {
         self
     }
 
+    /// Installs fixed-timestep configuration for [`crate::schedule::stage::FIXED_UPDATE`].
     pub fn fixed(&mut self, config: FixedConfig) -> &mut Self {
         self.schedule_builder.fixed(config);
         self
     }
 
+    /// Overrides deferred-command flush policy for one stage label.
     pub fn set_stage_flush_mode(
         &mut self,
         label: impl AsRef<str>,
@@ -539,11 +577,13 @@ impl AppBuilder {
         Ok(self)
     }
 
+    /// Registers a diagnostic observer invoked at pass and system boundaries.
     pub fn observer(&mut self, observer: impl Observer + 'static) -> &mut Self {
         self.observer = Some(Box::new(observer));
         self
     }
 
+    /// Validates and compiles the world and schedule into a runnable [`App`].
     pub fn build(self) -> Result<App, BuildError> {
         let mut world = self.world_builder.build()?;
         let schedule = self.schedule_builder.build(&mut world)?;
@@ -552,6 +592,7 @@ impl AppBuilder {
         Ok(app)
     }
 
+    /// Declares a named [`SystemSet`] for ordering and run-if gates.
     pub fn register_set(
         &mut self,
         set: crate::schedule::SystemSet,
@@ -560,6 +601,7 @@ impl AppBuilder {
         Ok(self)
     }
 
+    /// Attaches a [`crate::schedule::Condition`] to one registered set.
     pub fn set_run_if(
         &mut self,
         set: &crate::schedule::SystemSet,
@@ -569,6 +611,7 @@ impl AppBuilder {
         Ok(self)
     }
 
+    /// Orders one set before another within shared stage ordering.
     pub fn order_set_before(
         &mut self,
         before: &SystemSet,
@@ -578,6 +621,7 @@ impl AppBuilder {
         Ok(self)
     }
 
+    /// Orders one set after another within shared stage ordering.
     pub fn order_set_after(
         &mut self,
         after: &SystemSet,

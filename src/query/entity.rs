@@ -1,3 +1,8 @@
+//! Entity-id query iterators and lightweight entity views.
+//!
+//! [`QueryIds`] and [`QueryEntities`] materialize id-only query results. [`EntityRef`] exposes
+//! read-only component access for one entity during entity-only traversal.
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
@@ -6,6 +11,7 @@ use crate::entity::EntityId;
 use crate::time::ChangeTick;
 use crate::world::{World, WorldError};
 
+/// Read-only view of one entity in the world backing an entity query.
 #[derive(Clone, Copy)]
 pub struct EntityRef<'w> {
     pub(crate) world: &'w World,
@@ -13,10 +19,12 @@ pub struct EntityRef<'w> {
 }
 
 impl<'w> EntityRef<'w> {
+    /// Entity id for this view.
     pub fn id(self) -> EntityId {
         self.entity
     }
 
+    /// Whether the entity currently has the registered component type.
     pub fn has<T: 'static>(self) -> Result<bool, WorldError> {
         let id =
             self.world
@@ -27,11 +35,13 @@ impl<'w> EntityRef<'w> {
         Ok(self.world.entity_has_component(self.entity, id.index()))
     }
 
+    /// Borrows the component value when present.
     pub fn get<T: 'static>(self) -> Result<Option<&'w T>, WorldError> {
         self.world.get::<T>(self.entity)
     }
 }
 
+/// Iterator over entity ids produced by an entity-only query.
 pub struct QueryIds<'w, 'c> {
     pub(crate) world: &'w World,
     pub(crate) ids: Vec<EntityId>,
@@ -90,6 +100,7 @@ impl Drop for QueryIds<'_, '_> {
     }
 }
 
+/// Iterator over [`EntityRef`] views produced by an entity-only query.
 pub struct QueryEntities<'w, 'c> {
     pub(crate) inner: QueryIds<'w, 'c>,
 }

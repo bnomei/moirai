@@ -1,10 +1,11 @@
-//! Neutral deterministic replay primitives for host verification.
+//! Deterministic replay, step records, drivers, and report comparison for host tests.
 //!
-//! Testkit depends only on core Moirai and `alloc`. It never reflects or serializes an
-//! arbitrary type-erased `World`; hosts supply exact `S: Eq` snapshots and canonical ordering.
+//! Testkit runs finite checked [`StepIndex`] loops over either an [`App`](crate::app::App)
+//! ([`replay_app`]) or a host [`ReplayDriver`] built from a seed fixture. Host fixtures supply
+//! `S: Eq` snapshots and optional metrics; Moirai never reflects the type-erased
+//! [`World`](crate::world::World).
 //!
-//! Learn the complete replay flow in
-//! [`crate::examples::tier_d::d05_deterministic_replay`].
+//! Learn the full replay flow in [`crate::examples::tier_d::d05_deterministic_replay`].
 
 mod app;
 mod config;

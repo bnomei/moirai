@@ -1,3 +1,8 @@
+//! Typed event registration, retention policy, and independent readers.
+//!
+//! Ordinary events are registered through [`EventOptions`] and read with [`EventReader`].
+//! Component lifecycle emits [`ComponentAdded`] and [`ComponentRemoved`] on structural commits.
+
 mod component;
 mod queue;
 mod registry;

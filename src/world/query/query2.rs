@@ -1,3 +1,5 @@
+//! Two-component query execution with mixed sparse and archetype storage.
+
 use crate::entity::EntityId;
 use crate::query::{Query2, QueryError, QueryParams, QuerySpec};
 use crate::world::World;

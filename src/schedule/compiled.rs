@@ -1,3 +1,8 @@
+//! Compiled schedule layout produced by [`crate::schedule::builder::ScheduleBuilder`].
+//!
+//! Holds deterministic per-stage system order, runtime enable flags, set gates,
+//! and the execution lease token mirrored weakly on the world.
+
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -9,11 +14,13 @@ use crate::schedule::stage::StageDescriptor;
 use crate::schedule::system::{FlushMode, SystemBody, SystemId};
 use crate::time::{FixedAccumulator, FixedConfig};
 
+/// One stage's descriptor plus topologically sorted system indices.
 pub(crate) struct CompiledStage {
     pub descriptor: StageDescriptor,
     pub system_order: Vec<usize>,
 }
 
+/// Runnable system body with conditions, flush policy, and compiled event access.
 pub(crate) struct CompiledSystem {
     pub name: String,
     #[allow(dead_code)]
@@ -27,6 +34,7 @@ pub(crate) struct CompiledSystem {
     pub event_access: Rc<crate::world::guard::EventAccess>,
 }
 
+/// Frozen schedule graph and per-operation stage indices used by the runner.
 pub(crate) struct CompiledSchedule {
     pub owner: ScheduleOwner,
     pub lease: ExecutionLease,
@@ -43,6 +51,7 @@ pub(crate) struct CompiledSchedule {
 }
 
 impl CompiledSchedule {
+    /// Stage indices for an operation in compiled registration order.
     pub fn operation_stages(&self, operation: StageOperation) -> &[usize] {
         match operation {
             StageOperation::Update => &self.update_stage_order,
@@ -67,6 +76,7 @@ impl CompiledSchedule {
         &self.systems[system_index].name
     }
 
+    /// Toggles runtime execution without recompiling the schedule graph.
     pub fn set_system_enabled(
         &mut self,
         id: &SystemId,

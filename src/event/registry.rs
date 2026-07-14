@@ -1,3 +1,8 @@
+//! Checked event registration table and retention policy for one [`crate::world::World`].
+//!
+//! Ordinary events are looked up by payload type. Lifecycle channels are registered alongside
+//! component indices and are excluded from ordinary type lookup.
+
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -6,21 +11,25 @@ use core::any::{type_name, TypeId};
 use crate::operation::StageOperation;
 use crate::world::WorldOwner;
 
-/// Dense registry-local event handle.
+/// Dense registry-local event handle scoped to one world owner.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct EventId {
     owner: WorldOwner,
     index: u32,
 }
 
+/// How long event payloads remain readable before pruning or frame cleanup.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EventRetention {
+    /// Cleared at the end of one [`crate::operation::StageOperation`] pass.
     Frame(StageOperation),
+    /// Retained until explicitly pruned by bounded policy or channel closure.
     Manual,
+    /// Retains at most `capacity` newest payloads; slow readers may lag.
     Bounded(usize),
 }
 
-/// Registration-time event retention and policy.
+/// Registration-time event retention and source policy.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct EventOptions {
     retention: EventRetention,
@@ -28,6 +37,7 @@ pub struct EventOptions {
 }
 
 impl EventOptions {
+    /// Frame-scoped retention cleared after the given host operation finishes.
     pub fn frame(operation: StageOperation) -> Self {
         Self {
             retention: EventRetention::Frame(operation),
@@ -35,6 +45,7 @@ impl EventOptions {
         }
     }
 
+    /// Manual retention until bounded pruning or channel closure.
     pub fn manual() -> Self {
         Self {
             retention: EventRetention::Manual,
@@ -42,6 +53,7 @@ impl EventOptions {
         }
     }
 
+    /// Bounded ring retention keeping the newest `capacity` payloads.
     pub fn bounded(capacity: usize) -> Result<Self, EventRegistrationError> {
         if capacity == 0 {
             return Err(EventRegistrationError::InvalidCapacity);
@@ -52,6 +64,7 @@ impl EventOptions {
         })
     }
 
+    /// Marks the event as originating outside in-world producers for schedule validation.
     pub fn external_source(mut self) -> Self {
         self.external_source = true;
         self
@@ -67,14 +80,20 @@ impl EventOptions {
     }
 }
 
+/// Event registration conflict or invalid retention input.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventRegistrationError {
+    /// The same payload type or name was registered with incompatible options.
     TypeConflict {
+        /// Registration name associated with the conflict.
         name: String,
+        /// Existing entry name.
         existing: String,
+        /// Requested entry name.
         requested: String,
     },
+    /// Bounded retention capacity must be nonzero.
     InvalidCapacity,
 }
 
@@ -99,6 +118,7 @@ impl EventId {
         Self { owner, index }
     }
 
+    /// Dense registry index for diagnostics and channel lookup.
     pub fn index(&self) -> usize {
         self.index as usize
     }

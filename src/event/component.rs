@@ -1,3 +1,8 @@
+//! Component lifecycle event payloads and per-component channel wiring.
+//!
+//! Each registered component index receives paired [`ComponentAdded`] and [`ComponentRemoved`]
+//! channels emitted after successful structural commits.
+
 use alloc::vec::Vec;
 
 use crate::component::ComponentId;
@@ -7,17 +12,21 @@ use crate::event::registry::{EventId, EventOptions, EventRegistrationError, Even
 use crate::operation::StageOperation;
 use crate::world::{WorldError, WorldOwner};
 
-/// Payload for a committed component addition.
+/// Payload emitted after a component addition commits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComponentAdded {
+    /// Entity that received the component.
     pub entity: EntityId,
+    /// Registered component handle for the added type.
     pub component: ComponentId,
 }
 
-/// Payload for a committed component removal.
+/// Payload emitted after a component removal commits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComponentRemoved {
+    /// Entity that lost the component.
     pub entity: EntityId,
+    /// Registered component handle for the removed type.
     pub component: ComponentId,
 }
 

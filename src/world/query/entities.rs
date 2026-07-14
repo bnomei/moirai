@@ -1,3 +1,5 @@
+//! Entity-only query execution without a typed primary component.
+
 use crate::query::{QueryEntities, QueryError, QueryIds, QueryParams, QuerySpec};
 use crate::world::World;
 

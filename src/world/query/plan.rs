@@ -1,3 +1,5 @@
+//! Resolved query plan types shared by collection, cache, and mutation paths.
+
 use alloc::vec::Vec;
 
 use crate::entity::EntityId;
@@ -12,7 +14,7 @@ pub(crate) enum TraversalSource {
     Exact { ids: Vec<EntityId> },
 }
 
-/// Resolved structural query plan.
+/// Normalized structural query plan with traversal driver and filter indices.
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedPlan {
     pub fingerprint: u64,

@@ -1,3 +1,8 @@
+//! Schedule execution lease attachment and world runtime introspection.
+//!
+//! An active [`ExecutionLease`](crate::schedule::ExecutionLease) locks declared resources
+//! and exposes idle-guard and mutation-poison probes to compiled systems.
+
 use alloc::rc::Weak;
 use core::any::TypeId;
 
@@ -42,10 +47,12 @@ impl super::World {
             .is_some_and(|weak| ExecutionLease::same_weak(weak, lease))
     }
 
+    /// Whether no schedule stage is currently executing against this world.
     pub fn run_guard_is_idle(&self) -> bool {
         self.run_guard.is_idle()
     }
 
+    /// Whether change-tick exhaustion has poisoned further world mutation.
     pub fn is_mutation_poisoned(&self) -> bool {
         self.mutation_poisoned
     }
@@ -73,6 +80,7 @@ impl super::World {
         self.fixed_step = step;
     }
 
+    /// Fixed-update step metadata installed for the current schedule pass.
     pub fn fixed_step(&self) -> Option<crate::time::FixedStep> {
         self.fixed_step
     }

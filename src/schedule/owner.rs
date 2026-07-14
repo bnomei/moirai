@@ -1,3 +1,5 @@
+//! Opaque schedule identity and the live execution lease shared with the world.
+
 use alloc::rc::Rc;
 use core::hash::{Hash, Hasher};
 
@@ -6,10 +8,12 @@ use core::hash::{Hash, Hasher};
 pub(crate) struct ScheduleOwner(Rc<()>);
 
 impl ScheduleOwner {
+    /// Allocates a fresh schedule identity for handles and lease pairing.
     pub fn new() -> Self {
         Self(Rc::new(()))
     }
 
+    /// Whether two handles were issued by the same compiled schedule.
     pub fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
@@ -48,18 +52,22 @@ impl Default for ScheduleOwner {
 pub struct ExecutionLease(Rc<()>);
 
 impl ExecutionLease {
+    /// Creates the strong lease held by [`crate::schedule::Schedule`] for its lifetime.
     pub fn new() -> Self {
         Self(Rc::new(()))
     }
 
+    /// Weak token stored on the world while this schedule remains attached.
     pub fn downgrade(&self) -> alloc::rc::Weak<()> {
         Rc::downgrade(&self.0)
     }
 
+    /// Whether a world's weak lease pointer matches this schedule's lease.
     pub fn same_weak(weak: &alloc::rc::Weak<()>, lease: &Self) -> bool {
         weak.ptr_eq(&Rc::downgrade(&lease.0))
     }
 
+    /// Whether the compiled schedule that issued the weak lease is still alive.
     pub fn is_weak_alive(weak: &alloc::rc::Weak<()>) -> bool {
         weak.strong_count() > 0
     }

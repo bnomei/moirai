@@ -1,3 +1,8 @@
+//! Structural query selection and filter authoring.
+//!
+//! Build a [`QuerySpec`] with required components, tag markers, exclusions, change-detection
+//! filters, and optional caller-ordered exact entity ids. Resolution happens against one world schema.
+
 use alloc::vec::Vec;
 use core::any::TypeId;
 
@@ -5,7 +10,7 @@ use crate::component::ComponentId;
 use crate::query::ExactIdPolicy;
 use crate::EntityId;
 
-/// Structural query selection and filter authoring.
+/// Immutable description of which entities a query should visit and how to filter them.
 #[derive(Clone, Debug, Default)]
 pub struct QuerySpec {
     pub(crate) required: Vec<TypeId>,
@@ -25,70 +30,84 @@ pub struct QuerySpec {
 }
 
 impl QuerySpec {
+    /// Empty spec that matches entities with no additional structural constraints.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Require a registered data component type.
     pub fn with<T: 'static>(mut self) -> Self {
         self.required.push(TypeId::of::<T>());
         self
     }
 
+    /// Require a registered data component by [`ComponentId`].
     pub fn with_id(mut self, id: ComponentId) -> Self {
         self.required_ids.push(id);
         self
     }
 
+    /// Exclude entities that have the component type.
     pub fn without<T: 'static>(mut self) -> Self {
         self.without.push(TypeId::of::<T>());
         self
     }
 
+    /// Exclude entities that have the component id.
     pub fn without_id(mut self, id: ComponentId) -> Self {
         self.without_ids.push(id);
         self
     }
 
+    /// Require a zero-sized tag marker type.
     pub fn with_tag<T: 'static>(mut self) -> Self {
         self.with_tags.push(TypeId::of::<T>());
         self
     }
 
+    /// Require a registered tag marker by [`ComponentId`].
     pub fn with_tag_id(mut self, id: ComponentId) -> Self {
         self.with_tag_ids.push(id);
         self
     }
 
+    /// Exclude entities that carry the tag marker type.
     pub fn without_tag<T: 'static>(mut self) -> Self {
         self.without_tags.push(TypeId::of::<T>());
         self
     }
 
+    /// Exclude entities that carry the tag marker id.
     pub fn without_tag_id(mut self, id: ComponentId) -> Self {
         self.without_tag_ids.push(id);
         self
     }
 
+    /// Require the component to be added inside the active change window.
     pub fn added<T: 'static>(mut self) -> Self {
         self.added.push(TypeId::of::<T>());
         self
     }
 
+    /// Require the component id to be added inside the active change window.
     pub fn added_id(mut self, id: ComponentId) -> Self {
         self.added_ids.push(id);
         self
     }
 
+    /// Require the component to change inside the active change window.
     pub fn changed<T: 'static>(mut self) -> Self {
         self.changed.push(TypeId::of::<T>());
         self
     }
 
+    /// Require the component id to change inside the active change window.
     pub fn changed_id(mut self, id: ComponentId) -> Self {
         self.changed_ids.push(id);
         self
     }
 
+    /// Visit only the listed entity ids in caller order.
     pub fn exact_ids(mut self, ids: Vec<EntityId>, policy: ExactIdPolicy) -> Self {
         self.exact_ids = Some(ids);
         self.exact_id_policy = Some(policy);

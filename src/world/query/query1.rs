@@ -1,3 +1,5 @@
+//! Single-component query execution, matching, and delta collection.
+
 use crate::entity::EntityId;
 use crate::query::{Query1, QueryError, QueryParams, QuerySpec};
 use crate::storage::TypedSparseStorage;

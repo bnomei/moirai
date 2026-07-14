@@ -1,3 +1,8 @@
+//! Checked component registration table for one [`crate::world::World`].
+//!
+//! Typed and untyped tag registration share conflict detection for names, layouts, and storage
+//! policy before dense [`ComponentId`] handles are issued.
+
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -7,36 +12,54 @@ use core::mem::{align_of, needs_drop, size_of};
 use crate::component::{ComponentOptions, StorageKind};
 use crate::world::WorldOwner;
 
-/// Dense registry-local component handle.
+/// Dense registry-local component handle scoped to one world owner.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ComponentId {
     owner: WorldOwner,
     index: u32,
 }
 
+/// Component registration conflict or policy violation.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RegistrationError {
+    /// The same `TypeId` was registered with incompatible metadata.
     TypeConflict {
+        /// Registration name associated with the conflict.
         name: String,
+        /// Existing entry name.
         existing: String,
+        /// Requested entry name.
         requested: String,
     },
+    /// The registration name is already bound to different metadata.
     NameConflict {
+        /// Registration name associated with the conflict.
         name: String,
+        /// Existing entry name.
         existing: String,
+        /// Requested entry name.
         requested: String,
     },
+    /// Size, alignment, or owner metadata does not match an existing entry.
     LayoutConflict {
+        /// Registration name associated with the conflict.
         name: String,
+        /// Human-readable layout detail.
         detail: String,
     },
+    /// Typed tag registration violated zero-sized non-dropping requirements.
     InvalidTag {
+        /// Registration name associated with the conflict.
         name: String,
+        /// Human-readable validation detail.
         detail: String,
     },
+    /// Requested storage policy is incompatible with the component shape.
     UnsupportedStorage {
+        /// Registration name associated with the conflict.
         name: String,
+        /// Human-readable policy detail.
         detail: String,
     },
 }
@@ -60,6 +83,7 @@ impl ComponentId {
         Self { owner, index }
     }
 
+    /// Dense registry index for diagnostics and lifecycle event wiring.
     pub fn index(&self) -> usize {
         self.index as usize
     }

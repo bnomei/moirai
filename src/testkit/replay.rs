@@ -1,15 +1,18 @@
+//! Generic replay loop, driver fixture wiring, and report comparison.
+
 use super::config::ReplayConfig;
 use super::driver::ReplayDriver;
 use super::error::ReplayRunError;
 use super::report::{ReplayFailure, ReplayReport};
 use super::step::StepIndex;
 
-/// Run a host-owned replay driver under a finite checked step policy.
+/// Run a host [`ReplayDriver`] fixture under a finite checked step policy.
 ///
-/// Each successful driver step must return a [`StepRecord`](super::record::StepRecord) whose
-/// [`step`](super::record::StepRecord::step) matches the checked step Moirai invoked. A mismatch
-/// fails the replay with [`ReplayRunError::StepMismatch`] while retaining any partial report
-/// captured before the failure.
+/// `factory` receives the configured seed and must return a deterministic driver. Each successful
+/// step must return a [`StepRecord`](super::record::StepRecord) whose
+/// [`StepRecord::step`](super::record::StepRecord::step) matches the checked step Moirai
+/// invoked. A mismatch fails the replay with [`ReplayRunError::StepMismatch`] while retaining any
+/// partial report captured before the failure.
 #[allow(clippy::result_large_err)]
 pub fn run_replay<S, D, F>(
     config: ReplayConfig,
@@ -81,7 +84,7 @@ fn advance_replay_step<E>(step: StepIndex) -> Result<StepIndex, ReplayRunError<E
     step.next().map_err(|_| ReplayRunError::StepOverflow)
 }
 
-/// Compare two replay reports for exact snapshot equality.
+/// Compare two replay reports for seed, config, snapshot, and metric equality.
 pub fn reports_match<S: Eq>(left: &ReplayReport<S>, right: &ReplayReport<S>) -> bool {
     left.seed() == right.seed()
         && left.config() == right.config()

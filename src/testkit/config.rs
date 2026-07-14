@@ -1,6 +1,8 @@
+//! Finite replay run policy and per-step record capture selection.
+
 use core::fmt;
 
-/// When replay captures host snapshots into the final report.
+/// When replay step records are retained in the final [`ReplayReport`](super::report::ReplayReport).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CapturePolicy {
@@ -10,7 +12,7 @@ pub enum CapturePolicy {
     FinalOnly,
 }
 
-/// Finite replay run policy. The host factory receives `seed`; Moirai owns no RNG.
+/// Finite replay run policy for [`run_replay`](super::replay::run_replay) and [`replay_app`](super::app::replay_app).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReplayConfig {
     seed: u64,
@@ -18,14 +20,16 @@ pub struct ReplayConfig {
     capture: CapturePolicy,
 }
 
-/// Invalid replay configuration.
+/// Invalid [`ReplayConfig`] for a finite replay run.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReplayConfigError {
+    /// Replay cannot run with zero steps.
     ZeroSteps,
 }
 
 impl ReplayConfig {
+    /// Build a finite replay policy. `seed` is forwarded to the host driver fixture; Moirai owns no RNG.
     pub fn new(seed: u64, steps: u32, capture: CapturePolicy) -> Result<Self, ReplayConfigError> {
         if steps == 0 {
             return Err(ReplayConfigError::ZeroSteps);
@@ -37,14 +41,17 @@ impl ReplayConfig {
         })
     }
 
+    /// Replay seed recorded in the report and passed to the driver fixture.
     pub fn seed(&self) -> u64 {
         self.seed
     }
 
+    /// Maximum successful replay steps before the run ends.
     pub fn steps(&self) -> u32 {
         self.steps
     }
 
+    /// When step records are captured into the final report.
     pub fn capture(&self) -> CapturePolicy {
         self.capture
     }

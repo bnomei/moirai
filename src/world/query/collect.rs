@@ -1,3 +1,5 @@
+//! Collect query entity ids from sparse, table, archetype, and exact-id sources.
+
 use alloc::vec::Vec;
 
 use crate::entity::EntityId;

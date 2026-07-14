@@ -1,4 +1,7 @@
-//! Typed World access helpers.
+//! Typed [`World`] access helpers.
+//!
+//! [`DenseEntityScratch`] provides generational, entity-keyed transient storage for
+//! per-system scratch data that must not outlive live entity handles.
 
 use alloc::collections::TryReserveError;
 use alloc::vec::Vec;
@@ -8,7 +11,7 @@ use crate::entity::EntityId;
 
 use super::World;
 
-/// Failure while accessing transient entity-keyed scratch storage.
+/// Failure while accessing [`DenseEntityScratch`] against a bound world.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum EntityScratchError {

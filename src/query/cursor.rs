@@ -1,8 +1,13 @@
+//! Change-detection cursor bound to one query spec and world owner.
+//!
+//! Records the last [`ChangeTick`] observed by a successful
+//! added/changed traversal. Typed iterators commit the cursor only after full exhaustion.
+
 use crate::query::QueryError;
 use crate::time::ChangeTick;
 use crate::world::WorldOwner;
 
-/// Owner- and spec-scoped last-observed tick for added/changed windows.
+/// Last-observed change tick for one owner-bound added/changed query window.
 pub struct QueryCursor {
     owner: WorldOwner,
     fingerprint: u64,
@@ -10,6 +15,7 @@ pub struct QueryCursor {
 }
 
 impl QueryCursor {
+    /// Opens a window from the start of change history for a single-component query.
     pub fn from_spec_start<T: 'static>(
         world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
@@ -18,6 +24,7 @@ impl QueryCursor {
         Ok(Self::from_start(world, fingerprint))
     }
 
+    /// Opens a window ending at the world's current change tick for a single-component query.
     pub fn from_spec_now<T: 'static>(
         world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
@@ -26,6 +33,7 @@ impl QueryCursor {
         Self::from_now(world, fingerprint)
     }
 
+    /// Opens a window from the start of change history for a two-component query.
     pub fn from_spec2_start<A: 'static, B: 'static>(
         world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
@@ -34,6 +42,7 @@ impl QueryCursor {
         Ok(Self::from_start(world, plan.fingerprint))
     }
 
+    /// Opens a window ending at the world's current change tick for a two-component query.
     pub fn from_spec2_now<A: 'static, B: 'static>(
         world: &mut crate::world::World,
         spec: &crate::query::QuerySpec,
@@ -51,6 +60,7 @@ impl QueryCursor {
         Ok(Self::from_start(world, fingerprint))
     }
 
+    /// Copies the cursor without advancing its observed tick.
     pub fn fork(&self) -> Self {
         Self {
             owner: self.owner.clone(),
@@ -94,6 +104,7 @@ impl QueryCursor {
         Ok(())
     }
 
+    /// Lower bound of the active half-open change window `(since, captured_now]`.
     pub fn since(&self) -> ChangeTick {
         self.last_observed
     }

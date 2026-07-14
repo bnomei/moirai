@@ -1,3 +1,9 @@
+//! World-scoped resource and state storage.
+//!
+//! Resource inserts and mutable borrows issue change ticks. [`World::resource_scope_mut`]
+//! and [`World::resource_scope_ref`] temporarily remove a resource while running a
+//! closure against the rest of the world.
+
 use crate::resource::ScopedResource;
 use crate::time::ChangeTick;
 use crate::world::{World, WorldError};
@@ -65,10 +71,12 @@ impl<R: 'static> Drop for ResourceScopeGuard<'_, R> {
 }
 
 impl World {
+    /// Whether resource `R` is registered and currently stored.
     pub fn contains_resource<R: 'static>(&self) -> bool {
         self.resources.contains::<R>()
     }
 
+    /// Insert or replace resource `R`, returning any previous value.
     pub fn insert_resource<R: 'static>(&mut self, value: R) -> Result<Option<R>, WorldError> {
         self.ensure_mutable()?;
         self.resources.prepare_insert::<R>()?;
@@ -76,15 +84,18 @@ impl World {
         self.resources.insert(value, tick)
     }
 
+    /// Remove resource `R` when it is not locked or scoped.
     pub fn remove_resource<R: 'static>(&mut self) -> Result<Option<R>, WorldError> {
         self.ensure_mutable()?;
         self.resources.remove::<R>()
     }
 
+    /// Immutable access to resource `R`.
     pub fn resource<R: 'static>(&self) -> Result<Option<&R>, WorldError> {
         self.resources.get::<R>()
     }
 
+    /// Mutable access to resource `R`, issuing a change tick when present.
     pub fn resource_mut<R: 'static>(&mut self) -> Result<Option<&mut R>, WorldError> {
         self.ensure_mutable()?;
         if !self.resources.prepare_mut::<R>()? {
@@ -94,14 +105,17 @@ impl World {
         self.resources.get_mut::<R>(tick)
     }
 
+    /// Change tick recorded when resource `R` was last inserted.
     pub fn resource_added_tick<R: 'static>(&self) -> Result<Option<ChangeTick>, WorldError> {
         self.resources.added_tick::<R>()
     }
 
+    /// Change tick recorded when resource `R` was last mutated.
     pub fn resource_changed_tick<R: 'static>(&self) -> Result<Option<ChangeTick>, WorldError> {
         self.resources.changed_tick::<R>()
     }
 
+    /// Temporarily remove resource `R`, run `f` with mutable access, then restore it.
     pub fn resource_scope_mut<R: 'static, T>(
         &mut self,
         f: impl FnOnce(Option<&mut R>, &mut World) -> T,
@@ -120,6 +134,7 @@ impl World {
         Ok(result)
     }
 
+    /// Temporarily remove resource `R`, run `f` with shared access, then restore it.
     pub fn resource_scope_ref<R: 'static, T>(
         &mut self,
         f: impl FnOnce(Option<&R>, &mut World) -> T,

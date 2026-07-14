@@ -1,3 +1,8 @@
+//! Deferred command queue, preflight validation, and the [`Commands`] facade.
+//!
+//! Structural changes enqueue as [`CommandOp`] variants and commit during schedule flush after
+//! batch validation against live and reserved entity state.
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -410,7 +415,9 @@ impl<'a> LiveSet<'a> {
     }
 }
 
-/// Borrowed deferred structural mutation facade.
+/// Borrowed deferred structural mutation facade for one active world run.
+///
+/// Spawn reserves an entity immediately; commit happens at the next flush boundary.
 pub struct Commands<'w> {
     world: &'w mut World,
 }
@@ -420,6 +427,7 @@ impl<'w> Commands<'w> {
         Self { world }
     }
 
+    /// Reserves a new entity and queues spawn commit at the next flush.
     pub fn spawn(&mut self) -> Result<EntityId, WorldError> {
         self.world.ensure_mutable()?;
         let entity = self
@@ -433,6 +441,7 @@ impl<'w> Commands<'w> {
         Ok(entity)
     }
 
+    /// Spawns one entity and queues bundle writes; rolls back reservation on failure.
     pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Result<EntityId, WorldError> {
         let queue_len = self.world.command_queue_mut().len();
         let entity = self.spawn()?;
@@ -458,6 +467,7 @@ impl<'w> Commands<'w> {
         Ok(())
     }
 
+    /// Queues despawn for a live or reserved entity target.
     pub fn despawn(&mut self, entity: EntityId) -> Result<(), WorldError> {
         self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
@@ -467,18 +477,21 @@ impl<'w> Commands<'w> {
         Ok(())
     }
 
+    /// Queues component insertion for a live or reserved entity target.
     pub fn insert<T: 'static>(&mut self, entity: EntityId, value: T) -> Result<(), WorldError> {
         self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
         self.world.command_queue_mut().enqueue_insert(entity, value)
     }
 
+    /// Queues component removal for a live or reserved entity target.
     pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<(), WorldError> {
         self.world.ensure_mutable()?;
         self.world.ensure_command_target(entity)?;
         self.world.command_queue_mut().enqueue_remove::<T>(entity)
     }
 
+    /// Queues bundle writes for an existing live or reserved entity target.
     pub fn insert_bundle<B: Bundle>(
         &mut self,
         entity: EntityId,

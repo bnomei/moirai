@@ -1,3 +1,10 @@
+//! ECS [`World`]: entities, components, resources, events, and deferred [`Commands`].
+//!
+//! Build schema with [`WorldBuilder`], mutate immediately or through [`World::commands`]
+//! followed by [`World::flush`], and resolve query plans against archetype and sparse
+//! storage. Structural entity changes require an idle run guard; component value writes
+//! issue [`ChangeTick`] until exhaustion poisons further mutation.
+
 mod access;
 mod builder;
 mod bundle;
@@ -38,13 +45,14 @@ use crate::time::{ChangeTick, ChangeTickError, WorldTick};
 
 use self::guard::RunGuard;
 
+// Event registry, retained storage, and per-component lifecycle channels.
 pub(crate) struct WorldEvents {
     pub registry: EventRegistry,
     pub storage: EventStorage,
     pub lifecycle: ComponentLifecycleRegistry,
 }
 
-/// ECS world with checked sparse-component lifecycle.
+/// Live ECS world owning entities, component storage, resources, events, and commands.
 pub struct World {
     owner: WorldOwner,
     allocator: EntityAllocator,
@@ -223,10 +231,14 @@ impl World {
         self.run_guard.clone()
     }
 
+    /// World tick advanced once per compiled schedule pass.
     pub fn world_tick(&self) -> WorldTick {
         self.world_tick
     }
 
+    /// Deferred [`Commands`] queue for structural entity and component changes.
+    ///
+    /// Unavailable during render runs. Committed by [`World::flush`].
     pub fn commands(&mut self) -> Result<Commands<'_>, WorldError> {
         if self.run_guard.operation() == Some(crate::operation::StageOperation::Render) {
             return Err(WorldError::StructuralCommandsDuringRender);
@@ -283,6 +295,9 @@ impl World {
         self.world_tick.advance().map(|_| ())
     }
 
+    /// Spawn an entity and write a [`Bundle`] in one checked transaction.
+    ///
+    /// Rolls back the entity allocation when bundle insertion fails.
     pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Result<EntityId, WorldError> {
         let entity = self.spawn()?;
         self.lifecycle_events_suppressed = true;
@@ -311,6 +326,7 @@ impl World {
         }
     }
 
+    /// Whether `entity` refers to a live slot owned by this world.
     pub fn is_alive(&self, entity: EntityId) -> bool {
         self.allocator.is_alive(entity)
     }
@@ -319,6 +335,9 @@ impl World {
         self.allocator.owns(entity)
     }
 
+    /// Allocate a new live entity.
+    ///
+    /// Structural mutation; requires an idle run guard.
     pub fn spawn(&mut self) -> Result<EntityId, WorldError> {
         self.ensure_idle_structural()?;
         self.ensure_mutable()?;
@@ -327,6 +346,9 @@ impl World {
         Ok(entity)
     }
 
+    /// Despawn `entity`, removing all components and freeing its slot.
+    ///
+    /// Structural mutation; requires an idle run guard.
     pub fn despawn(&mut self, entity: EntityId) -> Result<(), WorldError> {
         self.ensure_idle_structural()?;
         self.ensure_mutable()?;
@@ -339,6 +361,10 @@ impl World {
         Ok(())
     }
 
+    /// Insert or replace component `T` on a live entity.
+    ///
+    /// Returns the replaced value when the component was already present.
+    /// Structural mutation; requires an idle run guard.
     pub fn insert<T: 'static>(
         &mut self,
         entity: EntityId,
@@ -379,6 +405,9 @@ impl World {
         Ok(replaced)
     }
 
+    /// Add tag `tag` to `entity`.
+    ///
+    /// Returns `true` when the tag was newly added.
     pub fn add_tag(&mut self, entity: EntityId, tag: &ComponentId) -> Result<bool, WorldError> {
         self.ensure_idle_structural()?;
         self.ensure_mutable()?;
@@ -395,6 +424,9 @@ impl World {
         Ok(added)
     }
 
+    /// Remove tag `tag` from `entity`.
+    ///
+    /// Returns `true` when the tag was present.
     pub fn remove_tag(&mut self, entity: EntityId, tag: &ComponentId) -> Result<bool, WorldError> {
         self.ensure_idle_structural()?;
         self.ensure_mutable()?;
@@ -410,6 +442,7 @@ impl World {
         Ok(removed)
     }
 
+    /// Whether `entity` carries tag `tag`.
     pub fn has_tag(&self, entity: EntityId, tag: &ComponentId) -> Result<bool, WorldError> {
         self.ensure_live_access(entity)?;
         tag.validate_owner(&self.owner)?;
@@ -421,6 +454,7 @@ impl World {
         Ok(self.tag_store(tag.index()).contains(entity))
     }
 
+    /// Immutable access to component `T` on a live entity.
     pub fn get<T: 'static>(&self, entity: EntityId) -> Result<Option<&T>, WorldError> {
         self.ensure_live_access(entity)?;
         let component_id = self.component_id::<T>()?;
@@ -436,6 +470,9 @@ impl World {
         Ok(self.sparse_store::<T>(component_id)?.get(entity))
     }
 
+    /// Mutable access to component `T` on a live entity.
+    ///
+    /// Issues a change tick when the component is present.
     pub fn get_mut<T: 'static>(&mut self, entity: EntityId) -> Result<Option<&mut T>, WorldError> {
         self.ensure_mutable()?;
         self.ensure_live_access(entity)?;
@@ -485,6 +522,9 @@ impl World {
             .get_mut_with_tick(entity, tick))
     }
 
+    /// Remove component `T` from `entity`, returning the stored value when present.
+    ///
+    /// Structural mutation; requires an idle run guard.
     pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<Option<T>, WorldError> {
         self.ensure_idle_structural()?;
         self.ensure_mutable()?;
@@ -509,6 +549,7 @@ impl World {
         Ok(removed)
     }
 
+    /// Number of entities storing sparse component `T`.
     pub fn len_sparse<T: 'static>(&self) -> Result<usize, WorldError> {
         let component_id = self.component_id::<T>()?;
         Ok(self.sparse_store::<T>(component_id)?.len())
@@ -518,6 +559,7 @@ impl World {
         &self.owner
     }
 
+    /// Current change tick used by queries and mutation tracking.
     pub fn change_tick(&self) -> ChangeTick {
         self.change_tick
     }

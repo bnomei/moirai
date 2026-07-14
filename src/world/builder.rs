@@ -1,3 +1,8 @@
+//! Checked [`World`] schema construction.
+//!
+//! Registers components, resources, state, and events, then materializes sparse stores,
+//! archetype column factories, and lifecycle event channels in [`WorldBuilder::build`].
+
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::any::TypeId;
@@ -40,7 +45,7 @@ fn map_lifecycle_registration_error(error: EventRegistrationError) -> Registrati
     }
 }
 
-/// Checked world schema construction.
+/// Authoring surface for a validated [`World`] schema.
 pub struct WorldBuilder {
     owner: WorldOwner,
     registry: ComponentRegistry,
@@ -53,6 +58,7 @@ pub struct WorldBuilder {
 }
 
 impl WorldBuilder {
+    /// Empty builder with a fresh world owner token.
     pub fn new() -> Self {
         Self {
             owner: WorldOwner::new(),
@@ -66,6 +72,7 @@ impl WorldBuilder {
         }
     }
 
+    /// Register typed component `T` with `options` and wire lifecycle events.
     pub fn register_component<T: 'static>(
         &mut self,
         options: ComponentOptions,
@@ -73,6 +80,7 @@ impl WorldBuilder {
         self.register_component_named::<T>(None, options)
     }
 
+    /// Register typed component `T` with an optional debug name.
     pub fn register_component_named<T: 'static>(
         &mut self,
         name: Option<&str>,
@@ -96,6 +104,7 @@ impl WorldBuilder {
         Ok(id)
     }
 
+    /// Register an untyped tag component identified by `name`.
     pub fn register_tag(&mut self, name: &str) -> Result<ComponentId, RegistrationError> {
         let id = self
             .registry
@@ -106,12 +115,14 @@ impl WorldBuilder {
         Ok(id)
     }
 
+    /// Reserve a resource slot for `R` without seeding an initial value.
     pub fn register_resource<R: 'static>(&mut self) {
         self.resource_registrars.push(Box::new(|store| {
             store.register::<R>();
         }));
     }
 
+    /// Reserve [`State<S>`](crate::state::State) without seeding an initial value.
     pub fn register_state<S: Eq + 'static>(&mut self) {
         self.resource_registrars.push(Box::new(|store| {
             store.register_state::<S>();
@@ -142,6 +153,7 @@ impl WorldBuilder {
         self
     }
 
+    /// Register manual or frame-scoped event channel `E`.
     pub fn add_event<E: Clone + 'static>(
         &mut self,
         options: EventOptions,
@@ -149,6 +161,7 @@ impl WorldBuilder {
         self.event_registry.register::<E>(&self.owner, options)
     }
 
+    /// Materialize storage, resources, events, and seeded values into a [`World`].
     pub fn build(mut self) -> Result<World, WorldError> {
         let mut sparse_stores = Vec::with_capacity(self.registry.len());
         for index in 0..self.registry.len() {

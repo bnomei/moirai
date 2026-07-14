@@ -1,3 +1,8 @@
+//! Event channel storage, retention enforcement, and independent typed readers.
+//!
+//! [`EventStorage`] backs send/read/fork operations. [`EventReader`] tracks a private cursor and
+//! clones payloads so multiple readers can observe the same channel independently.
+
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::rc::{Rc, Weak};
@@ -40,14 +45,18 @@ enum EventEntries {
 const READER_PRUNE_INTERVAL: u8 = 128;
 const LINEAR_BOUNDED_CAPACITY_MAX: usize = 16;
 
-/// Explicit reader start policy.
+/// Explicit reader cursor policy when creating an [`EventReader`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EventReaderStart {
+    /// Begin at the oldest payload still retained by the channel.
     OldestRetained,
+    /// Begin after the current channel tail, skipping prior history.
     FromNow,
 }
 
 /// Independent typed event reader whose reads own cloned payloads.
+///
+/// Forked readers replay from their own cursor without advancing the parent.
 pub struct EventReader<E> {
     owner: WorldOwner,
     pub(crate) event_id: EventId,
@@ -452,6 +461,7 @@ impl EventEntries {
 }
 
 impl<E: Clone + 'static> EventReader<E> {
+    /// Creates a sibling reader sharing this channel with an independent cursor.
     pub fn fork(&mut self, world: &mut crate::world::World) -> Result<Self, WorldError> {
         world.fork_event_reader(self)
     }

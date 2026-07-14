@@ -1,3 +1,10 @@
+//! Deterministic ECS schedule: stages, systems, conditions, and deferred flush policy.
+//!
+//! Authoring flows through [`ScheduleBuilder`] into a compiled [`Schedule`] that
+//! [`crate::App`] executes with per-pass condition cursors and set gates. Build-time
+//! validation covers ordering, event roles, flush modes, and world-lease attachment;
+//! runtime faults surface as structured stage/system fault records.
+
 mod builder;
 mod compiled;
 mod condition;
@@ -26,7 +33,7 @@ use crate::schedule::owner::ScheduleOwner;
 use crate::time::{ChangeTick, FixedStep};
 use crate::world::World;
 
-/// Per-pass execution scratch state for conditions and fixed steps.
+/// Per-pass scratch for condition cursors, set gates, and fixed-step indices.
 pub(crate) struct RunContext {
     pub(crate) fixed_step: Option<FixedStep>,
     resource_added_cursors: BTreeMap<(usize, TypeId), ChangeTick>,
@@ -202,7 +209,7 @@ impl Default for RunContext {
     }
 }
 
-/// Validated compiled schedule executed only through `App`.
+/// Immutable compiled schedule graph; execution is mediated by [`crate::App`].
 pub struct Schedule {
     pub(crate) compiled: CompiledSchedule,
 }
@@ -218,6 +225,7 @@ pub struct UpdatePlan {
 }
 
 impl UpdatePlan {
+    /// Confirms the plan was built from the same compiled schedule instance.
     pub(crate) fn validate_owner(&self, owner: &ScheduleOwner) -> Result<(), ScheduleError> {
         if self.owner.same(owner) {
             Ok(())
@@ -228,10 +236,12 @@ impl UpdatePlan {
 }
 
 impl Schedule {
+    /// Empty authoring graph with no built-in stages.
     pub fn builder() -> ScheduleBuilder {
         ScheduleBuilder::new()
     }
 
+    /// Authoring graph preloaded with Startup, FixedUpdate, Update, and Render stages.
     pub fn standard_builder() -> ScheduleBuilder {
         ScheduleBuilder::standard()
     }
@@ -240,6 +250,7 @@ impl Schedule {
         &self.compiled.lease
     }
 
+    /// Resolves a compiled system label to an opaque handle for runtime toggling.
     pub fn system_id(&self, name: &str) -> Option<SystemId> {
         self.compiled
             .systems
@@ -268,6 +279,7 @@ impl Schedule {
             .ok_or(ScheduleError::StaleHandle)
     }
 
+    /// Enables or disables a compiled system without rebuilding the schedule.
     pub fn set_system_enabled(
         &mut self,
         id: &SystemId,

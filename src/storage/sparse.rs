@@ -1,3 +1,8 @@
+//! Sparse set with dense iteration and per-value change detection.
+//!
+//! `entity.slot()` maps through `sparse` into parallel `dense`, `data`, `added`, and `changed`
+//! vectors so queries can scan populations without walking empty slots.
+
 use alloc::vec::Vec;
 
 use crate::entity::EntityId;
@@ -13,6 +18,7 @@ pub(crate) struct SparseSet<T> {
     changed: Vec<u64>,
 }
 
+/// Dense `(slot, value)` iterator over one [`SparseSet`].
 #[allow(dead_code)]
 pub(crate) struct SparseIter<'a, T> {
     index: usize,

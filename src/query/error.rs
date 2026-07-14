@@ -1,44 +1,42 @@
+//! Query configuration, ownership, borrow, and cache diagnostics.
+
 use alloc::string::String;
 
-/// Query configuration, ownership, borrow, and cache diagnostics.
+/// Failure while resolving, traversing, caching, or mutating through a query.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QueryError {
-    UnregisteredComponent {
-        name: String,
-    },
-    WrongStorageKind {
-        name: String,
-    },
-    ConflictingFilters {
-        detail: String,
-    },
-    DuplicateMutableComponent {
-        name: String,
-    },
+    /// Query referenced a component type that is not registered in the world schema.
+    UnregisteredComponent { name: String },
+    /// Query traversal expected a different storage kind for the named component.
+    WrongStorageKind { name: String },
+    /// Query spec combined incompatible structural or temporal filters.
+    ConflictingFilters { detail: String },
+    /// Mutable traversal requested the same component type more than once.
+    DuplicateMutableComponent { name: String },
+    /// Query handle or cursor belongs to a different world owner.
     WrongOwner,
+    /// Membership or result cache handle is stale for its slot and generation.
     StaleCache,
-    WrongQuery {
-        detail: String,
-    },
+    /// Cursor, cache, event, or plan does not match the active query configuration.
+    WrongQuery { detail: String },
+    /// Result-cache policy cannot serve added/changed moving windows.
     MovingChangeWindow,
-    UnsupportedCachePolicy {
-        detail: String,
-    },
+    /// Prepared-query materialization policy is incompatible with the resolved plan.
+    UnsupportedCachePolicy { detail: String },
+    /// Exact-id order conflicts with a result cache that reorders matches.
     ExactIdOrderConflict,
-    DuplicateExactId {
-        entity: crate::EntityId,
-    },
-    MissingExactId {
-        entity: crate::EntityId,
-    },
-    BorrowConflict {
-        detail: String,
-    },
-    CommandRejected {
-        detail: String,
-    },
+    /// Exact-id list contains the same entity more than once.
+    DuplicateExactId { entity: crate::EntityId },
+    /// Exact-id policy requires every listed entity to be available.
+    MissingExactId { entity: crate::EntityId },
+    /// Query traversal cannot borrow world state for the requested operation.
+    BorrowConflict { detail: String },
+    /// Deferred command or bundle write was rejected before enqueue.
+    CommandRejected { detail: String },
+    /// Cache handle owner token does not match the active world.
     OwnerMismatch,
+    /// Mutable traversal stopped early because a callback returned an error.
     TraversalAborted {
         entity: crate::EntityId,
         detail: String,

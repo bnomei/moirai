@@ -1,13 +1,13 @@
-/// Where component data lives in the world.
+/// Where registered component data is stored in the world.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum StorageKind {
-    /// Per-entity sparse set.
+    /// Per-entity sparse set; default for tags and ordinary data components today.
     Sparse,
-    /// Archetype column storage (Phase 3).
+    /// Archetype column storage for table-backed components (Phase 3).
     Table,
 }
 
-/// Registration-time storage and tag policy.
+/// Registration-time storage layout and tag policy for one component type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ComponentOptions {
     storage: StorageKind,
@@ -15,6 +15,7 @@ pub struct ComponentOptions {
 }
 
 impl ComponentOptions {
+    /// Default sparse-set storage for ordinary data components.
     pub const fn sparse() -> Self {
         Self {
             storage: StorageKind::Sparse,
@@ -22,6 +23,7 @@ impl ComponentOptions {
         }
     }
 
+    /// Archetype column storage for data components (Phase 3 table backend).
     pub const fn table() -> Self {
         Self {
             storage: StorageKind::Table,
@@ -29,6 +31,7 @@ impl ComponentOptions {
         }
     }
 
+    /// Zero-sized marker component stored in sparse sets.
     pub const fn tag() -> Self {
         Self {
             storage: StorageKind::Sparse,

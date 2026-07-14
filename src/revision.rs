@@ -1,4 +1,7 @@
-//! Checked monotonic revisions and fixed-width revision keys.
+//! Checked monotonic revisions and fixed-width revision keys for cache identity.
+//!
+//! [`Revision`] backs query and storage invalidation counters. [`RevisionKey`] groups ordered
+//! revision fields into deterministic comparison keys.
 
 use core::fmt;
 

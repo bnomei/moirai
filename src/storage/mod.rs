@@ -1,3 +1,11 @@
+//! Component storage engines: sparse sets and archetype tables.
+//!
+//! **Semantic map**
+//! - [`sparse`]: entity-indexed sparse arrays with dense iteration and change ticks.
+//! - [`erased`]: type-erased sparse facade for registry-driven lookup.
+//! - [`archetype`]: signature-grouped entity rows and column migration.
+//! - [`table`]: typed component columns within an archetype.
+
 mod archetype;
 mod erased;
 mod sparse;

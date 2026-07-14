@@ -1,6 +1,11 @@
+//! Owner-scoped query cache handles.
+//!
+//! [`QueryCache`] stores structural membership; added/changed filters still apply at traversal.
+//! [`QueryResultCache`] stores a materialized id list and rejects moving change windows.
+
 use crate::world::WorldOwner;
 
-/// Owner-scoped membership acceleration handle.
+/// Handle to a cached structural membership set for one world owner and query spec.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct QueryCache {
     pub(crate) owner: WorldOwner,
@@ -8,7 +13,7 @@ pub struct QueryCache {
     pub(crate) generation: u32,
 }
 
-/// Owner-scoped materialized entity-id result handle.
+/// Handle to a cached, fully materialized entity-id result for one world owner and query spec.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct QueryResultCache {
     pub(crate) owner: WorldOwner,

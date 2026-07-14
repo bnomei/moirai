@@ -1,3 +1,5 @@
+//! Drive deterministic replay through [`App::update_with`](crate::app::App::update_with).
+
 use alloc::vec::Vec;
 
 use crate::app::{App, AppError};
@@ -12,7 +14,12 @@ use super::step::StepIndex;
 type RecordValidation<S> =
     Result<(ReplayReport<S>, StepRecord<S>), ReplayFailure<ReplayRunError<AppError>, S>>;
 
-/// Capture replay evidence through `App::update_with` after final flush and before frame clearing.
+/// Capture replay evidence from an [`App`](crate::app::App) across a finite [`ReplayConfig`].
+///
+/// Each replay step runs `update_with`, then records a host fixture snapshot and metrics after
+/// the final structural flush and before the frame is cleared. Failures return a
+/// [`ReplayFailure`] with any step records already captured under the configured
+/// [`CapturePolicy`](super::config::CapturePolicy).
 #[allow(clippy::result_large_err)]
 pub fn replay_app<S>(
     app: &mut App,

@@ -1,3 +1,9 @@
+//! Internal query execution against world storage and topology revisions.
+//!
+//! Resolves [`QuerySpec`](crate::query::QuerySpec) into cached plans, collects entity
+//! membership from sparse, table, and archetype sources, and drives mutable query
+//! traversal with change-tick preflight.
+
 pub(crate) mod cache;
 pub(crate) mod cached_source;
 pub(crate) mod collect;

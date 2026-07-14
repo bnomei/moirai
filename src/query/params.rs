@@ -1,7 +1,12 @@
+//! Execution options for one-shot [`World`](crate::world::World) query calls.
+//!
+//! Choose an explicit [`ChangeTick`], a reusable [`QueryCursor`], or a
+//! membership/result cache handle. `since` and `cursor` are mutually exclusive.
+
 use crate::query::{QueryCache, QueryCursor, QueryResultCache};
 use crate::time::ChangeTick;
 
-/// Execution options for a resolved query.
+/// Per-execution window and cache options for ad hoc query traversal.
 pub struct QueryParams<'a> {
     pub(crate) since: Option<ChangeTick>,
     pub(crate) cursor: Option<&'a mut QueryCursor>,
@@ -10,6 +15,7 @@ pub struct QueryParams<'a> {
 }
 
 impl<'a> QueryParams<'a> {
+    /// Default window from the start of change history with no cache acceleration.
     pub fn new() -> Self {
         Self {
             since: None,
@@ -19,24 +25,28 @@ impl<'a> QueryParams<'a> {
         }
     }
 
+    /// Half-open added/changed window `(tick, captured_now]`, clearing any cursor binding.
     pub fn since(mut self, tick: ChangeTick) -> Self {
         self.since = Some(tick);
         self.cursor = None;
         self
     }
 
+    /// Reusable change-detection cursor for added/changed filters.
     pub fn cursor(mut self, cursor: &'a mut QueryCursor) -> Self {
         self.cursor = Some(cursor);
         self.since = None;
         self
     }
 
+    /// Structural membership cache; moving added/changed filters still apply at traversal.
     pub fn membership_cache(mut self, cache: &'a QueryCache) -> Self {
         self.membership_cache = Some(cache);
         self.result_cache = None;
         self
     }
 
+    /// Fully materialized result cache; incompatible with added/changed moving windows.
     pub fn result_cache(mut self, cache: &'a QueryResultCache) -> Self {
         self.result_cache = Some(cache);
         self.membership_cache = None;

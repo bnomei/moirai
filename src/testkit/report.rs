@@ -1,3 +1,5 @@
+//! Completed replay evidence and partial failure reports.
+
 use alloc::vec::Vec;
 
 use super::config::ReplayConfig;
@@ -33,18 +35,22 @@ impl<S> ReplayReport<S> {
         self.steps.push(record.into_snapshot());
     }
 
+    /// Seed from the replay config used for this run.
     pub fn seed(&self) -> u64 {
         self.seed
     }
 
+    /// Replay policy that governed capture and step count.
     pub fn config(&self) -> &ReplayConfig {
         &self.config
     }
 
+    /// Captured step records after [`CapturePolicy`](super::config::CapturePolicy) filtering.
     pub fn step_snapshots(&self) -> &[StepSnapshot<S>] {
         &self.steps
     }
 
+    /// Host fixture snapshots across captured replay steps.
     pub fn snapshots(&self) -> impl Iterator<Item = &S> {
         self.steps.iter().map(|step| step.snapshot())
     }
@@ -59,14 +65,17 @@ impl<E, S> ReplayFailure<E, S> {
         }
     }
 
+    /// Checked replay step where the run failed.
     pub fn step(&self) -> StepIndex {
         self.step
     }
 
+    /// Step records captured before the failure, if any.
     pub fn partial_report(&self) -> &ReplayReport<S> {
         &self.partial_report
     }
 
+    /// Replay failure source at the failing step.
     pub fn source(&self) -> &E {
         &self.source
     }

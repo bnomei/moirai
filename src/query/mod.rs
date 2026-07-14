@@ -1,7 +1,14 @@
-//! Stable query facade.
+//! Query selection, traversal, caching, and safe mutation.
 //!
-//! Learn the query surface in the ordered lessons beginning with
-//! [`crate::examples::tier_c::c01_prepared_queries`].
+//! **Semantic map**
+//! - [`QuerySpec`]: structural filters (`with`, `without`, tags, `added`, `changed`, exact ids).
+//! - `QueryParams` / [`QueryWindow`]: execution window (`since`, [`QueryCursor`], caches).
+//! - [`Query1`] / [`Query2`]: read iterators over sparse, table, cached, or exact sources.
+//! - [`PreparedQuery1`] / [`PreparedQuery2`]: reusable plans with [`QueryPolicy`] materialization.
+//! - [`QueryCursor`]: owner-bound change-detection window for added/changed filters.
+//! - `QueryCache` / `QueryResultCache`: membership and result acceleration handles.
+//! - [`QueryEffects`] / [`QueryCommands`]: deferred structural changes during traversal.
+//! - [`QueryError`]: configuration, ownership, borrow, and cache diagnostics.
 
 mod cache;
 mod cursor;

@@ -1,3 +1,7 @@
+//! Generational entity allocator with explicit free, reserved, live, and retired slot states.
+//!
+//! Used internally by [`crate::world::World`] spawn, reserve, commit, and despawn paths.
+
 use alloc::vec::Vec;
 
 use super::EntityId;

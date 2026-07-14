@@ -1,3 +1,8 @@
+//! Type-erased sparse component storage.
+//!
+//! [`SparseStore`] dispatches between typed payloads, tag markers, and empty placeholders.
+//! [`ErasedSparseStorage`] exposes dense slots and change-detection metadata without `T`.
+
 use alloc::boxed::Box;
 use core::any::Any;
 
@@ -5,6 +10,7 @@ use crate::entity::EntityId;
 use crate::storage::sparse::SparseSet;
 use crate::time::ChangeTick;
 
+/// Sparse storage operations visible to the world without monomorphizing over `T`.
 #[allow(dead_code)]
 pub(crate) trait ErasedSparseStorage {
     fn remove_entity(&mut self, entity: EntityId);
@@ -17,6 +23,7 @@ pub(crate) trait ErasedSparseStorage {
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
+/// Typed sparse component population with per-entity change ticks.
 pub(crate) struct TypedSparseStorage<T: 'static> {
     set: SparseSet<T>,
 }
@@ -106,6 +113,7 @@ impl<T: 'static> ErasedSparseStorage for TypedSparseStorage<T> {
     }
 }
 
+/// Sparse tag-marker storage backed by unit payloads in a [`SparseSet`].
 #[allow(dead_code)]
 pub(crate) struct TagSparseStorage {
     set: SparseSet<()>,
@@ -184,9 +192,13 @@ impl ErasedSparseStorage for TagSparseStorage {
     }
 }
 
+/// Registry-selected sparse storage variant for one component index.
 pub(crate) enum SparseStore {
+    /// Zero-sized tag marker population.
     Tag(TagSparseStorage),
+    /// Typed or dynamically erased payload storage.
     Erased(Box<dyn ErasedSparseStorage>),
+    /// Inert placeholder for unregistered or unused indices.
     Empty,
 }
 

@@ -1,13 +1,20 @@
+//! Explicit host state machine backed by a [`crate::world::World`] resource.
+//!
+//! [`State`] queues at most one pending transition per frame. [`apply`] commits pending values on a
+//! dedicated schedule boundary; [`on_exit`], [`on_transition`], and [`on_enter`] observe the ordered
+//! transition lifecycle through [`crate::schedule::Condition`] gates.
+
 use crate::time::ChangeTick;
 
-/// Failure to queue a state transition.
+/// Failure to queue a state transition on [`State`].
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StateError {
+    /// A different pending target is already queued.
     ConflictingTransition,
 }
 
-/// Generic host-owned state resource with explicit transition boundaries.
+/// Host-owned state resource with explicit current, previous, and pending boundaries.
 pub struct State<S: Eq + 'static> {
     current: S,
     previous: Option<S>,
@@ -16,6 +23,7 @@ pub struct State<S: Eq + 'static> {
 }
 
 impl<S: Eq + 'static> State<S> {
+    /// Creates state with `initial` as [`Self::current`] and no pending transition.
     pub fn new(initial: S) -> Self {
         Self {
             current: initial,
@@ -25,22 +33,27 @@ impl<S: Eq + 'static> State<S> {
         }
     }
 
+    /// Active state value after the last committed transition.
     pub fn current(&self) -> &S {
         &self.current
     }
 
+    /// Outgoing value from the most recent committed transition, if any.
     pub fn previous(&self) -> Option<&S> {
         self.previous.as_ref()
     }
 
+    /// Requested next value awaiting [`apply`], if any.
     pub fn pending(&self) -> Option<&S> {
         self.pending.as_ref()
     }
 
+    /// [`ChangeTick`] recorded when the last transition committed.
     pub fn transition_tick(&self) -> Option<ChangeTick> {
         self.transition_tick
     }
 
+    /// Queues `next` for commit by [`apply`]; idempotent when already current or pending.
     pub fn request(&mut self, next: S) -> Result<(), StateError> {
         if let Some(pending) = &self.pending {
             if *pending == next {

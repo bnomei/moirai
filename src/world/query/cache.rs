@@ -1,3 +1,8 @@
+//! Membership query cache slots and topology snapshots.
+//!
+//! Caches structural entity membership for repeated queries; temporal added/changed
+//! filters are applied after refresh.
+
 #![allow(dead_code)]
 
 use alloc::vec::Vec;
@@ -12,6 +17,7 @@ use super::plan::{ResolvedPlan, TraversalSource};
 
 const RETIRED_GENERATION: u32 = u32::MAX;
 
+/// Cached structural membership for one query fingerprint and owner generation.
 #[derive(Clone, Debug)]
 pub(crate) struct MembershipCacheSlot {
     pub generation: u32,
@@ -35,6 +41,7 @@ impl MembershipCacheSlot {
     }
 }
 
+/// Component and entity revisions observed when a cache entry was built or refreshed.
 #[derive(Clone, Debug)]
 pub(crate) struct QueryTopologySnapshot {
     global_revision: u64,

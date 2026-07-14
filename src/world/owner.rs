@@ -1,3 +1,8 @@
+//! Per-world owner token used to validate entities, components, and events.
+//!
+//! Each [`World`](super::World) and [`WorldBuilder`](super::WorldBuilder) receives a
+//! unique [`WorldOwner`] stamped onto handles so cross-world misuse is rejected.
+
 use core::hash::{Hash, Hasher};
 use core::sync::atomic::{AtomicU32, Ordering};
 

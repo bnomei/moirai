@@ -1,3 +1,5 @@
+//! Mutable query traversal across sparse and archetype component storage.
+
 #![allow(dead_code)]
 
 use alloc::string::String;

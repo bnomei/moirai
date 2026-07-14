@@ -1,3 +1,5 @@
+//! Per-step replay records and captured report snapshots.
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -13,6 +15,7 @@ pub struct MetricSample {
 }
 
 impl MetricSample {
+    /// Record one scalar metric alongside a replay step snapshot.
     pub fn new(key: impl Into<String>, value: f64) -> Self {
         Self {
             key: key.into(),
@@ -20,10 +23,12 @@ impl MetricSample {
         }
     }
 
+    /// Metric identifier for report comparison.
     pub fn key(&self) -> &str {
         &self.key
     }
 
+    /// Metric value stored with bit-exact equality in [`reports_match`](super::replay::reports_match).
     pub fn value(&self) -> f64 {
         self.value
     }
@@ -48,6 +53,7 @@ pub struct StepSnapshot<S> {
 }
 
 impl<S> StepRecord<S> {
+    /// Build one replay step record before [`CapturePolicy`](super::config::CapturePolicy) filtering.
     pub fn new(
         step: StepIndex,
         world_tick: Option<WorldTick>,
@@ -62,22 +68,27 @@ impl<S> StepRecord<S> {
         }
     }
 
+    /// Checked replay step this record claims to represent.
     pub fn step(&self) -> StepIndex {
         self.step
     }
 
+    /// [`WorldTick`](crate::time::WorldTick) observed after the step flush, when available.
     pub fn world_tick(&self) -> Option<WorldTick> {
         self.world_tick
     }
 
+    /// Host fixture snapshot proving world state for this step.
     pub fn snapshot(&self) -> &S {
         &self.snapshot
     }
 
+    /// Optional scalar metrics recorded with this step.
     pub fn metrics(&self) -> &[MetricSample] {
         &self.metrics
     }
 
+    /// Convert a captured record into report storage.
     pub fn into_snapshot(self) -> StepSnapshot<S> {
         StepSnapshot {
             step: self.step,
@@ -89,18 +100,22 @@ impl<S> StepRecord<S> {
 }
 
 impl<S> StepSnapshot<S> {
+    /// Replay step index for this captured evidence.
     pub fn step(&self) -> StepIndex {
         self.step
     }
 
+    /// World tick stored with the captured snapshot, when recorded.
     pub fn world_tick(&self) -> Option<WorldTick> {
         self.world_tick
     }
 
+    /// Host snapshot retained in the replay report.
     pub fn snapshot(&self) -> &S {
         &self.snapshot
     }
 
+    /// Metrics retained alongside the captured snapshot.
     pub fn metrics(&self) -> &[MetricSample] {
         &self.metrics
     }

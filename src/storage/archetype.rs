@@ -1,3 +1,8 @@
+//! Archetype-grouped table storage with entity migration.
+//!
+//! Entities sharing the same table-component signature live in one archetype row set.
+//! Inserts and removals relocate rows between archetypes while preserving change ticks.
+
 use crate::component::{ComponentId, ComponentRegistry, StorageKind};
 use crate::entity::EntityId;
 use crate::storage::table::{ErasedTableColumn, ErasedTableRow, TypedTableColumn};
@@ -7,6 +12,7 @@ use alloc::vec::Vec;
 
 pub(crate) type TableColumnFactory = fn() -> Box<dyn ErasedTableColumn>;
 
+/// Sorted set of table component indices that identifies one archetype.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Signature {
     components: Vec<u32>,
@@ -38,12 +44,14 @@ impl Signature {
     }
 }
 
+/// Row coordinates for one entity inside an archetype table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Location {
     archetype: u32,
     row: u32,
 }
 
+/// Table-backed component storage keyed by archetype signature and entity slot.
 pub(crate) struct ArchetypeStorage {
     column_factories: Vec<Option<TableColumnFactory>>,
     signatures: Vec<Signature>,

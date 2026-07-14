@@ -1,3 +1,5 @@
+//! Resolve cached entity ids from membership or result cache handles.
+
 #![allow(dead_code)]
 
 use crate::entity::EntityId;

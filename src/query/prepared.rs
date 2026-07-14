@@ -1,3 +1,10 @@
+//! Reusable prepared queries with optional membership or result materialization.
+//!
+//! **Semantic map**
+//! - [`QueryPolicy`]: plan-only, membership, delta membership, or full result materialization.
+//! - [`QueryWindow`]: per-execution added/changed window (`All`, `Since`, [`QueryCursor`]).
+//! - [`PreparedQuery1`] / [`PreparedQuery2`]: owner-scoped plans with refresh and mutation entry points.
+
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -11,37 +18,43 @@ use crate::world::query::filter::validate_exact_ids;
 use crate::world::query::plan::{ResolvedPlan, TraversalSource};
 use crate::world::{World, WorldOwner};
 
-/// Execution policy for a prepared query.
+/// How a prepared query caches structural membership or full results between executions.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum QueryPolicy {
-    /// Reuse only the resolved query plan and traverse storage directly.
+    /// Reuse only the resolved plan and traverse sparse or table storage each execution.
     #[default]
     Prepared,
-    /// Materialize structural membership and apply the active window per execution.
+    /// Keep structural membership and apply added/changed windows during traversal.
     Membership,
-    /// Maintain structural membership incrementally through a reverse slot index.
+    /// Maintain membership incrementally from the world's query delta log.
     DeltaMembership,
-    /// Materialize the complete result set. Temporal selectors are unsupported.
+    /// Materialize the full result set once; added/changed windows are rejected.
     Result,
 }
 
-/// Temporal window used for one prepared-query execution.
+/// Added/changed window for one prepared-query execution.
 pub enum QueryWindow<'a> {
+    /// Traverse from the start of change history.
     All,
+    /// Half-open window `(tick, captured_now]`.
     Since(ChangeTick),
+    /// Reusable cursor bound to this prepared query's fingerprint.
     Cursor(&'a mut QueryCursor),
 }
 
 impl<'a> QueryWindow<'a> {
+    /// Window from the start of change history.
     pub const fn all() -> Self {
         Self::All
     }
 
+    /// Explicit half-open added/changed window.
     pub const fn since(tick: ChangeTick) -> Self {
         Self::Since(tick)
     }
 
+    /// Cursor-backed added/changed window for repeated traversals.
     pub fn cursor(cursor: &mut QueryCursor) -> QueryWindow<'_> {
         QueryWindow::Cursor(cursor)
     }
@@ -62,7 +75,7 @@ impl<'a> QueryWindow<'a> {
     }
 }
 
-/// Reusable, owner-scoped single-component query plan.
+/// Owner-scoped, reusable single-component query with optional materialized membership.
 pub struct PreparedQuery1<T: 'static> {
     pub(crate) owner: WorldOwner,
     pub(crate) plan: Rc<ResolvedPlan>,
@@ -71,7 +84,7 @@ pub struct PreparedQuery1<T: 'static> {
     marker: PhantomData<fn() -> T>,
 }
 
-/// Reusable, owner-scoped two-component query plan.
+/// Owner-scoped, reusable two-component query with driver reselection and optional materialization.
 pub struct PreparedQuery2<A: 'static, B: 'static> {
     pub(crate) owner: WorldOwner,
     pub(crate) plan: Rc<ResolvedPlan>,
@@ -292,6 +305,7 @@ impl World {
 }
 
 impl<T: 'static> PreparedQuery1<T> {
+    /// Read iterator over matches for the chosen [`QueryWindow`].
     pub fn iter<'w, 'c>(
         &'w mut self,
         world: &'w mut World,
@@ -327,6 +341,7 @@ impl<T: 'static> PreparedQuery1<T> {
         )
     }
 
+    /// Mutable traversal with callback-scoped borrows over the chosen window.
     pub fn for_each_mut(
         &mut self,
         world: &mut World,
@@ -336,6 +351,7 @@ impl<T: 'static> PreparedQuery1<T> {
         self.for_each_mut_inner(world, window, f)
     }
 
+    /// Mutable traversal that may enqueue commands or emit declared events.
     pub fn for_each_mut_with_effects(
         &mut self,
         world: &mut World,
@@ -389,6 +405,7 @@ impl<T: 'static> PreparedQuery1<T> {
 }
 
 impl<A: 'static, B: 'static> PreparedQuery2<A, B> {
+    /// Read iterator over matches for the chosen [`QueryWindow`].
     pub fn iter<'w, 'c>(
         &'w mut self,
         world: &'w mut World,
@@ -427,6 +444,7 @@ impl<A: 'static, B: 'static> PreparedQuery2<A, B> {
         )
     }
 
+    /// Mutable traversal borrowing both components for each match.
     pub fn for_each_mut_mut(
         &mut self,
         world: &mut World,
@@ -436,6 +454,7 @@ impl<A: 'static, B: 'static> PreparedQuery2<A, B> {
         self.for_each_mut_mut_with_effects(world, window, |entity, a, b, _| f(entity, a, b))
     }
 
+    /// Mutable traversal over both components with optional [`QueryEffects`].
     pub fn for_each_mut_mut_with_effects(
         &mut self,
         world: &mut World,
@@ -445,6 +464,7 @@ impl<A: 'static, B: 'static> PreparedQuery2<A, B> {
         self.execute_mut(world, window, f)
     }
 
+    /// Mutable traversal over the first component while borrowing the second immutably.
     pub fn for_each_mut_read(
         &mut self,
         world: &mut World,
@@ -454,6 +474,7 @@ impl<A: 'static, B: 'static> PreparedQuery2<A, B> {
         self.for_each_mut_read_with_effects(world, window, |entity, a, b, _| f(entity, a, b))
     }
 
+    /// Mixed mut/read traversal with optional [`QueryEffects`].
     pub fn for_each_mut_read_with_effects(
         &mut self,
         world: &mut World,

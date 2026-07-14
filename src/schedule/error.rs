@@ -1,3 +1,5 @@
+//! Schedule build-time and runtime control errors (`no_std` with optional `std` display).
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -9,79 +11,66 @@ use crate::world::WorldError;
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BuildError {
+    /// World still has unflushed deferred commands.
     PendingCommands,
+    /// World run guard is active; build requires an idle world.
     WorldRunning,
+    /// Change-tick exhaustion poisoned the world.
     WorldMutationPoisoned,
+    /// Attached execution lease does not match this schedule.
     LeaseMismatch,
+    /// Another compiled schedule already holds a live world lease.
     LiveLeaseAlreadyAttached,
-    UnknownStage {
-        label: String,
-    },
-    UnknownSystem {
-        label: String,
-    },
-    UnknownSystemSet {
-        label: String,
-    },
-    DuplicateSystemSet {
-        label: String,
-    },
-    DuplicateSystemLabel {
-        label: String,
-    },
-    SystemInitialization {
-        system: String,
-        detail: String,
-    },
-    CrossOperationEdge {
-        from: String,
-        to: String,
-    },
-    CrossStageSystemEdge {
-        from: String,
-        to: String,
-    },
-    MissingRequiredResource {
-        name: String,
-    },
-    UnregisteredEventRole {
-        system: String,
-        event: String,
-    },
+    /// Referenced stage label was never registered.
+    UnknownStage { label: String },
+    /// Ordering edge names a system that was never added.
+    UnknownSystem { label: String },
+    /// System or ordering edge names an unregistered set.
+    UnknownSystemSet { label: String },
+    /// Same system-set label registered twice.
+    DuplicateSystemSet { label: String },
+    /// Two systems share the same label.
+    DuplicateSystemLabel { label: String },
+    /// Build-time initializer for a system returned an error.
+    SystemInitialization { system: String, detail: String },
+    /// Ordering edge would cross Update/Render operations.
+    CrossOperationEdge { from: String, to: String },
+    /// System ordering edge spans different stages.
+    CrossStageSystemEdge { from: String, to: String },
+    /// System declared a resource lock for a type not present in the world.
+    MissingRequiredResource { name: String },
+    /// System event role references an unregistered event or lifecycle channel.
+    UnregisteredEventRole { system: String, event: String },
+    /// Frame-retained event operation does not match the system's stage operation.
     EventOperationMismatch {
         system: String,
         event: String,
         event_operation: StageOperation,
         system_operation: StageOperation,
     },
-    MissingEventProducer {
-        system: String,
-        event: String,
-    },
+    /// Internal frame event consumer has no emitting producer.
+    MissingEventProducer { system: String, event: String },
+    /// Producer is not ordered before the consumer for the same frame event.
     UnreachableEventProducer {
         producer: String,
         consumer: String,
         event: String,
     },
-    SelfEdge {
-        label: String,
-    },
-    Cycle {
-        path: Vec<String>,
-    },
+    /// System depends on itself in the ordering graph.
+    SelfEdge { label: String },
+    /// Stage-local ordering graph contains a cycle.
+    Cycle { path: Vec<String> },
+    /// FixedUpdate systems exist but no fixed timestep was configured.
     FixedUpdateWithoutConfig,
+    /// Fixed timestep configured without a FixedUpdate stage.
     FixedConfigWithoutFixedUpdate,
-    StageOperationMismatch {
-        label: String,
-    },
-    InvalidStageFlushMode {
-        label: String,
-        mode: FlushMode,
-    },
-    InvalidSystemFlushMode {
-        label: String,
-        mode: FlushMode,
-    },
+    /// Re-adding a stage label with a different operation.
+    StageOperationMismatch { label: String },
+    /// Flush mode is invalid for the stage's operation.
+    InvalidStageFlushMode { label: String, mode: FlushMode },
+    /// Flush mode is invalid for the system's stage operation.
+    InvalidSystemFlushMode { label: String, mode: FlushMode },
+    /// Underlying world construction or attachment failed.
     WorldBuild(WorldError),
 }
 
@@ -95,11 +84,17 @@ impl From<WorldError> for BuildError {
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScheduleError {
+    /// Handle was issued by a different schedule instance.
     OwnerMismatch,
+    /// Handle index or generation no longer matches the compiled schedule.
     StaleHandle,
+    /// Update plan lists the same stage more than once.
     DuplicateStageInPlan,
+    /// Update plan includes a Render-only stage.
     NonUpdateStageInPlan,
+    /// Startup is implicit on first update and cannot be planned explicitly.
     StartupStageInPlan,
+    /// No compiled system matches the label.
     SystemNotFound { label: String },
 }
 

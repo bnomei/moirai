@@ -1,3 +1,8 @@
+//! Side effects available during query traversal callbacks.
+//!
+//! [`QueryCommands`] enqueues deferred spawn, despawn, insert, remove, and bundle operations.
+//! [`QueryEffects`] also exposes declared event emission when the active stage permits it.
+
 use alloc::string::String;
 use core::any::type_name;
 
@@ -8,13 +13,14 @@ use crate::query::QueryError;
 use crate::world::guard::RunGuard;
 use crate::world::{Bundle, BundleWriter, WorldError, WorldEvents, WorldOwner};
 
-/// Restricted command surface available during query traversal.
+/// Deferred structural commands available while a query callback runs.
 pub struct QueryCommands<'w> {
     allocator: &'w mut EntityAllocator,
     queue: &'w mut CommandQueue,
 }
 
 impl<'w> QueryCommands<'w> {
+    /// Reserves a new entity id and queues a deferred spawn.
     pub fn spawn(&mut self) -> Result<EntityId, QueryError> {
         let entity = self
             .allocator
@@ -24,12 +30,14 @@ impl<'w> QueryCommands<'w> {
         Ok(entity)
     }
 
+    /// Queues a deferred despawn when the target is live or reserved.
     pub fn despawn(&mut self, entity: EntityId) -> Result<(), QueryError> {
         self.ensure_target(entity)?;
         self.queue.push(CommandOp::Despawn { entity });
         Ok(())
     }
 
+    /// Queues a deferred component insert for a live or reserved entity.
     pub fn insert<T: 'static>(&mut self, entity: EntityId, value: T) -> Result<(), QueryError> {
         self.ensure_target(entity)?;
         self.queue
@@ -37,6 +45,7 @@ impl<'w> QueryCommands<'w> {
             .map_err(map_command_error)
     }
 
+    /// Queues a deferred component removal for a live or reserved entity.
     pub fn remove<T: 'static>(&mut self, entity: EntityId) -> Result<(), QueryError> {
         self.ensure_target(entity)?;
         self.queue
@@ -44,6 +53,7 @@ impl<'w> QueryCommands<'w> {
             .map_err(map_command_error)
     }
 
+    /// Queues a deferred bundle write for a live or reserved entity.
     pub fn insert_bundle<B: Bundle>(
         &mut self,
         entity: EntityId,
@@ -71,7 +81,7 @@ impl<'w> QueryCommands<'w> {
     }
 }
 
-/// Restricted side-effect surface for query traversal callbacks.
+/// Borrow-checked side-effect surface for prepared and eager query callbacks.
 pub struct QueryEffects<'w> {
     owner: WorldOwner,
     run_guard: RunGuard,
@@ -97,6 +107,7 @@ impl<'w> QueryEffects<'w> {
         }
     }
 
+    /// Structural commands when the active stage operation is `Update`.
     pub fn commands(&mut self) -> Result<QueryCommands<'_>, QueryError> {
         match self.run_guard.operation() {
             Some(StageOperation::Update) => {}
@@ -119,6 +130,7 @@ impl<'w> QueryEffects<'w> {
         })
     }
 
+    /// Emits a declared event when the active run guard permits that event id.
     pub fn send<E: Clone + 'static>(&mut self, event: E) -> Result<(), QueryError> {
         let event_id = self
             .events

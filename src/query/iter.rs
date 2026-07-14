@@ -1,10 +1,15 @@
+//! Typed query iterators backing [`Query1`] and [`Query2`].
+//!
+//! Iterators walk sparse dense slots, archetype tables, exact id lists, or materialized caches.
+//! Change-detection cursors commit on exhaustion, not on partial prefix iteration.
+
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 use crate::entity::EntityId;
 use crate::world::query::cached_source::QueryCachedSource;
 
-/// Immutable single-component query iterator.
+/// Lazy read iterator over one component type and its resolved query plan.
 pub struct Query1<'w, 'c, T: 'static> {
     pub(crate) world: &'w crate::world::World,
     pub(crate) plan: Rc<crate::world::query::plan::ResolvedPlan>,
@@ -17,33 +22,37 @@ pub struct Query1<'w, 'c, T: 'static> {
     pub(crate) state: Query1State<'w, T>,
 }
 
+/// Active traversal source for a [`Query1`] iterator.
 pub(crate) enum Query1State<'w, T: 'static> {
+    /// Dense iteration over one sparse component population.
     Sparse {
         store: &'w crate::storage::TypedSparseStorage<T>,
         index: usize,
     },
+    /// Row scan across archetypes that contain the driver table component.
     Table {
         archetypes: &'w [usize],
         archetype_index: usize,
         row: usize,
     },
-    Exact {
-        ids: Vec<EntityId>,
-        index: usize,
-    },
+    /// Caller-ordered exact entity id list.
+    Exact { ids: Vec<EntityId>, index: usize },
+    /// Membership or result cache lookup with optional temporal re-filtering.
     Cached {
         source: QueryCachedSource,
         index: usize,
     },
+    /// Prepared-query materialized ids, optionally re-filtered for added/changed windows.
     Borrowed {
         ids: &'w [EntityId],
         index: usize,
         apply_temporal: bool,
     },
+    /// Iterator exhausted; cursor may commit on drop.
     Done,
 }
 
-/// Immutable two-component query iterator.
+/// Lazy read iterator over two component types and their resolved query plan.
 pub struct Query2<'w, 'c, A: 'static, B: 'static> {
     pub(crate) world: &'w crate::world::World,
     pub(crate) plan: Rc<crate::world::query::plan::ResolvedPlan>,
@@ -58,29 +67,30 @@ pub struct Query2<'w, 'c, A: 'static, B: 'static> {
     pub(crate) marker: core::marker::PhantomData<fn() -> (A, B)>,
 }
 
+/// Active traversal source for a [`Query2`] iterator.
 pub(crate) enum Query2State<'w> {
-    Sparse {
-        slots: &'w [u32],
-        index: usize,
-    },
+    /// Dense iteration over the smaller sparse driver population.
+    Sparse { slots: &'w [u32], index: usize },
+    /// Row scan across archetypes that contain the driver table component.
     Table {
         archetypes: &'w [usize],
         archetype_index: usize,
         row: usize,
     },
-    Exact {
-        ids: Vec<EntityId>,
-        index: usize,
-    },
+    /// Caller-ordered exact entity id list.
+    Exact { ids: Vec<EntityId>, index: usize },
+    /// Membership or result cache lookup.
     Cached {
         source: QueryCachedSource,
         index: usize,
     },
+    /// Prepared-query materialized ids, optionally re-filtered for added/changed windows.
     Borrowed {
         ids: &'w [EntityId],
         index: usize,
         apply_temporal: bool,
     },
+    /// Iterator exhausted; cursor may commit on drop.
     Done,
 }
 

@@ -1,3 +1,5 @@
+//! Built-in stage labels and opaque compiled stage handles.
+
 use alloc::string::String;
 
 use crate::operation::StageOperation;
@@ -42,6 +44,7 @@ impl StageId {
     }
 }
 
+/// Authoring metadata for one stage: label, operation, and flush policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StageDescriptor {
     pub label: String,

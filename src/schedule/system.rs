@@ -1,3 +1,5 @@
+//! Authoring-time system descriptors, flush policy, and opaque runtime handles.
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -12,8 +14,11 @@ use crate::world::{World, WorldError};
 /// When deferred structural commands become visible during Update.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FlushMode {
+    /// Flush once after all Update stages in the pass (default for Render).
     Final,
+    /// Flush at the end of each Update stage (standard builder default).
     Stage,
+    /// Flush immediately after this system when running under Update.
     AfterSystem,
 }
 
@@ -39,14 +44,17 @@ impl<'world> SystemInitContext<'world> {
         Self { world }
     }
 
+    /// Whether the resource type is registered and present.
     pub fn contains_resource<R: 'static>(&self) -> bool {
         self.world.contains_resource::<R>()
     }
 
+    /// Read-only resource access during initializer execution.
     pub fn resource<R: 'static>(&self) -> Result<Option<&R>, WorldError> {
         self.world.resource::<R>()
     }
 
+    /// Persistent event reader seeded for the compiled system's lifetime.
     pub fn event_reader<E: Clone + 'static>(
         &mut self,
         start: EventReaderStart,
@@ -54,6 +62,7 @@ impl<'world> SystemInitContext<'world> {
         self.world.event_reader::<E>(start)
     }
 
+    /// Persistent component-added lifecycle reader for this system.
     pub fn on_add_reader<T: 'static>(
         &mut self,
         start: EventReaderStart,
@@ -61,6 +70,7 @@ impl<'world> SystemInitContext<'world> {
         self.world.on_add_reader::<T>(start)
     }
 
+    /// Persistent component-removed lifecycle reader for this system.
     pub fn on_remove_reader<T: 'static>(
         &mut self,
         start: EventReaderStart,
@@ -119,6 +129,7 @@ impl SystemId {
         }
     }
 
+    /// Stable compiled index for diagnostics; prefer label lookup for authoring.
     pub fn index(&self) -> usize {
         self.index as usize
     }
@@ -145,18 +156,20 @@ pub struct SystemSet {
 }
 
 impl SystemSet {
+    /// Declares a named group for shared ordering edges and run-if gates.
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
         }
     }
 
+    /// Set label used by the builder and ordering APIs.
     pub fn label(&self) -> &str {
         &self.label
     }
 }
 
-/// Checked system descriptor with a required body.
+/// Authoring-time system node: stage placement, ordering, conditions, and event roles.
 pub struct System {
     pub(crate) name: String,
     pub(crate) stage_label: String,
@@ -174,6 +187,7 @@ pub struct System {
 }
 
 impl System {
+    /// Infallible body wrapper; panics and world errors must be handled inside the closure.
     pub fn new(
         name: impl Into<String>,
         stage: impl Into<String>,
@@ -200,6 +214,7 @@ impl System {
         }
     }
 
+    /// Fallible body that can abort the stage pass with a detail string.
     pub fn try_new(
         name: impl Into<String>,
         stage: impl Into<String>,
@@ -253,36 +268,43 @@ impl System {
         }
     }
 
+    /// Runs before the named system within the same stage.
     pub fn before(mut self, label: impl Into<String>) -> Self {
         self.before.push(label.into());
         self
     }
 
+    /// Runs after the named system within the same stage.
     pub fn after(mut self, label: impl Into<String>) -> Self {
         self.after.push(label.into());
         self
     }
 
+    /// Runs before every system in the set that shares this stage.
     pub fn before_set(mut self, set: &SystemSet) -> Self {
         self.before_sets.push(set.label.clone());
         self
     }
 
+    /// Runs after every system in the set that shares this stage.
     pub fn after_set(mut self, set: &SystemSet) -> Self {
         self.after_sets.push(set.label.clone());
         self
     }
 
+    /// Membership for set-level ordering edges and shared run-if gates.
     pub fn in_set(mut self, set: &SystemSet) -> Self {
         self.in_set = Some(set.label.clone());
         self
     }
 
+    /// Skips the system body when the condition evaluates false.
     pub fn run_if(mut self, condition: Condition) -> Self {
         self.conditions.push(condition);
         self
     }
 
+    /// Build fails unless the resource is present; attaches a world lease lock.
     pub fn requires_resource<R: 'static>(mut self) -> Self {
         self.required_resources.push(TypeId::of::<R>());
         self
@@ -328,21 +350,25 @@ impl System {
         });
     }
 
+    /// Overrides deferred-command flush timing for this system on Update stages.
     pub fn flush_mode(mut self, mode: FlushMode) -> Self {
         self.flush_mode = mode;
         self
     }
 
+    /// Shorthand for [`FlushMode::AfterSystem`] on Update stages.
     pub fn flush_after(mut self) -> Self {
         self.flush_mode = FlushMode::AfterSystem;
         self
     }
 
+    /// Registers the system but leaves it disabled until toggled at runtime.
     pub fn disabled(mut self) -> Self {
         self.enabled = false;
         self
     }
 
+    /// Authoring label and runtime diagnostic name.
     pub fn name(&self) -> &str {
         &self.name
     }

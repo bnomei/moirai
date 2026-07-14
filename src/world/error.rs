@@ -1,8 +1,14 @@
+//! [`World`] and flush error vocabulary.
+//!
+//! [`WorldError`] covers entity ownership, component registration, structural mutation
+//! guards, resource scopes, events, and command flush failures.
+
 use crate::component::RegistrationError;
 use crate::entity::EntityId;
 use crate::time::ChangeTick;
 use alloc::string::String;
 
+/// Entity allocator faults surfaced through [`WorldError::Allocator`].
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorldAllocatorError {
@@ -13,10 +19,13 @@ pub enum WorldAllocatorError {
 /// Summary of a committed structural command batch.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct FlushReport {
+    /// Number of deferred commands committed by the flush.
     pub commands_applied: usize,
+    /// Change tick issued for the committed batch.
     pub change_tick: ChangeTick,
 }
 
+/// Command preflight or commit failure during [`crate::world::World::flush`].
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FlushError {
@@ -24,6 +33,7 @@ pub enum FlushError {
     ChangeTickExhausted,
 }
 
+/// Checked world operation failure.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorldError {
@@ -76,6 +86,7 @@ mod tests {
     }
 }
 
+/// Event reader consumption failure from [`crate::world::World::read_event`].
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventReadError {

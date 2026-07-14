@@ -1,3 +1,5 @@
+//! Cached resolution of [`QuerySpec`](crate::query::QuerySpec) into [`ResolvedPlan`].
+
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
@@ -7,6 +9,7 @@ use crate::world::World;
 use super::plan::ResolvedPlan;
 use super::spec::{resolve_entities, resolve_query1, resolve_query2};
 
+/// Reusable buffers for query spec index resolution.
 #[derive(Default)]
 pub(crate) struct QueryResolveScratch {
     pub required: Vec<usize>,

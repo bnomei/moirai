@@ -1,3 +1,5 @@
+//! Structural and temporal entity matching for resolved query plans.
+
 use crate::entity::EntityId;
 use crate::query::{ExactIdPolicy, QueryError};
 use crate::time::ChangeTick;
