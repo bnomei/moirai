@@ -69,13 +69,18 @@ impl ScheduleBuilder {
         builder
     }
 
-    /// Registers a stage label for an operation; duplicate labels must share the same operation.
+    /// Registers a stage label for an operation.
+    ///
+    /// Duplicate labels must share the same operation. Built-in stage labels
+    /// must use their canonical operation: Startup, FixedUpdate, and Update
+    /// belong to Update; Render belongs to Render.
     pub fn add_stage(
         &mut self,
         label: impl Into<String>,
         operation: StageOperation,
     ) -> Result<(), BuildError> {
         let label = label.into();
+        validate_builtin_stage_operation(&label, operation)?;
         if let Some(index) = self.stage_index.get(&label).copied() {
             let existing = &self.stages[index];
             if existing.operation != operation {
@@ -251,10 +256,13 @@ impl ScheduleBuilder {
             return Err(BuildError::LiveLeaseAlreadyAttached);
         }
 
-        let has_fixed_stage = self
-            .stages
-            .iter()
-            .any(|stage| stage.label == stage::FIXED_UPDATE);
+        for descriptor in &self.stages {
+            validate_builtin_stage_operation(&descriptor.label, descriptor.operation)?;
+        }
+
+        let has_fixed_stage = self.stages.iter().any(|stage| {
+            stage.label == stage::FIXED_UPDATE && stage.operation == StageOperation::Update
+        });
         let has_fixed_system = self
             .systems
             .iter()
@@ -445,6 +453,23 @@ impl ScheduleBuilder {
                 system_enabled,
                 set_conditions,
             },
+        })
+    }
+}
+
+fn validate_builtin_stage_operation(label: &str, actual: StageOperation) -> Result<(), BuildError> {
+    let expected = match label {
+        stage::STARTUP | stage::FIXED_UPDATE | stage::UPDATE => StageOperation::Update,
+        stage::RENDER => StageOperation::Render,
+        _ => return Ok(()),
+    };
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(BuildError::InvalidBuiltinStageOperation {
+            label: label.into(),
+            expected,
+            actual,
         })
     }
 }
@@ -859,6 +884,64 @@ mod tests {
         assert!(matches!(
             builder.build(&mut world),
             Err(BuildError::FixedUpdateWithoutConfig)
+        ));
+    }
+
+    #[test]
+    fn builtin_stage_labels_require_their_canonical_operations() {
+        for (label, actual, expected) in [
+            (
+                stage::STARTUP,
+                StageOperation::Render,
+                StageOperation::Update,
+            ),
+            (
+                stage::FIXED_UPDATE,
+                StageOperation::Render,
+                StageOperation::Update,
+            ),
+            (
+                stage::UPDATE,
+                StageOperation::Render,
+                StageOperation::Update,
+            ),
+            (
+                stage::RENDER,
+                StageOperation::Update,
+                StageOperation::Render,
+            ),
+        ] {
+            for mut builder in [ScheduleBuilder::new(), ScheduleBuilder::standard()] {
+                assert_eq!(
+                    builder.add_stage(label, actual),
+                    Err(BuildError::InvalidBuiltinStageOperation {
+                        label: label.into(),
+                        expected,
+                        actual,
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_rechecks_builtin_stage_operations() {
+        let mut world = WorldBuilder::new().build().expect("world");
+        let mut builder = ScheduleBuilder::new();
+        builder.stages.push(StageDescriptor {
+            label: stage::FIXED_UPDATE.into(),
+            operation: StageOperation::Render,
+            flush_mode: FlushMode::Final,
+        });
+        builder.stage_index.insert(stage::FIXED_UPDATE.into(), 0);
+
+        assert!(matches!(
+            builder.build(&mut world),
+            Err(BuildError::InvalidBuiltinStageOperation {
+                expected: StageOperation::Update,
+                actual: StageOperation::Render,
+                ..
+            })
         ));
     }
 

@@ -2,6 +2,18 @@
 
 All notable public API changes to Moirai are documented here. The crate follows [Cargo SemVer](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## 0.1.1 — 2026-07-20
+
+### Added
+
+- `AppBuilder::with_schedule_builder` for constructing an app from an exact caller-authored
+  schedule without inserting standard stages or rewriting stage order and flush policy.
+
+### Fixed
+
+- Built-in stage labels now reject incompatible operations during authoring and compilation,
+  preventing malformed fixed-update schedules from consuming fixed-step work without running it.
+
 ## 0.1.0 — 2026-07-14
 
 First stable public release.

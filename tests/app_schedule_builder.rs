@@ -444,6 +444,19 @@ fn caller_authored_invalid_stage_flush_is_rejected() {
 }
 
 #[test]
+fn caller_authored_fixed_update_cannot_belong_to_render() {
+    let mut schedule = ScheduleBuilder::new();
+    assert_eq!(
+        schedule.add_stage(stage::FIXED_UPDATE, StageOperation::Render),
+        Err(BuildError::InvalidBuiltinStageOperation {
+            label: stage::FIXED_UPDATE.into(),
+            expected: StageOperation::Update,
+            actual: StageOperation::Render,
+        })
+    );
+}
+
+#[test]
 fn caller_authored_fixed_without_fixed_update_is_rejected() {
     let mut schedule = ScheduleBuilder::new();
     schedule

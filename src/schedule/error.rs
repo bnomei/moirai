@@ -66,6 +66,12 @@ pub enum BuildError {
     FixedConfigWithoutFixedUpdate,
     /// Re-adding a stage label with a different operation.
     StageOperationMismatch { label: String },
+    /// A built-in stage label was assigned to the wrong operation.
+    InvalidBuiltinStageOperation {
+        label: String,
+        expected: StageOperation,
+        actual: StageOperation,
+    },
     /// Flush mode is invalid for the stage's operation.
     InvalidStageFlushMode { label: String, mode: FlushMode },
     /// Flush mode is invalid for the system's stage operation.
@@ -160,6 +166,14 @@ impl core::fmt::Display for BuildError {
             Self::StageOperationMismatch { label } => {
                 write!(f, "stage operation mismatch for '{label}'")
             }
+            Self::InvalidBuiltinStageOperation {
+                label,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "built-in stage '{label}' requires {expected:?}, got {actual:?}"
+            ),
             Self::InvalidStageFlushMode { label, mode } => {
                 write!(f, "invalid {mode:?} flush mode for stage '{label}'")
             }

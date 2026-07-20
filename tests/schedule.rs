@@ -602,10 +602,10 @@ fn unknown_system_set_is_rejected_at_build() {
 fn stage_operation_mismatch_is_rejected() {
     let mut builder = ScheduleBuilder::new();
     builder
-        .add_stage(stage::UPDATE, StageOperation::Update)
+        .add_stage("Custom", StageOperation::Update)
         .expect("update");
     assert!(matches!(
-        builder.add_stage(stage::UPDATE, StageOperation::Render),
+        builder.add_stage("Custom", StageOperation::Render),
         Err(BuildError::StageOperationMismatch { .. })
     ));
 }

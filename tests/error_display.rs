@@ -11,7 +11,7 @@ use moirai::query::QueryError;
 use moirai::schedule::{BuildError, ScheduleError};
 use moirai::world::WorldBuilder;
 use moirai::world::{EventReadError, FlushError, WorldAllocatorError, WorldError};
-use moirai::StateError;
+use moirai::{StageOperation, StateError};
 
 fn assert_display<T: core::fmt::Display>(value: &T, expected: impl AsRef<str>) {
     assert_eq!(value.to_string(), expected.as_ref());
@@ -344,6 +344,14 @@ fn schedule_error_display_variants() {
             label: "Render".into(),
         },
         "stage operation mismatch for 'Render'",
+    );
+    assert_display(
+        &BuildError::InvalidBuiltinStageOperation {
+            label: "FixedUpdate".into(),
+            expected: StageOperation::Update,
+            actual: StageOperation::Render,
+        },
+        "built-in stage 'FixedUpdate' requires Update, got Render",
     );
     assert_display(
         &BuildError::WorldBuild(WorldError::NestedRun),
