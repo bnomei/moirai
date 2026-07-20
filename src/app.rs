@@ -525,10 +525,83 @@ impl App {
 
 impl AppBuilder {
     /// Creates a builder with a fresh world and standard schedule template.
+    ///
+    /// The standard template registers Startup, FixedUpdate, Update, and Render
+    /// and uses stage-level flush for Update-operation stages. Prefer
+    /// [`Self::with_schedule_builder`] when the host must author a different
+    /// stage order or flush policy.
     pub fn new() -> AppBuilder {
         Self {
             world_builder: WorldBuilder::new(),
             schedule_builder: ScheduleBuilder::standard(),
+            observer: None,
+        }
+    }
+
+    /// Creates a builder with a fresh world and a caller-authored schedule.
+    ///
+    /// Unlike [`Self::new`], this does **not** install
+    /// [`ScheduleBuilder::standard`]. The supplied [`ScheduleBuilder`] is kept
+    /// exactly as authored: stages are not prepended, appended, synthesized,
+    /// reordered, or replaced, and flush policy is not rewritten.
+    ///
+    /// [`ScheduleBuilder::new`] defaults Update stages to [`FlushMode::Final`].
+    /// That differs from the standard template, which uses [`FlushMode::Stage`].
+    /// Callers that need stage-boundary flushes must configure them explicitly
+    /// with [`ScheduleBuilder::set_stage_flush_mode`] (or
+    /// [`Self::set_stage_flush_mode`] after construction).
+    ///
+    /// [`UpdatePlan`] can still select a subset of compiled Update stages, but
+    /// never reorders them; selection retains compiled registration order.
+    ///
+    /// # Example
+    ///
+    /// Custom Input → FixedUpdate order with explicit flush modes:
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use moirai::prelude::*;
+    /// use moirai::{stage, FixedConfig, FlushMode, ScheduleBuilder, StageOperation};
+    ///
+    /// let mut schedule = ScheduleBuilder::new();
+    /// schedule
+    ///     .add_stage("Input", StageOperation::Update)
+    ///     .expect("input");
+    /// schedule
+    ///     .add_stage(stage::FIXED_UPDATE, StageOperation::Update)
+    ///     .expect("fixed");
+    /// schedule
+    ///     .add_stage(stage::RENDER, StageOperation::Render)
+    ///     .expect("render");
+    /// // ScheduleBuilder::new defaults Update stages to FlushMode::Final.
+    /// // Restore stage-level flushes when deferred commands must apply between stages.
+    /// schedule
+    ///     .set_stage_flush_mode("Input", FlushMode::Stage)
+    ///     .expect("input flush");
+    /// schedule
+    ///     .set_stage_flush_mode(stage::FIXED_UPDATE, FlushMode::Stage)
+    ///     .expect("fixed flush");
+    /// schedule.fixed(FixedConfig::new(Duration::from_millis(16)).expect("fixed"));
+    ///
+    /// let mut builder = AppBuilder::with_schedule_builder(schedule);
+    /// builder
+    ///     .add_system(System::new("read_input", "Input", |_world, _dt| {}))
+    ///     .expect("input system");
+    /// builder
+    ///     .add_system(System::new("simulate", stage::FIXED_UPDATE, |_world, _dt| {}))
+    ///     .expect("fixed system");
+    /// builder
+    ///     .add_system(System::new("draw", stage::RENDER, |_world, _dt| {}))
+    ///     .expect("render system");
+    ///
+    /// let mut app = builder.build().expect("app");
+    /// app.update(1.0 / 60.0).expect("update");
+    /// app.render(1.0 / 60.0).expect("render");
+    /// ```
+    pub fn with_schedule_builder(schedule_builder: ScheduleBuilder) -> Self {
+        Self {
+            world_builder: WorldBuilder::new(),
+            schedule_builder,
             observer: None,
         }
     }
@@ -1050,5 +1123,235 @@ mod tests {
                 .as_slice(),
             ["before", "after"]
         );
+    }
+
+    fn standard_stage_labels() -> [&'static str; 4] {
+        [
+            stage::STARTUP,
+            stage::FIXED_UPDATE,
+            stage::UPDATE,
+            stage::RENDER,
+        ]
+    }
+
+    fn assert_standard_template(app: &App) {
+        let labels = standard_stage_labels();
+        for (expected_index, label) in labels.iter().enumerate() {
+            assert_eq!(
+                app.schedule().stage_index(label),
+                Some(expected_index),
+                "standard stage order for {label}"
+            );
+        }
+        assert_eq!(
+            crate::schedule::stage_flush_mode_for_test(app.schedule(), stage::STARTUP),
+            Some(FlushMode::Stage)
+        );
+        assert_eq!(
+            crate::schedule::stage_flush_mode_for_test(app.schedule(), stage::FIXED_UPDATE),
+            Some(FlushMode::Stage)
+        );
+        assert_eq!(
+            crate::schedule::stage_flush_mode_for_test(app.schedule(), stage::UPDATE),
+            Some(FlushMode::Stage)
+        );
+        assert_eq!(
+            crate::schedule::stage_flush_mode_for_test(app.schedule(), stage::RENDER),
+            Some(FlushMode::Final)
+        );
+        assert_eq!(app.schedule().update_stage_indices().len(), 3);
+        assert!(app.schedule().stage_id(stage::UPDATE).is_some());
+        assert!(app.schedule().stage_id("Input").is_none());
+    }
+
+    fn authored_playable_schedule() -> ScheduleBuilder {
+        let mut schedule = ScheduleBuilder::new();
+        for (label, operation) in [
+            (stage::STARTUP, StageOperation::Update),
+            ("Input", StageOperation::Update),
+            ("Sim", StageOperation::Update),
+            ("Collision", StageOperation::Update),
+            ("Damage", StageOperation::Update),
+            (stage::FIXED_UPDATE, StageOperation::Update),
+            ("RenderPrep", StageOperation::Update),
+            (stage::RENDER, StageOperation::Render),
+        ] {
+            schedule.add_stage(label, operation).expect("stage");
+        }
+        for label in [
+            stage::STARTUP,
+            "Input",
+            "Sim",
+            "Collision",
+            "Damage",
+            stage::FIXED_UPDATE,
+            "RenderPrep",
+        ] {
+            schedule
+                .set_stage_flush_mode(label, FlushMode::Stage)
+                .expect("stage flush");
+        }
+        schedule
+            .set_stage_flush_mode(stage::RENDER, FlushMode::Final)
+            .expect("render flush");
+        schedule
+    }
+
+    #[test]
+    fn new_default_and_app_builder_keep_standard_template() {
+        assert_standard_template(&AppBuilder::new().build().expect("new"));
+        assert_standard_template(&AppBuilder::default().build().expect("default"));
+        assert_standard_template(&App::builder().build().expect("app builder"));
+    }
+
+    #[test]
+    fn with_schedule_builder_retains_caller_authored_order_and_flush() {
+        let app = AppBuilder::with_schedule_builder(authored_playable_schedule())
+            .build()
+            .expect("app");
+        let expected = [
+            stage::STARTUP,
+            "Input",
+            "Sim",
+            "Collision",
+            "Damage",
+            stage::FIXED_UPDATE,
+            "RenderPrep",
+            stage::RENDER,
+        ];
+        for (index, label) in expected.iter().enumerate() {
+            assert_eq!(app.schedule().stage_index(label), Some(index));
+        }
+        assert_eq!(app.schedule().update_stage_indices().len(), 7);
+        assert!(app.schedule().stage_id(stage::UPDATE).is_none());
+        for label in [
+            stage::STARTUP,
+            "Input",
+            "Sim",
+            "Collision",
+            "Damage",
+            stage::FIXED_UPDATE,
+            "RenderPrep",
+        ] {
+            assert_eq!(
+                crate::schedule::stage_flush_mode_for_test(app.schedule(), label),
+                Some(FlushMode::Stage)
+            );
+            assert_eq!(
+                crate::schedule::stage_operation_for_test(app.schedule(), label),
+                Some(StageOperation::Update)
+            );
+        }
+        assert_eq!(
+            crate::schedule::stage_flush_mode_for_test(app.schedule(), stage::RENDER),
+            Some(FlushMode::Final)
+        );
+        assert_eq!(
+            crate::schedule::stage_operation_for_test(app.schedule(), stage::RENDER),
+            Some(StageOperation::Render)
+        );
+        // No duplicated FixedUpdate/Render and no synthetic Update stage.
+        assert_eq!(
+            expected
+                .iter()
+                .filter(|label| **label == stage::FIXED_UPDATE)
+                .count(),
+            1
+        );
+        assert_eq!(
+            expected
+                .iter()
+                .filter(|label| **label == stage::RENDER)
+                .count(),
+            1
+        );
+        assert!(app.schedule().stage_id(stage::UPDATE).is_none());
+    }
+
+    #[test]
+    fn with_schedule_builder_does_not_rewrite_default_final_flush_policy() {
+        let mut schedule = ScheduleBuilder::new();
+        schedule
+            .add_stage("Only", StageOperation::Update)
+            .expect("stage");
+        let app = AppBuilder::with_schedule_builder(schedule)
+            .build()
+            .expect("app");
+        assert_eq!(
+            crate::schedule::stage_flush_mode_for_test(app.schedule(), "Only"),
+            Some(FlushMode::Final)
+        );
+    }
+
+    #[test]
+    fn empty_caller_authored_schedule_builds_without_standard_repair() {
+        let app = AppBuilder::with_schedule_builder(ScheduleBuilder::new())
+            .build()
+            .expect("empty schedule is valid");
+        assert!(app.schedule().stage_id(stage::STARTUP).is_none());
+        assert!(app.schedule().stage_id(stage::FIXED_UPDATE).is_none());
+        assert!(app.schedule().stage_id(stage::UPDATE).is_none());
+        assert!(app.schedule().stage_id(stage::RENDER).is_none());
+        assert!(app.schedule().update_stage_indices().is_empty());
+    }
+
+    #[test]
+    fn with_schedule_builder_rejects_stage_operation_mismatch() {
+        let mut schedule = ScheduleBuilder::new();
+        schedule
+            .add_stage("Dual", StageOperation::Update)
+            .expect("update");
+        assert!(matches!(
+            schedule.add_stage("Dual", StageOperation::Render),
+            Err(BuildError::StageOperationMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn with_schedule_builder_rejects_fixed_config_without_fixed_update_stage() {
+        let mut schedule = ScheduleBuilder::new();
+        schedule
+            .add_stage("Sim", StageOperation::Update)
+            .expect("sim");
+        schedule.fixed(FixedConfig::new(Duration::from_millis(16)).expect("fixed"));
+        assert!(matches!(
+            AppBuilder::with_schedule_builder(schedule).build(),
+            Err(BuildError::FixedConfigWithoutFixedUpdate)
+        ));
+    }
+
+    #[test]
+    fn with_schedule_builder_duplicate_stage_label_is_idempotent() {
+        let mut schedule = ScheduleBuilder::new();
+        schedule
+            .add_stage("Input", StageOperation::Update)
+            .expect("first");
+        schedule
+            .add_stage("Input", StageOperation::Update)
+            .expect("repeat");
+        let app = AppBuilder::with_schedule_builder(schedule)
+            .build()
+            .expect("app");
+        assert_eq!(app.schedule().stage_index("Input"), Some(0));
+        assert_eq!(app.schedule().update_stage_indices().len(), 1);
+    }
+
+    #[test]
+    fn with_schedule_builder_retains_terminal_fault_fail_closed() {
+        let mut schedule = ScheduleBuilder::new();
+        schedule
+            .add_stage(stage::UPDATE, StageOperation::Update)
+            .expect("update");
+        let mut builder = AppBuilder::with_schedule_builder(schedule);
+        builder
+            .add_system(System::try_new("fail", stage::UPDATE, |_world, _dt| {
+                Err(String::from("boom"))
+            }))
+            .expect("system");
+        let mut app = builder.build().expect("app");
+        assert!(matches!(app.update(0.0), Err(AppError::Fault(_))));
+        assert!(app.is_faulted());
+        assert!(matches!(app.update(0.0), Err(AppError::TerminalFault)));
+        assert!(matches!(app.render(0.0), Err(AppError::TerminalFault)));
     }
 }

@@ -452,6 +452,13 @@ impl Schedule {
         self.stage_index(label)
             .map(|index| self.compiled.stage_flush_mode(index))
     }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn stage_operation_for_test(&self, label: &str) -> Option<StageOperation> {
+        self.stage_index(label)
+            .map(|index| self.compiled.stage_operation(index))
+    }
 }
 
 #[cfg(test)]
@@ -459,6 +466,13 @@ pub(crate) fn stage_flush_mode_for_test(schedule: &Schedule, label: &str) -> Opt
     schedule
         .stage_id(label)
         .map(|id| schedule.compiled.stage_flush_mode(id.index()))
+}
+
+#[cfg(test)]
+pub(crate) fn stage_operation_for_test(schedule: &Schedule, label: &str) -> Option<StageOperation> {
+    schedule
+        .stage_id(label)
+        .map(|id| schedule.compiled.stage_operation(id.index()))
 }
 
 #[cfg(test)]

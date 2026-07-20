@@ -41,8 +41,8 @@ fn entity_ids_reject_cross_world_use_even_for_matching_first_slots() {
 #[test]
 fn phase_4_schedule_and_app_paths_compile() {
     use moirai::{
-        stage, App, AppBuilder, Condition, FlushMode, Schedule, ScheduleBuilder, StageId, State,
-        StateError, System, SystemSet, WorldTick,
+        stage, App, AppBuilder, Condition, FlushMode, Schedule, ScheduleBuilder, StageId,
+        StageOperation, State, StateError, System, SystemSet, WorldTick,
     };
     let _ = stage::UPDATE;
     let _ = FlushMode::Final;
@@ -69,6 +69,19 @@ fn phase_4_schedule_and_app_paths_compile() {
     app_builder
         .set_stage_flush_mode(stage::UPDATE, FlushMode::Stage)
         .expect("public stage flush authoring");
+
+    let mut custom = ScheduleBuilder::new();
+    custom
+        .add_stage("Input", StageOperation::Update)
+        .expect("custom stage");
+    custom
+        .set_stage_flush_mode("Input", FlushMode::Stage)
+        .expect("custom flush");
+    let mut custom_app = AppBuilder::with_schedule_builder(custom);
+    custom_app
+        .add_system(System::new("poll", "Input", |_world, _dt| {}))
+        .expect("custom system");
+    let _ = custom_app.build().expect("caller-authored app");
 }
 
 #[test]
